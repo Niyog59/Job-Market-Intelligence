@@ -31,13 +31,17 @@ pip install -e ".[dev]"
 cp .env.example .env    # then fill in your own values
 ```
 
-Create a role and database for the application (example using `psql` as a superuser;
-choose your own role name and password):
+Create a dedicated role and database for the application rather than connecting as a
+superuser (example using `psql` as a superuser):
 
 ```sql
-CREATE ROLE jobmarket LOGIN PASSWORD 'choose-a-password';
+CREATE ROLE jobmarket LOGIN;
+\password jobmarket
 CREATE DATABASE job_market OWNER jobmarket;
 ```
+
+`\password` prompts for the password, so it is not written to the psql history file.
+Put the role name and password in `.env`.
 
 Then check the connection and create the schema:
 
