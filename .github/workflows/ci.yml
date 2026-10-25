@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Throwaway credentials for a database that exists only for this job.
+          POSTGRES_USER: jobmarket
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: job_market_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jobmarket -d job_market_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: job_market_ci
+      DB_USER: jobmarket
+      DB_PASSWORD: ci-only-password
+      JOBMARKET_REQUIRE_DB: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Test
+        run: pytest -v
+
+      - name: Database connection check
+        run: jobmarket check-db
+
+      - name: Migrations apply cleanly and are idempotent
+        run: |
+          jobmarket migrate
+          jobmarket migrate | grep -q "Database schema is up to date."
+          jobmarket migrate --status
