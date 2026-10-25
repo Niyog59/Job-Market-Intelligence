@@ -1,0 +1,14 @@
+# Python virtual environment
+.venv/
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local secrets. Real values live in .env, which is never committed.
+.env
+# The example file has no secrets, so it is safe to commit.
+!.env.example
