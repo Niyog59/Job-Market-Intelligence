@@ -66,3 +66,9 @@ jobs:
           jobmarket migrate
           jobmarket migrate | grep -q "Database schema is up to date."
           jobmarket migrate --status
+
+      - name: Board registry loads
+        run: |
+          jobmarket sources sync
+          jobmarket sources list --all > /dev/null
+          jobmarket status
