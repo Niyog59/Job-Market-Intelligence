@@ -19,6 +19,14 @@ from jobmarket.collector import (
     summarize,
 )
 from jobmarket.config import ConfigError, Settings, load_settings
+from jobmarket.connectors import Pacer
+from jobmarket.evidence import (
+    check_mappings,
+    check_pages,
+    make_page_client,
+    mapping_targets,
+    page_targets,
+)
 from jobmarket.incidents import next_retry_time
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
@@ -71,7 +79,53 @@ def _migrate(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _check_mapping(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn, make_page_client() as client:
+        targets = mapping_targets(conn, args.all, args.source, args.board)
+        results = check_mappings(conn, client, targets, system_clock, Pacer(request_interval()))
+    for r in results:
+        t = r.target
+        status = "-" if r.http_status is None else r.http_status
+        print(f"{t.source_system:10} {t.token:26} {r.outcome:12} {status!s:>4}  {t.url}")
+        if r.matched:
+            print(f"    matched: {r.matched}")
+        if r.detail:
+            print(f"    {r.detail}")
+    tally = {}
+    for r in results:
+        tally[r.outcome] = tally.get(r.outcome, 0) + 1
+    print(
+        f"Checked {len(results)} official page(s): "
+        + (", ".join(f"{n} {o}" for o, n in sorted(tally.items())) or "none")
+        + ". Results are stored in board_mapping_checks; verification status is unchanged."
+    )
+    return EXIT_OK
+
+
+def _check_pages(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn, make_page_client() as client:
+        targets = page_targets(conn, args.per_board, args.source, args.board)
+        results = check_pages(conn, client, targets, system_clock, Pacer(request_interval()))
+    for r in results:
+        t = r.target
+        status = "-" if r.http_status is None else r.http_status
+        print(f"{t.employer[:28]:28} {t.url_kind:11} {r.outcome:12} {status!s:>4}  {t.title[:50]}")
+        if r.detail:
+            print(f"    {r.detail}")
+    tally = {}
+    for r in results:
+        tally[r.outcome] = tally.get(r.outcome, 0) + 1
+    print(
+        f"Checked {len(results)} sampled page(s) (GET only; nothing was submitted): "
+        + (", ".join(f"{n} {o}" for o, n in sorted(tally.items())) or "none")
+        + ". This is a sample, not a check of every posting. Stored in posting_page_checks."
+    )
+    return EXIT_OK
+
+
 def _sources(settings: Settings, args) -> int:
+    if args.sources_command == "check-mapping":
+        return _check_mapping(settings, args)
     registry = load_registry()
     if args.sources_command == "sync":
         with db.connect(settings, autocommit=True) as conn:
@@ -458,6 +512,13 @@ def build_parser() -> argparse.ArgumentParser:
     sources_commands.add_parser(
         "sync", help="load the board registries (config/*_boards.toml) into the database"
     )
+    mapping = sources_commands.add_parser(
+        "check-mapping",
+        help="look for each board on its employer's official careers page (records evidence)",
+    )
+    mapping.add_argument("--all", action="store_true", help="include disabled boards")
+    mapping.add_argument("--source", choices=["greenhouse", "lever"])
+    mapping.add_argument("--board", action="append", metavar="TOKEN")
     listing = sources_commands.add_parser("list", help="show registry boards")
     listing.add_argument(
         "--all", action="store_true", help="include disabled candidates, leads, and holds"
@@ -515,6 +576,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate stored versions under the current normalization rules",
     )
     commands.add_parser("check-history", help="verify history and current-state consistency")
+
+    pages = commands.add_parser(
+        "check-pages",
+        help="GET a sample of retained postings' job and application pages (never submits)",
+    )
+    pages.add_argument("--per-board", type=int, default=2, metavar="N")
+    pages.add_argument("--source", choices=["greenhouse", "lever"])
+    pages.add_argument("--board", action="append", metavar="TOKEN")
     return parser
 
 
@@ -532,6 +601,7 @@ HANDLERS = {
     "history": _history,
     "refingerprint": _refingerprint,
     "check-history": _check_history,
+    "check-pages": _check_pages,
 }
 
 

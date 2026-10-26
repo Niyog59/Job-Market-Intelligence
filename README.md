@@ -114,6 +114,8 @@ Optional settings:
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
+| `jobmarket sources check-mapping [--all] [--source S] [--board TOKEN]` | Look for each board on its employer's official careers page; store the evidence |
+| `jobmarket check-pages [--per-board N] [--source S] [--board TOKEN]` | GET a sample of retained postings' job and application pages; store the results |
 
 Exit codes: `0` success, `1` failure (database, migration, a collection where every
 board failed, or a replay that failed or found a missing or altered file), `2`
@@ -175,6 +177,24 @@ applications, which this project never does).
   partial scans never change existing records. Nothing is closed yet.
 - Sponsorship is `not_stated` unless the posting says whether it is available; a
   question asking applicants about sponsorship is recorded as `asked_only`.
+
+### Evidence
+
+Three kinds of evidence are kept apart, because none of them proves the others:
+
+- **Official mapping** (`board_mapping_checks`, `jobmarket sources check-mapping`): whether
+  the employer's own careers page references the exact board (a job-board link, a postings
+  API call, or an embed naming it). `refused` means the site declined automated requests;
+  this is recorded and not worked around. `not_found` can mean the page loads jobs with
+  scripts. Checks never change a board's verification status; the registry records that
+  decision and its evidence.
+- **Published listing** (`posting_observations`, `last_observed_at`): the job was in the
+  source's listing at that collection time.
+- **Page availability** (`posting_page_checks`, `jobmarket check-pages`): a sampled GET of
+  the posting page and, for Lever, the application page. Nothing is ever submitted. A page
+  that loads shows only that it was published then; it does not prove funded headcount or
+  active interviewing. `refused`, `rate_limited`, `server_error`, and `unreachable` are
+  access or collection problems and never mean a job closed.
 
 ### Failures, retries, and alerts
 
@@ -313,6 +333,8 @@ raw_responses    ─< posting_observations
 | `notifications`        | queued alert or recovery message (the outbox) |
 | `posting_duplicate_flags` | possible duplicate postings, for review |
 | `replay_runs`          | attempt to reprocess a saved raw response |
+| `board_mapping_checks` | check of a board's official careers page for a reference to that board |
+| `posting_page_checks`  | sampled check of a posting's job or application page |
 
 Views: `board_status` (one row per board for status displays), `retained_jobs`
 (retained postings with their current content), `posting_version_stages` (content stages
