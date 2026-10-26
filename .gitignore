@@ -12,3 +12,6 @@ dist/
 .env
 # The example file has no secrets, so it is safe to commit.
 !.env.example
+
+# Raw source responses (kept 4 days locally, never committed)
+data/

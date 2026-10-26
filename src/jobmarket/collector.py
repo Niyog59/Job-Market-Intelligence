@@ -1,0 +1,386 @@
+"""Collection runs across Greenhouse boards.
+
+One run scans a set of boards in sequence. For each board: start a board_scans row,
+fetch, store the raw response, validate, store usable records, and update the board's
+retry incident. A problem with one board is recorded on that board and never stops the
+others. Failed and partial scans never mark anything closed or remove records.
+
+Only one collection can run at a time (a PostgreSQL advisory lock). Because the lock
+guarantees no other collector is active, any run or scan still marked "running" at start
+was abandoned by a stopped process; it is marked failed so its retry state continues.
+"""
+
+import os
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import httpx
+import psycopg
+from psycopg.types.json import Jsonb
+
+from jobmarket import incidents
+from jobmarket.clock import Clock, system_clock
+from jobmarket.greenhouse import USER_AGENT, ParsedResponse, fetch_jobs, parse_jobs_response
+from jobmarket.raw_store import store_body
+from jobmarket.store import StoreCounts, flag_possible_duplicates, store_scan_results
+
+COLLECTION_LOCK_KEY = 4_815_162_343
+REQUEST_INTERVAL_ENV = "JOBMARKET_REQUEST_INTERVAL"
+DEFAULT_REQUEST_INTERVAL = 1.0  # seconds between boards, to stay polite
+
+
+class CollectionBusy(Exception):
+    """Another collection is already running."""
+
+
+def make_client() -> httpx.Client:
+    return httpx.Client(
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        follow_redirects=False,
+    )
+
+
+def request_interval() -> float:
+    return float(os.environ.get(REQUEST_INTERVAL_ENV, DEFAULT_REQUEST_INTERVAL))
+
+
+@dataclass(frozen=True)
+class BoardTarget:
+    board_id: int
+    token: str
+    employer: str
+
+
+@dataclass
+class BoardOutcome:
+    token: str
+    employer: str
+    board_scan_id: int
+    status: str
+    attempt_kind: str
+    error: str | None
+    reported: int | None = None
+    received: int | None = None
+    invalid: int | None = None
+    counts: StoreCounts = field(default_factory=StoreCounts)
+    incident_event: str = "none"
+    incident_id: int | None = None
+
+
+@dataclass
+class RunReport:
+    run_id: int | None
+    trigger: str
+    status: str | None
+    outcomes: list[BoardOutcome] = field(default_factory=list)
+    notifications: list[int] = field(default_factory=list)
+    abandoned_scans_recovered: int = 0
+    duplicate_flags_added: int = 0
+
+
+class Collector:
+    def __init__(
+        self,
+        conn: psycopg.Connection,
+        client: httpx.Client,
+        raw_root: Path,
+        clock: Clock = system_clock,
+        sleep: Callable[[float], None] = time.sleep,
+        interval: float = DEFAULT_REQUEST_INTERVAL,
+    ) -> None:
+        if not conn.autocommit:
+            raise ValueError("the collector needs an autocommit connection")
+        self.conn = conn
+        self.client = client
+        self.raw_root = raw_root
+        self.clock = clock
+        self.sleep = sleep
+        self.interval = interval
+
+    # --- public ----------------------------------------------------------------------
+
+    def collect(self, trigger: str = "manual", tokens: list[str] | None = None) -> RunReport:
+        """Scan every enabled board, or only the given enabled tokens."""
+        with self._lock():
+            events, abandoned = self._recover_abandoned()
+            return self._run(trigger, self._targets(tokens), events, abandoned)
+
+    def retry_due(self) -> RunReport:
+        """Scan only boards whose next retry is due now."""
+        with self._lock():
+            events, abandoned = self._recover_abandoned()
+            due = set(incidents.due_retry_board_ids(self.conn, self.clock()))
+            targets = [t for t in self._targets(None) if t.board_id in due]
+            return self._run("retry", targets, events, abandoned)
+
+    # --- internals -------------------------------------------------------------------
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        got = self.conn.execute(
+            "SELECT pg_try_advisory_lock(%s)", (COLLECTION_LOCK_KEY,)
+        ).fetchone()[0]
+        if not got:
+            raise CollectionBusy("another collection is already running")
+        try:
+            yield
+        finally:
+            self.conn.execute("SELECT pg_advisory_unlock(%s)", (COLLECTION_LOCK_KEY,))
+
+    def _targets(self, tokens: list[str] | None) -> list[BoardTarget]:
+        rows = self.conn.execute(
+            "SELECT b.board_id, b.board_key, e.name, b.is_active FROM source_boards b "
+            "JOIN employers e USING (employer_id) WHERE b.source_system = 'greenhouse' "
+            "ORDER BY e.name, b.board_key"
+        ).fetchall()
+        if tokens:
+            by_token = {r[1]: r for r in rows}
+            unknown = [t for t in tokens if t not in by_token]
+            inactive = [t for t in tokens if t in by_token and not by_token[t][3]]
+            if unknown or inactive:
+                raise ValueError(
+                    "cannot collect: "
+                    + "; ".join(
+                        filter(
+                            None,
+                            [
+                                f"unknown board(s) {unknown}" if unknown else "",
+                                f"disabled board(s) {inactive}" if inactive else "",
+                            ],
+                        )
+                    )
+                )
+            rows = [by_token[t] for t in tokens]
+        return [BoardTarget(r[0], r[1], r[2]) for r in rows if r[3]]
+
+    def _recover_abandoned(self) -> tuple[list[incidents.IncidentEvent], int]:
+        now = self.clock()
+        events = []
+        stuck = self.conn.execute(
+            "SELECT board_scan_id, board_id, attempt_kind FROM board_scans "
+            "WHERE status = 'running' ORDER BY board_scan_id"
+        ).fetchall()
+        for scan_id, board_id, kind in stuck:
+            with self.conn.transaction():
+                self.conn.execute(
+                    "UPDATE board_scans SET status = 'failed', finished_at = %s, "
+                    "error_message = 'abandoned: the collector stopped before finishing "
+                    "this scan' WHERE board_scan_id = %s",
+                    (now, scan_id),
+                )
+                events.append(
+                    incidents.record_outcome(
+                        self.conn,
+                        board_id,
+                        scan_id,
+                        "failed",
+                        "abandoned scan (collector stopped)",
+                        kind,
+                        now,
+                    )
+                )
+        self.conn.execute(
+            "UPDATE collection_runs SET status = 'failed', finished_at = %s "
+            "WHERE status = 'running'",
+            (now,),
+        )
+        return events, len(stuck)
+
+    def _run(
+        self,
+        trigger: str,
+        targets: list[BoardTarget],
+        events: list[incidents.IncidentEvent],
+        abandoned: int,
+    ) -> RunReport:
+        report = RunReport(None, trigger, None, abandoned_scans_recovered=abandoned)
+        if not targets:
+            if events:
+                with self.conn.transaction():
+                    report.notifications = incidents.queue_notifications(
+                        self.conn, None, "failed", events, self.clock()
+                    )
+            return report
+
+        started = self.clock()
+        run_id = self.conn.execute(
+            "INSERT INTO collection_runs (trigger, started_at, status) "
+            "VALUES (%s, %s, 'running') RETURNING run_id",
+            (trigger, started),
+        ).fetchone()[0]
+        report.run_id = run_id
+
+        for index, target in enumerate(targets):
+            if index:
+                self.sleep(self.interval)
+            outcome = self._collect_board(run_id, target)
+            report.outcomes.append(outcome)
+            events.append(incidents.IncidentEvent(outcome.incident_event, outcome.incident_id))
+
+        statuses = {o.status for o in report.outcomes}
+        if statuses == {"complete"}:
+            status = "complete"
+        elif statuses == {"failed"}:
+            status = "failed"
+        else:
+            status = "partial"
+        report.status = status
+
+        finished = self.clock()
+        with self.conn.transaction():
+            report.duplicate_flags_added = flag_possible_duplicates(self.conn, finished)
+            report.notifications = incidents.queue_notifications(
+                self.conn, run_id, status, events, finished
+            )
+            self.conn.execute(
+                "UPDATE collection_runs SET status = %s, finished_at = %s WHERE run_id = %s",
+                (status, finished, run_id),
+            )
+        return report
+
+    def _collect_board(self, run_id: int, target: BoardTarget) -> BoardOutcome:
+        now = self.clock()
+        kind = incidents.attempt_kind(incidents.open_incident(self.conn, target.board_id), now)
+        scan_id = self.conn.execute(
+            "INSERT INTO board_scans (run_id, board_id, started_at, status, attempt_kind) "
+            "VALUES (%s, %s, %s, 'running', %s) RETURNING board_scan_id",
+            (run_id, target.board_id, now, kind),
+        ).fetchone()[0]
+        outcome = BoardOutcome(target.token, target.employer, scan_id, "failed", kind, None)
+
+        fetch = fetch_jobs(self.client, target.token, self.clock, self.sleep)
+        try:
+            raw_id = None
+            if fetch.body is not None:
+                stored = store_body(
+                    self.raw_root, target.token, fetch.fetched_at, scan_id, fetch.body
+                )
+                raw_id = self.conn.execute(
+                    "INSERT INTO raw_responses (board_scan_id, sequence_no, request_url, "
+                    "http_status, fetched_at, storage_uri, content_sha256, byte_size, "
+                    "response_headers) VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s) "
+                    "RETURNING raw_response_id",
+                    (
+                        scan_id,
+                        fetch.request_url,
+                        fetch.status_code,
+                        fetch.fetched_at,
+                        stored.storage_uri,
+                        stored.sha256,
+                        stored.byte_size,
+                        Jsonb(fetch.headers),
+                    ),
+                ).fetchone()[0]
+
+            parsed = (
+                ParsedResponse("failed", error=fetch.error)
+                if fetch.error
+                else parse_jobs_response(fetch.status_code, fetch.headers, fetch.body)
+            )
+            with self.conn.transaction():
+                counts = StoreCounts()
+                if parsed.outcome != "failed":
+                    counts = store_scan_results(
+                        self.conn, target.board_id, scan_id, raw_id, parsed, fetch.fetched_at
+                    )
+                self._finish_scan(scan_id, parsed, counts)
+                event = incidents.record_outcome(
+                    self.conn,
+                    target.board_id,
+                    scan_id,
+                    parsed.outcome,
+                    parsed.error,
+                    kind,
+                    self.clock(),
+                    fetch.retry_after_seconds,
+                )
+        except Exception as exc:  # noqa: BLE001 - one board must never stop the others
+            error = f"internal error while processing: {type(exc).__name__}: {exc}"[:1000]
+            parsed = ParsedResponse("failed", error=error)
+            counts = StoreCounts()
+            with self.conn.transaction():
+                self._finish_scan(scan_id, parsed, counts)
+                event = incidents.record_outcome(
+                    self.conn, target.board_id, scan_id, "failed", error, kind, self.clock()
+                )
+
+        outcome.status = parsed.outcome
+        outcome.error = parsed.error
+        outcome.reported = parsed.reported_total
+        outcome.received = parsed.received
+        outcome.invalid = len(parsed.rejected) if parsed.outcome != "failed" else None
+        outcome.counts = counts
+        outcome.incident_event = event.kind
+        outcome.incident_id = event.incident_id
+        return outcome
+
+    def _finish_scan(self, scan_id: int, parsed: ParsedResponse, counts: StoreCounts) -> None:
+        usable = parsed.outcome != "failed"
+        self.conn.execute(
+            """
+            UPDATE board_scans SET status = %s, finished_at = %s, error_message = %s,
+                postings_seen = %s, jobs_reported = %s, jobs_received = %s, jobs_invalid = %s,
+                jobs_retained = %s, jobs_excluded = %s, jobs_needing_review = %s
+            WHERE board_scan_id = %s
+            """,
+            (
+                parsed.outcome,
+                self.clock(),
+                parsed.error,
+                len(parsed.jobs) if usable else None,
+                parsed.reported_total,
+                parsed.received,
+                len(parsed.rejected) if usable else None,
+                counts.retained if usable else None,
+                counts.excluded if usable else None,
+                counts.needing_review if usable else None,
+                scan_id,
+            ),
+        )
+
+
+def summarize(report: RunReport) -> list[str]:
+    """Human-readable lines for the CLI."""
+    if report.run_id is None:
+        lines = ["Nothing to collect."]
+    else:
+        lines = [f"Run {report.run_id} ({report.trigger}): {report.status}"]
+    if report.abandoned_scans_recovered:
+        lines.append(
+            f"Recovered {report.abandoned_scans_recovered} abandoned scan(s) "
+            "from a stopped run (marked failed)."
+        )
+    header = (
+        f"{'employer':32} {'token':26} {'status':8} {'attempt':7} {'reported':>8} "
+        f"{'received':>8} {'invalid':>7} {'retained':>8} {'excluded':>8} {'review':>6}"
+    )
+    if report.outcomes:
+        lines.append(header)
+    for o in report.outcomes:
+
+        def n(value):
+            return "-" if value is None else str(value)
+
+        usable = o.status != "failed"
+        lines.append(
+            f"{o.employer[:32]:32} {o.token[:26]:26} {o.status:8} {o.attempt_kind:7} "
+            f"{n(o.reported):>8} {n(o.received):>8} {n(o.invalid):>7} "
+            f"{n(o.counts.retained if usable else None):>8} "
+            f"{n(o.counts.excluded if usable else None):>8} "
+            f"{n(o.counts.needing_review if usable else None):>6}"
+        )
+        if o.error:
+            lines.append(f"    {o.status}: {o.error}")
+        if o.incident_event not in ("none",):
+            lines.append(f"    incident: {o.incident_event.replace('_', ' ')}")
+    if report.duplicate_flags_added:
+        lines.append(f"Possible duplicates flagged (not merged): {report.duplicate_flags_added}")
+    if report.notifications:
+        lines.append(
+            f"Queued {len(report.notifications)} notification(s) in the outbox "
+            "(see `jobmarket notifications`)."
+        )
+    return lines
