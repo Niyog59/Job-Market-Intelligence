@@ -626,3 +626,9 @@ def test_migration_backfills_existing_history(schema_conn):
     assert one("SELECT content_scan_id FROM posting_screenings") == scans[1][0]
     assert c.execute("SELECT * FROM posting_history_problems").fetchall() == []
     assert one("SELECT count(*) FROM retained_jobs") == 1
+
+
+def test_reproducible_scenarios_meet_their_expectations(schema_conn, tmp_path):
+    import history_scenarios
+
+    assert history_scenarios.run(schema_conn, tmp_path) == []

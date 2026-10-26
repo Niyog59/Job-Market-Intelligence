@@ -72,3 +72,8 @@ jobs:
           jobmarket sources sync
           jobmarket sources list --all > /dev/null
           jobmarket status
+
+      - name: History scenarios and integrity checks
+        run: |
+          python tests/history_scenarios.py
+          jobmarket check-history
