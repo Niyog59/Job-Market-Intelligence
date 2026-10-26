@@ -110,6 +110,27 @@ def test_project_registry_syncs(schema_conn):
     assert (region, url) == ("eu", "https://job-boards.eu.greenhouse.io/indiciumai")
 
 
+LEVER_REGISTRY = Path(__file__).parents[1] / "config/lever_boards.toml"
+
+
+def test_project_lever_registry_matches_the_recheck():
+    reg = load_registry(LEVER_REGISTRY)
+    assert {b.source_system for b in reg.boards} == {"lever"}
+    assert len(reg.boards) == 43 and len(reg.enabled) == 30
+    assert len(reg.leads) == 1 and reg.leads[0].status == "hold"
+    assert reg.leads[0].tokens == ("usasurveyjob",)  # Toward Jobs stays held
+    assert all(b.region == "global" for b in reg.boards)
+    assert all(b.verification == "verified" and b.metros for b in reg.enabled)
+    shared = next(b for b in reg.boards if b.token == "boxlunch")
+    assert shared.brands == ("BoxLunch", "Hot Topic") and not shared.enabled
+    assert next(b for b in reg.boards if b.token == "cgsfederal").board_url == (
+        "https://jobs.lever.co/cgsfederal"
+    )
+    # Unresolved or conflicting mappings stay disabled.
+    for token in ("zimperium", "worldwidemissioncritical", "dmautoleasing", "field-ai", "tsmg"):
+        assert not next(b for b in reg.boards if b.token == token).enabled
+
+
 LEVER_BASE = """
 source = "lever"
 
@@ -150,3 +171,30 @@ def test_enabled_boards_need_a_metro(tmp_path):
     text = text.replace('"pending"', '"verified"') + 'official_source = "https://lev.example"\n'
     with pytest.raises(RegistryError, match="enabled boards need at least one metro"):
         load_registry(write(tmp_path, text))
+
+
+@pytest.mark.db
+def test_both_project_registries_sync(schema_conn):
+    apply_migrations(schema_conn)
+    reg = load_registries((REPO_REGISTRY, LEVER_REGISTRY))
+    result = sync_registry(schema_conn, reg, T0)
+    assert (result.boards_upserted, result.boards_enabled) == (100, 51)
+    counts = dict(
+        schema_conn.execute(
+            "SELECT source_system, count(*) FILTER (WHERE is_active) FROM source_boards "
+            "GROUP BY source_system"
+        ).fetchall()
+    )
+    assert counts == {"greenhouse": 21, "lever": 30}
+    region, brands = schema_conn.execute(
+        "SELECT hosting_region, hiring_brands FROM source_boards WHERE board_key = 'boxlunch'"
+    ).fetchone()
+    assert (region, brands) == ("global", ["BoxLunch", "Hot Topic"])
+    # Syncing only the Greenhouse file leaves the Lever boards alone.
+    sync_registry(schema_conn, load_registry(REPO_REGISTRY), T0)
+    assert (
+        schema_conn.execute(
+            "SELECT count(*) FROM source_boards WHERE source_system = 'lever' AND is_active"
+        ).fetchone()[0]
+        == 30
+    )

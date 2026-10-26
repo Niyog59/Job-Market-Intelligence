@@ -17,7 +17,7 @@ import psycopg
 from jobmarket.connectors import SOURCE_SYSTEMS, get_connector
 
 DEFAULT_REGISTRY_PATH = Path("config/greenhouse_boards.toml")
-DEFAULT_REGISTRY_PATHS = (DEFAULT_REGISTRY_PATH,)
+DEFAULT_REGISTRY_PATHS = (DEFAULT_REGISTRY_PATH, Path("config/lever_boards.toml"))
 # Comma-separated list of registry files, replacing the defaults.
 REGISTRY_PATH_ENV = "JOBMARKET_REGISTRY"
 
