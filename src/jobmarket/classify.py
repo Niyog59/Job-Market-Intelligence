@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-CLASSIFIER_VERSION = "2026-10-25.1"
+CLASSIFIER_VERSION = "2026-10-26.1"
 
 FAMILIES = (
     "data_engineering",
@@ -68,6 +68,10 @@ _STRONG: dict[str, list[str]] = {
         r"\btech(nical)? lead\b.*\b(android|ios|mobile|backend|front[- ]?end|web|software)\b",
         r"\btest (development|automation) engineer",
         r"\bqa automation engineer",
+        # Inverted titles: "Engineer, Software", "Engineer I, Software Test and Automation",
+        # "Manager, Software - Perception".
+        r"\bengineer( (i{1,3}|iv|[1-4]))?,\s*software\b",
+        r"\b(manager|lead|director),\s*software\b",
     ],
     "data_science": [
         r"\bdata scien",
@@ -240,6 +244,24 @@ _HARD_EXCLUSIONS = [
     r"\bfield (service |sales )?engineer",
     r"\binstaller\b",
     r"\blineman\b",
+    # Machining and plant-floor programming are not software engineering.
+    r"\bcnc\b",
+    r"\bplc (programmer|technician)\b",
+    r"\bmachinist\b",
+    r"\bmachine operator\b",
+    # Survey, data-entry, and rating gigs mention "data" but are not data roles.
+    r"\bdata entry\b",
+    r"\bdata (collector|collection (specialist|associate|agent))\b",
+    r"\bsurvey (taker|participant|respondent|panel(ist)?|interviewer|tester)\b",
+    r"\bpaid (survey|research|study|studies|focus)\b",
+    r"\bfocus group\b",
+    r"\bmystery shop",
+    r"\bproduct tester\b",
+    r"\btranscri(ber|ptionist|ption)\b",
+    r"\b(data )?annotat(or|ion)\b",
+    r"\bsearch (engine )?evaluator\b",
+    r"\b(online|internet|ads?|social media|map|maps) (rater|assessor|evaluator)\b",
+    r"\bai (trainer|tutor|rater)\b",
 ]
 # Soft exclusions describe a non-target domain; a clear target title still wins (for
 # example "Senior Data Warehouse Engineer" or "Clinical Data Scientist").
@@ -258,6 +280,26 @@ _SOFT_EXCLUSIONS = [
     r"\bunderwrit",
     r"\bclaims\b",
     r"\bcontroller\b",
+    # Engineering disciplines outside the target families. A clear target title still
+    # wins (for example "Electrical Software Engineer" matches a strong pattern first).
+    r"\bcommissioning\b",
+    r"\bhvac\b",
+    r"\bpiping\b",
+    r"\bstructural\b",
+    r"\bcivil\b",
+    r"\bgeotechnical\b",
+    r"\bmechanical\b",
+    r"\belectrical\b",
+    r"\bprocess engineer",
+    r"\bmanufacturing engineer",
+    r"\bproject engineer",
+    r"\bstationary engineer",
+    r"\bvalidation engineer",
+    r"\bflight test",
+    r"\baerodynamic",
+    r"\bpropulsion\b",
+    r"\bavionics\b",
+    r"\bphysical infrastructure\b",
 ]
 # Domain words that block only weak matches ("Marketing Analyst" needs data duties and is
 # still excluded if it is really a marketing role); strong titles like "Sales Data
@@ -302,6 +344,9 @@ def _duty_terms(area: str, text: str) -> list[str]:
 DFW_CITIES = [
     ("dallas", False),
     ("fort worth", False),
+    # A misspelling some employers publish ("Forth Worth, Texas"); the source text is kept
+    # as published and the screening reasons say the alias was used.
+    ("forth worth", True),
     ("ft. worth", False),
     ("ft worth", False),
     ("arlington", True),
@@ -592,18 +637,21 @@ def classify_location(
 ) -> tuple[str, bool, bool, list[str]]:
     """Return (texas_eligibility, city_targeted_remote, needs_review, reasons)."""
     location_text = location_name or ""
-    office_text = " | ".join(
-        f"{o.get('name') or ''} {o.get('location') or ''}".strip() for o in offices
-    )
+    office_pieces = [f"{o.get('name') or ''} {o.get('location') or ''}".strip() for o in offices]
+    office_text = " | ".join(office_pieces)
     parts = [location_text, office_text, title]
     structured_original = " | ".join(p for p in parts if p)
     structured = structured_original.lower()
     reasons: list[str] = []
 
     # The posting's own location field outranks the employer's office list, which can
-    # name every office the job is attached to.
+    # name every office the job is attached to. Each location is read on its own, so
+    # "Arlington, VA" listed next to "Houston, TX" does not borrow that Texas context.
     loc_lower = location_text.lower()
-    place_metros = _metros_in(" | ".join([loc_lower, office_text.lower()]))
+    place_metros: set[str] = set()
+    for piece in [location_text, *office_pieces]:
+        if piece:
+            place_metros |= _metros_in(piece.lower())
     title_metros = _metros_in(title.lower())
     metros = place_metros | title_metros
     remote = _REMOTE.search(structured) is not None
@@ -612,6 +660,8 @@ def classify_location(
     if _DESC_TEXAS_EXCLUDED.search(description):
         return "not_texas", False, False, ["description says Texas residents cannot be hired"]
 
+    if "forth worth" in structured:
+        reasons.append("source spelling 'Forth Worth' read as Fort Worth")
     if place_metros:
         # A DFW/Houston office or work location is offered, even if remote is too.
         reasons.append("location fields name " + "/".join(sorted(place_metros)))
@@ -647,18 +697,40 @@ def classify_location(
             )
         return "remote_ambiguous", False, True, ["remote role without explicit Texas eligibility"]
 
-    # No metro or remote signal in the structured fields: look for an explicit location
-    # sentence in the description. That is weaker evidence, so it is flagged for review.
+    location_only = " ".join(parts[:-1]).strip()
+    if _names_a_place(location_only):
+        # Concrete places outside DFW/Houston are authoritative; a company boilerplate line
+        # such as "offices in Dallas and Toronto" does not move the job.
+        return "not_texas", False, False, ["location fields name places outside DFW/Houston"]
+
+    # The location fields name no concrete place (empty, a country, or a label such as a
+    # department): look for an explicit location sentence in the description. That is
+    # weaker evidence, so it is flagged for review.
     desc_metros: set[str] = set()
     for match in _DESC_LOCATION_PHRASE.finditer(description):
         desc_metros |= _metros_in(match.group("place").lower())
     if desc_metros:
         reasons.append("description location sentence names " + "/".join(sorted(desc_metros)))
         return _local(desc_metros), False, True, reasons
-    location_only = " ".join(parts[:-1]).strip()
     if re.search(r"[a-z]", location_only.lower()):
         return "not_texas", False, False, ["location fields name places outside DFW/Houston"]
     return "unknown", False, False, ["no usable location information"]
+
+
+_CITY_REGION = re.compile(r"[^\W\d_][\w .'-]*,\s*[^\W\d_]{2,}")
+
+
+def _names_a_place(text: str) -> bool:
+    """Whether location text names a concrete place: "City, Region", a US state, Texas, or
+    a place outside the US. A bare country ("United States") or a label does not."""
+    if not text:
+        return False
+    return bool(
+        _CITY_REGION.search(text)
+        or _OTHER_STATE.search(text)
+        or _TEXAS_STATE.search(text)
+        or (_NON_US.search(text.lower()) and not _US.search(text.lower()))
+    )
 
 
 def _local(metros: set[str]) -> str:
