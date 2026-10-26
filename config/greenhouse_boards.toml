@@ -1,0 +1,801 @@
+# Greenhouse job boards for Dallas-Fort Worth and Greater Houston coverage.
+#
+# "verified" means an official employer-to-board connection was established from the
+# employer's own careers source. It is not a Greenhouse certification, and it does not
+# mean the board currently has relevant openings. Only verified boards are enabled.
+# "pending" boards stay disabled until that connection is confirmed: a readable board or
+# a matching company name is not enough.
+#
+# Research snapshot: 2026-10-25 (first discovery pass, not an exhaustive census).
+#
+# Fields
+#   employer        display name of the employer or brand
+#   employer_slug   stable id; boards of the same employer share it (for example BGE)
+#   group           optional corporate group shared by related employers
+#   token           Greenhouse board token
+#   region          "us" or "eu": which human-facing board host the employer uses
+#   enabled         collected by `jobmarket collect`
+#   verification    "verified" | "pending"
+#   metros          any of "dfw", "houston"
+#   local_evidence  office or hiring evidence; not a guarantee of a relevant opening
+#   official_source official careers page used as evidence (empty if not yet resolved)
+#   evidence        how the official connection was established
+#   checks          special review notes for screening or verification
+
+schema_version = 1
+researched_on = "2026-10-25"
+
+# --- Verified boards (enabled) -------------------------------------------------------
+
+[[boards]]
+employer = "Lantern (healthcare)"
+employer_slug = "lantern-healthcare"
+token = "employerdirecthealthcare"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas"
+official_source = "https://lanterncare.com/about-us/careers/"
+evidence = "Official careers page links to the board."
+checks = "Distinct company from Lantern (technology consulting)."
+
+[[boards]]
+employer = "Island"
+employer_slug = "island"
+token = "island"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas/Coppell"
+official_source = "https://www.island.io/careers"
+evidence = "Official job page embeds for=island, matching job 4433145009."
+
+[[boards]]
+employer = "Bot Auto"
+employer_slug = "bot-auto"
+token = "botauto"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://bot.auto/careers"
+evidence = "Official careers page links to the board."
+checks = "Trucking routes mentioned in text do not establish job location."
+
+[[boards]]
+employer = "Cognite"
+employer_slug = "cognite"
+token = "cognite"
+region = "eu"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.cognite.com/en/company/careers"
+evidence = "Official careers page links to the board."
+checks = "EU-hosted board; can contain US jobs."
+
+[[boards]]
+employer = "Indicium AI"
+employer_slug = "indicium-ai"
+token = "indiciumai"
+region = "eu"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston hiring"
+official_source = "https://indicium.ai/about-us/join-us"
+evidence = "Official careers page links to the board."
+checks = "EU-hosted board; can contain US jobs."
+
+[[boards]]
+employer = "Gridmatic"
+employer_slug = "gridmatic"
+token = "gridmaticinc"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.gridmatic.com/careers/"
+evidence = "Official careers page links to the board."
+
+[[boards]]
+employer = "Onbe"
+employer_slug = "onbe"
+token = "onbe"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano"
+official_source = "https://www.onbe.com/company/careers"
+evidence = "Talent-community posting establishes the board relationship and the Plano office."
+checks = "A talent-community or talent-pool posting is not an actual vacancy."
+
+[[boards]]
+employer = "Torc Robotics"
+employer_slug = "torc-robotics"
+token = "torcrobotics"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Fort Worth"
+official_source = "https://torc.ai/c/"
+evidence = "Official careers page links to the board."
+checks = "Trucking routes mentioned in text do not establish job location."
+
+[[boards]]
+employer = "Farther"
+employer_slug = "farther"
+token = "fartherfinance"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas/Irving"
+official_source = "https://www.farther.com/careers"
+evidence = "Official careers page links to the board."
+
+[[boards]]
+employer = "Speechify"
+employer_slug = "speechify"
+token = "speechify"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros, targeted remote postings"
+official_source = "https://speechify.com/careers/"
+evidence = "Official careers page links to the board."
+checks = "Speechify says it has no offices. City-targeted remote postings do not imply physical offices and do not automatically count as unique vacancies."
+
+[[boards]]
+employer = "Plus Power"
+employer_slug = "plus-power"
+token = "pluspower"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "The Woodlands"
+official_source = "https://www.pluspower.com/careers/"
+evidence = "Official careers page links to the board."
+
+[[boards]]
+employer = "Hanwha Energy USA"
+employer_slug = "hanwha-energy-usa"
+group = "Hanwha"
+token = "hanwhaenergyusa"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.hanwhaenergyusa.com/careers/"
+evidence = "Official careers page links to the board."
+checks = "Separate board from Chariot Energy within the same corporate group."
+
+[[boards]]
+employer = "Chariot Energy"
+employer_slug = "chariot-energy"
+group = "Hanwha"
+token = "chariotenergy"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston; Hanwha brand"
+official_source = "https://www.hanwhaenergyusa.com/careers/"
+evidence = "Linked from the Hanwha Energy USA careers page."
+checks = "Separate board from Hanwha Energy USA within the same corporate group."
+
+[[boards]]
+employer = "PMG"
+employer_slug = "pmg"
+token = "pmg"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas/Fort Worth"
+official_source = "https://www.pmg.com/team-and-culture/job-openings"
+evidence = "Official HTML links to board jobs, including job 8765658002."
+
+[[boards]]
+employer = "EQT Corporation"
+employer_slug = "eqt-corporation"
+token = "eqtcorporation"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.eqt.com/careers"
+evidence = "Official careers page embeds for=eqtcorporation."
+
+[[boards]]
+employer = "Uber Freight"
+employer_slug = "uber-freight"
+token = "uberfreight"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas/Frisco"
+official_source = "https://www.uberfreight.com/en-US/careers"
+evidence = "Official careers page embeds the board."
+
+[[boards]]
+employer = "City of Fort Worth"
+employer_slug = "city-of-fort-worth"
+token = "cityoffortworth"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Fort Worth; public employer"
+official_source = "https://www.fortworthtexas.gov/departments/hr/careers"
+evidence = "Official city careers page links directly to the board jobs."
+
+[[boards]]
+employer = "C3 AI"
+employer_slug = "c3-ai"
+token = "c3iot"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://c3.ai/careers"
+evidence = "Job 8797277002 matches the official careers page and its Greenhouse application integration."
+checks = "The separate internship board c3ascend is not interchangeable with c3iot."
+
+[[boards]]
+employer = "Lantern (technology consulting)"
+employer_slug = "lantern-technology-consulting"
+token = "lanternstudiosinc"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas"
+official_source = "https://lanternstudios.com/careers/"
+evidence = "Official careers page links to the board."
+checks = "Distinct company from Lantern (healthcare)."
+
+[[boards]]
+employer = "ON.energy"
+employer_slug = "on-energy"
+token = "onenergy"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.on.energy/"
+evidence = "Official site links to the board."
+
+[[boards]]
+employer = "Boingo Wireless"
+employer_slug = "boingo-wireless"
+token = "boingo"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Frisco"
+official_source = "https://www.boingo.com/corporate/careers"
+evidence = "Official careers page loads greenhouse-custom-logic.js, which calls this exact board API."
+
+# --- Pending candidates (disabled until the official connection is verified) ---------
+
+[[boards]]
+employer = "Torq Consulting"
+employer_slug = "torq-consulting"
+token = "gotorq"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Plano"
+official_source = "https://www.gotorq.com/join-our-team"
+
+[[boards]]
+employer = "Koddi"
+employer_slug = "koddi"
+token = "koddi"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Fort Worth"
+official_source = "https://koddi.com/careers/"
+
+[[boards]]
+employer = "SmithRx"
+employer_slug = "smithrx"
+token = "smithrx"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Plano"
+official_source = "https://smithrx.com/careers"
+checks = "Empty rendered careers page did not mean no jobs."
+
+[[boards]]
+employer = "Onapsis"
+employer_slug = "onapsis"
+token = "onapsis"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas/Irving"
+official_source = "https://onapsis.com/company/careers/"
+
+[[boards]]
+employer = "DRW"
+employer_slug = "drw"
+token = "drweng"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.drw.com/work-at-drw/listings"
+
+[[boards]]
+employer = "Cloudflare"
+employer_slug = "cloudflare"
+token = "cloudflare"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas/Houston titles"
+official_source = "https://www.cloudflare.com/careers/"
+checks = "Location may say Distributed."
+
+[[boards]]
+employer = "MongoDB"
+employer_slug = "mongodb"
+token = "mongodb"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas/Houston hiring"
+official_source = "https://www.mongodb.com/careers/jobs/8304146"
+
+[[boards]]
+employer = "Bluestaq"
+employer_slug = "bluestaq"
+token = "bluestaq"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, initially remote"
+official_source = "https://www.bluestaq.com/careers"
+checks = "Verify the US route after an unexpected site redirect."
+
+[[boards]]
+employer = "Gatik"
+employer_slug = "gatik"
+token = "gatikaiinc"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Fort Worth"
+official_source = "https://www.gatik.ai/careers"
+checks = "Official URL redirected to an archive."
+
+[[boards]]
+employer = "NiCE"
+employer_slug = "nice"
+token = "nice"
+region = "eu"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Richardson"
+official_source = "https://www.nice.com/careers"
+
+[[boards]]
+employer = "BGE"
+employer_slug = "bge"
+token = "bgeinc"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros"
+official_source = "https://www.bgeinc.com/careers/"
+checks = "Second board bgeinccampus belongs to the same employer; possible duplicates."
+
+[[boards]]
+employer = "BGE"
+employer_slug = "bge"
+token = "bgeinccampus"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros (campus board)"
+official_source = "https://www.bgeinc.com/careers/"
+checks = "Same employer as bgeinc; possible duplicates."
+
+[[boards]]
+employer = "Compass"
+employer_slug = "compass"
+token = "urbancompass"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas/Flower Mound"
+official_source = "https://www.compass.com/careers/jobs"
+
+[[boards]]
+employer = "CoreWeave"
+employer_slug = "coreweave"
+token = "coreweave"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Plano/Dallas"
+official_source = "https://www.coreweave.com/careers"
+checks = "Data-center work is not automatically relevant."
+
+[[boards]]
+employer = "Turing"
+employer_slug = "turing"
+token = "turing"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas/Plano"
+official_source = "https://www.turing.com/careers"
+checks = "Remote research roles need a Texas eligibility check."
+
+[[boards]]
+employer = "Horace Mann"
+employer_slug = "horace-mann"
+token = "horacemannservicecorporation"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Plano"
+official_source = "https://www.horacemann.com/about-us/careers/corporate-careers"
+checks = "Accounting roles only establish geography."
+
+[[boards]]
+employer = "Galaxy"
+employer_slug = "galaxy"
+token = "galaxydigitalservices"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas"
+official_source = ""
+checks = "Data-center construction is not software."
+
+[[boards]]
+employer = "Vailexa"
+employer_slug = "vailexa"
+token = "vailexa"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas/Houston"
+official_source = ""
+
+[[boards]]
+employer = "Electronic Power Design"
+employer_slug = "electronic-power-design"
+token = "electronicpowerdesign"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = ""
+
+[[boards]]
+employer = "Care Access"
+employer_slug = "care-access"
+token = "careaccess"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://careaccess.com/about-us/careers"
+checks = "Remote ML/data roles need an eligibility check."
+
+[[boards]]
+employer = "ASM"
+employer_slug = "asm"
+token = "asm"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Richardson"
+official_source = ""
+checks = "Semiconductor field roles are not automatically relevant."
+
+[[boards]]
+employer = "Octane"
+employer_slug = "octane"
+token = "octanelending"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Irving"
+official_source = "https://octane.co/o/who-we-are/careers/"
+
+[[boards]]
+employer = "Meriton"
+employer_slug = "meriton"
+token = "meriton"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Irving"
+official_source = ""
+
+[[boards]]
+employer = "Innovative Signal Analysis"
+employer_slug = "innovative-signal-analysis"
+token = "isa"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Richardson"
+official_source = ""
+
+[[boards]]
+employer = "The N2 Company"
+employer_slug = "the-n2-company"
+token = "n2company"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Irving"
+official_source = ""
+checks = "Operations analyst roles need a duties review."
+
+[[boards]]
+employer = "Shipfusion"
+employer_slug = "shipfusion"
+token = "shipfusion"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Irving"
+official_source = ""
+
+[[boards]]
+employer = "Squarepoint Capital"
+employer_slug = "squarepoint-capital"
+token = "squarepointcapital"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.squarepoint-capital.com/open-opportunities"
+
+[[boards]]
+employer = "Art of Problem Solving"
+employer_slug = "art-of-problem-solving"
+token = "artofproblemsolving"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Frisco/Sugar Land"
+official_source = ""
+checks = "Teaching roles are excluded."
+
+[[boards]]
+employer = "Heartflow"
+employer_slug = "heartflow"
+token = "heartflowinc"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros (field roles)"
+official_source = ""
+checks = "Field roles only establish geography."
+
+[[boards]]
+employer = "Tecovas"
+employer_slug = "tecovas"
+token = "tecovas"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros"
+official_source = ""
+checks = "Retail roles are excluded."
+
+[[boards]]
+employer = "Nurix Therapeutics"
+employer_slug = "nurix-therapeutics"
+token = "nurix"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "The Woodlands"
+official_source = ""
+checks = "Chemistry is not data science."
+
+[[boards]]
+employer = "Kincellis Advanced Therapies"
+employer_slug = "kincellis-advanced-therapies"
+token = "kincellbio"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Woodlands facility in board introduction"
+official_source = ""
+checks = "Sampled jobs lacked a local match."
+
+[[boards]]
+employer = "Upwing Energy"
+employer_slug = "upwing-energy"
+token = "upwingenergy"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Katy"
+official_source = ""
+checks = "Application engineering concerns wells and equipment, not software."
+
+[[boards]]
+employer = "Metro Vein Centers"
+employer_slug = "metro-vein-centers"
+token = "metroveincenters"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["houston"]
+local_evidence = "Katy/Humble"
+official_source = ""
+checks = "Clinical work is excluded."
+
+[[boards]]
+employer = "Cribl"
+employer_slug = "cribl"
+token = "cribl"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "DFW indexed lead"
+official_source = ""
+checks = "Current API sample did not confirm geography."
+
+[[boards]]
+employer = "DLR Group"
+employer_slug = "dlr-group"
+token = "dlrgroup"
+region = "us"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Both metros"
+official_source = ""
+checks = "Architecture/BIM roles require a relevance review."
+
+# --- Discovery backlog (unverified leads; not boards we collect) ---------------------
+
+[[leads]]
+employer = "Databricks"
+tokens = ["databricks"]
+
+[[leads]]
+employer = "Kodiak"
+tokens = ["kodiak"]
+
+[[leads]]
+employer = "Texas AirSystems"
+tokens = ["texasairsystems"]
+
+[[leads]]
+employer = "Cortica"
+tokens = ["allcareers", "cortica"]
+notes = "Check overlap between the two boards."
+
+[[leads]]
+employer = "Suitsupply"
+tokens = ["suitsupply"]
+
+[[leads]]
+employer = "EōS Fitness"
+tokens = ["eosfitness"]
+
+[[leads]]
+employer = "United Vein"
+tokens = ["unitedveincenters"]
+
+[[leads]]
+employer = "Centria / Life Skills"
+tokens = ["centriaautism", "lifeskillsautismacademy"]
+
+[[leads]]
+employer = "Armstrong Transport"
+tokens = ["armstrongtransportgroup"]
+
+[[leads]]
+employer = "VitalCaring"
+tokens = ["vitalcaringgroup"]
+
+[[leads]]
+employer = "Later"
+tokens = ["later"]
+
+[[leads]]
+employer = "DICE"
+tokens = ["dicefm-careers"]
+region = "eu"
+
+[[leads]]
+employer = "Openwork"
+tokens = ["openwork"]
+notes = "Staffing-agency policy unresolved."
+
+[[leads]]
+employer = "Unframe"
+tokens = ["unframe"]
+region = "eu"
+
+[[leads]]
+employer = "Atoms"
+tokens = ["atoms"]
+
+[[leads]]
+employer = "Sixth Street"
+tokens = []
+notes = "Exact board discovery needed."
+
+[[leads]]
+employer = "InCharge Energy"
+tokens = []
+notes = "Exact board discovery needed."
+
+[[leads]]
+employer = "Resilience"
+tokens = []
+notes = "Exact board discovery needed."
+
+# --- On hold -------------------------------------------------------------------------
+
+[[holds]]
+employer = "HP"
+tokens = ["hp"]
+notes = "jobs.hp.com directed to apply.hp.com; a Greenhouse token hp was not officially linked. Do not enable from the name alone."
