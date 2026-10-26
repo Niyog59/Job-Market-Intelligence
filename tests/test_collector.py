@@ -7,52 +7,18 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import psycopg
 import pytest
-from gh_fakes import DATA_DUTIES, FakeClock, ScriptedTransport, board, gh_job, ok, registry
+from gh_fakes import DATA_DUTIES, gh_job, ok
 
 from jobmarket import db
-from jobmarket.collector import COLLECTION_LOCK_KEY, CollectionBusy, Collector
-from jobmarket.migrate import apply_migrations
+from jobmarket.collector import COLLECTION_LOCK_KEY, CollectionBusy
 from jobmarket.notify import SmtpSettings, send_pending
 from jobmarket.raw_store import cleanup_raw
-from jobmarket.sources import sync_registry
 
 pytestmark = pytest.mark.db
 
 HOUR = timedelta(hours=1)
 BAD_JSON = httpx.Response(200, headers={"content-type": "application/json"}, content=b"{oops")
 SERVER_ERROR = httpx.Response(503, content=b"unavailable")
-
-
-@pytest.fixture
-def env(schema_conn, tmp_path):
-    apply_migrations(schema_conn)
-    sync_registry(
-        schema_conn, registry(board("acme"), board("beta", employer="Beta")), FakeClock()()
-    )
-    transport = ScriptedTransport()
-    clock = FakeClock()
-
-    class Env:
-        conn = schema_conn
-        raw_root = tmp_path / "raw"
-
-        def __init__(self):
-            self.transport, self.clock = transport, clock
-
-        def collector(self):
-            # A new Collector each time, as after a restart: all state is in the database.
-            client = httpx.Client(transport=self.transport)
-            return Collector(
-                self.conn, client, self.raw_root, clock=self.clock, sleep=lambda s: None, interval=0
-            )
-
-        def one(self, sql, params=()):
-            return self.conn.execute(sql, params).fetchone()
-
-        def scalar(self, sql, params=()):
-            return self.one(sql, params)[0]
-
-    return Env()
 
 
 def statuses(report):
