@@ -20,6 +20,7 @@ after it. Identical source content never counts as a change, whatever the rules 
 change to the normalization rules cannot masquerade as an employer edit.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -28,7 +29,7 @@ from psycopg.types.json import Jsonb
 
 from jobmarket import normalize
 from jobmarket.classify import CLASSIFIER_VERSION, screen
-from jobmarket.greenhouse import JobRecord, ParsedResponse
+from jobmarket.connectors import ParsedResponse, PostingRecord
 from jobmarket.normalize import Comparison, SourceContent, compare_form
 
 RECORDED_BY = ("collection", "replay")
@@ -66,24 +67,27 @@ def store_scan_results(
     conn: psycopg.Connection,
     board_id: int,
     board_scan_id: int,
-    raw_response_id: int,
+    raw_response_id: int | Mapping[int, int],
     parsed: ParsedResponse,
     observed_at: datetime,
     processed_at: datetime,
     recorded_by: str = "collection",
 ) -> StoreCounts:
-    """Store jobs and rejected records from one response.
+    """Store jobs and rejected records from one board scan.
 
-    Runs inside the caller's transaction, so either everything from the response is written
-    or nothing is. observed_at is the response's collection time and processed_at the time
-    of this processing; they differ when a saved response is replayed.
+    Runs inside the caller's transaction, so either everything from the scan is written or
+    nothing is. raw_response_id is the stored response, or for a paginated scan a mapping
+    from page number to stored response, so every observation and rejected record points
+    at the page it came from. observed_at is the scan's collection time and processed_at the
+    time of this processing; they differ when a saved response is replayed.
     """
     if recorded_by not in RECORDED_BY:
         raise ValueError(f"recorded_by must be one of {RECORDED_BY}")
+    raw_ids = {1: raw_response_id} if isinstance(raw_response_id, int) else raw_response_id
     counts = StoreCounts()
     for job in sorted(parsed.jobs, key=lambda j: j.source_id):
         _store_job(
-            conn, board_id, board_scan_id, raw_response_id, job, observed_at, processed_at,
+            conn, board_id, board_scan_id, raw_ids[job.page_no], job, observed_at, processed_at,
             recorded_by, counts,
         )  # fmt: skip
 
@@ -94,7 +98,7 @@ def store_scan_results(
             "ON CONFLICT (raw_response_id, record_index) DO NOTHING",
             (
                 board_scan_id,
-                raw_response_id,
+                raw_ids[rejection.page_no],
                 rejection.record_index,
                 rejection.source_id,
                 rejection.reason,
@@ -150,7 +154,7 @@ def _store_job(
     board_id: int,
     board_scan_id: int,
     raw_response_id: int,
-    job: JobRecord,
+    job: PostingRecord,
     observed_at: datetime,
     processed_at: datetime,
     recorded_by: str,
@@ -238,8 +242,8 @@ def _store_job(
         "INSERT INTO posting_observations (board_scan_id, posting_id, version_id, "
         "raw_response_id, observed_at, source_published_at, source_updated_at, "
         "source_fingerprint, normalization_version, comparison_fingerprint, processed_at, "
-        "recorded_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-        "RETURNING observation_id",
+        "recorded_by, source_created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING observation_id",
         (
             board_scan_id,
             posting_id,
@@ -253,6 +257,7 @@ def _store_job(
             comparison.fingerprint,
             processed_at,
             recorded_by,
+            job.created_at,
         ),
     ).fetchone()[0]
     counts.new_observations += 1
@@ -270,7 +275,7 @@ def _store_job(
 def _screen(
     conn: psycopg.Connection,
     posting_id: int,
-    job: JobRecord,
+    job: PostingRecord,
     source_fingerprint: str,
     key: tuple[datetime, int],
     processed_at: datetime,
@@ -411,7 +416,7 @@ def _same_content(
 def _insert_version(
     conn: psycopg.Connection,
     posting_id: int,
-    job: JobRecord,
+    job: PostingRecord,
     source_fingerprint: str,
     comparison: Comparison,
     snapshot: dict,
@@ -425,10 +430,10 @@ def _insert_version(
             posting_id, version_no, content_hash, title, location_text, description_text,
             first_seen_at, absolute_url, content_html, departments, offices,
             requisition_id, internal_job_id, source_metadata, screening,
-            normalization_version, detection, recorded_at)
+            normalization_version, detection, recorded_at, apply_url, source_fields)
         VALUES (%s, (SELECT coalesce(max(version_no), 0) + 1 FROM posting_versions
                      WHERE posting_id = %s),
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING version_id
         """,
         (
@@ -450,6 +455,8 @@ def _insert_version(
             comparison.normalization_version,
             detection,
             processed_at,
+            job.apply_url,
+            Jsonb(job.source_fields) if job.source_fields is not None else None,
         ),
     ).fetchone()[0]
     _save_comparison(conn, version_id, comparison, processed_at)

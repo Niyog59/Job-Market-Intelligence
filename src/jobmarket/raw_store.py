@@ -13,6 +13,8 @@ from pathlib import Path
 
 import psycopg
 
+from jobmarket.connectors import SOURCE_SYSTEMS
+
 RAW_DIR_ENV = "JOBMARKET_RAW_DIR"
 DEFAULT_RAW_DIR = Path("data/raw")
 RAW_RETENTION = timedelta(days=4)
@@ -30,15 +32,23 @@ class StoredBody:
 
 
 def store_body(
-    root: Path, token: str, fetched_at: datetime, scan_id: int, body: bytes
+    root: Path,
+    token: str,
+    fetched_at: datetime,
+    scan_id: int,
+    body: bytes,
+    source_system: str = "greenhouse",
+    sequence_no: int = 1,
 ) -> StoredBody:
-    """Write the response bytes under root and return a path relative to root.
+    """Write one response page under root/<source>/<token>/ and return a path relative to
+    root. Later pages of a paginated scan get a -p<N> suffix.
 
     Written to a temporary name first and renamed, so a crash never leaves a half-written
     file under the final name.
     """
     stamp = fetched_at.strftime("%Y%m%dT%H%M%S%fZ")
-    relative = Path("greenhouse") / token / f"{stamp}-scan{scan_id}.json"
+    suffix = "" if sequence_no == 1 else f"-p{sequence_no}"
+    relative = Path(source_system) / token / f"{stamp}-scan{scan_id}{suffix}.json"
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".tmp")
@@ -98,8 +108,9 @@ def cleanup_raw(
 
     known = {uri for (uri,) in conn.execute("SELECT storage_uri FROM raw_responses")}
     orphans = 0
-    base = root / "greenhouse"
-    if base.exists():
+    for base in (root / source for source in SOURCE_SYSTEMS):
+        if not base.exists():
+            continue
         for path in base.rglob("*"):
             if not path.is_file():
                 continue

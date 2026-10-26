@@ -1,4 +1,9 @@
-"""Greenhouse board registry: load and validate the TOML file, sync it into the database."""
+"""Board registries: load and validate the TOML files, sync them into the database.
+
+There is one registry file per source system (config/greenhouse_boards.toml,
+config/lever_boards.toml). A file names its source with a top-level `source` key; files
+written before Lever was added have none and are Greenhouse files.
+"""
 
 import os
 import re
@@ -9,13 +14,12 @@ from pathlib import Path
 
 import psycopg
 
-DEFAULT_REGISTRY_PATH = Path("config/greenhouse_boards.toml")
-REGISTRY_PATH_ENV = "JOBMARKET_REGISTRY"
+from jobmarket.connectors import SOURCE_SYSTEMS, get_connector
 
-BOARD_URL = {
-    "us": "https://job-boards.greenhouse.io/{token}",
-    "eu": "https://job-boards.eu.greenhouse.io/{token}",
-}
+DEFAULT_REGISTRY_PATH = Path("config/greenhouse_boards.toml")
+DEFAULT_REGISTRY_PATHS = (DEFAULT_REGISTRY_PATH,)
+# Comma-separated list of registry files, replacing the defaults.
+REGISTRY_PATH_ENV = "JOBMARKET_REGISTRY"
 
 _SLUG = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
 _TOKEN = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -23,7 +27,7 @@ _METROS = {"dfw", "houston"}
 
 
 class RegistryError(Exception):
-    """Raised when the registry file is missing or invalid."""
+    """Raised when a registry file is missing or invalid."""
 
 
 @dataclass(frozen=True)
@@ -40,10 +44,14 @@ class BoardEntry:
     evidence: str
     checks: str
     group: str | None
+    source_system: str = "greenhouse"
+    # Hiring brands served by this one board (for example BoxLunch and Hot Topic). One
+    # board is scanned once, however many brands it carries.
+    brands: tuple[str, ...] = ()
 
     @property
     def board_url(self) -> str:
-        return BOARD_URL[self.region].format(token=self.token)
+        return get_connector(self.source_system).board_url(self.token, self.region)
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,7 @@ class Lead:
     status: str  # "lead" or "hold"
     notes: str
     region: str
+    source_system: str = "greenhouse"
 
 
 @dataclass(frozen=True)
@@ -64,13 +73,44 @@ class Registry:
     def enabled(self) -> tuple[BoardEntry, ...]:
         return tuple(b for b in self.boards if b.enabled)
 
+    @property
+    def source_systems(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(b.source_system for b in self.boards))
+
+
+def registry_paths() -> tuple[Path, ...]:
+    value = os.environ.get(REGISTRY_PATH_ENV)
+    if value:
+        return tuple(Path(p.strip()) for p in value.split(",") if p.strip())
+    return DEFAULT_REGISTRY_PATHS
+
 
 def registry_path() -> Path:
-    return Path(os.environ.get(REGISTRY_PATH_ENV, DEFAULT_REGISTRY_PATH))
+    """The first registry file (kept for callers that show one path)."""
+    return registry_paths()[0]
+
+
+def load_registries(paths: tuple[Path, ...] | None = None) -> Registry:
+    """Load and validate several registry files as one registry."""
+    paths = registry_paths() if paths is None else paths
+    problems: list[str] = []
+    parts = [_load_file(path, problems) for path in paths]
+    boards = tuple(b for reg in parts for b in reg.boards)
+    leads = tuple(lead for reg in parts for lead in reg.leads)
+    problems += _cross_checks(list(boards), list(leads))
+    if problems:
+        raise RegistryError("invalid registry: " + "; ".join(problems))
+    return Registry(boards=boards, leads=leads)
 
 
 def load_registry(path: Path | None = None) -> Registry:
-    path = registry_path() if path is None else path
+    """Load one registry file, or every configured file when no path is given."""
+    if path is None:
+        return load_registries()
+    return load_registries((path,))
+
+
+def _load_file(path: Path, problems: list[str]) -> Registry:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -78,34 +118,40 @@ def load_registry(path: Path | None = None) -> Registry:
     except tomllib.TOMLDecodeError as exc:
         raise RegistryError(f"registry file {path} is not valid TOML: {exc}") from exc
 
-    problems: list[str] = []
-    boards = [_board(raw, i, problems) for i, raw in enumerate(data.get("boards", []))]
-    leads = [_lead(raw, "lead") for raw in data.get("leads", [])]
-    leads += [_lead(raw, "hold") for raw in data.get("holds", [])]
+    source = str(data.get("source", "greenhouse"))
+    if source not in SOURCE_SYSTEMS:
+        raise RegistryError(f"{path}: source must be one of {list(SOURCE_SYSTEMS)}")
+    boards = [
+        _board(raw, i, source, path.name, problems) for i, raw in enumerate(data.get("boards", []))
+    ]
+    leads = [_lead(raw, "lead", source) for raw in data.get("leads", [])]
+    leads += [_lead(raw, "hold", source) for raw in data.get("holds", [])]
+    return Registry(boards=tuple(b for b in boards if b), leads=tuple(leads))
 
-    tokens = [b.token for b in boards if b]
-    for token in sorted({t for t in tokens if tokens.count(t) > 1}):
-        problems.append(f"token {token!r} appears more than once")
+
+def _cross_checks(boards: list[BoardEntry], leads: list[Lead]) -> list[str]:
+    problems = []
+    keys = [(b.source_system, b.token) for b in boards]
+    for source, token in sorted({k for k in keys if keys.count(k) > 1}):
+        problems.append(f"{source} token {token!r} appears more than once")
     names_by_slug: dict[str, set[str]] = {}
     for b in boards:
-        if b:
-            names_by_slug.setdefault(b.employer_slug, set()).add(b.employer)
+        names_by_slug.setdefault(b.employer_slug, set()).add(b.employer)
     for slug, names in names_by_slug.items():
         if len(names) > 1:
             problems.append(f"employer_slug {slug!r} has several names: {sorted(names)}")
-    board_tokens = set(tokens)
+    board_keys = set(keys)
     for lead in leads:
         for token in lead.tokens:
-            if token in board_tokens:
+            if (lead.source_system, token) in board_keys:
                 problems.append(f"{lead.status} token {token!r} is also listed as a board")
-
-    if problems:
-        raise RegistryError("invalid registry: " + "; ".join(problems))
-    return Registry(boards=tuple(boards), leads=tuple(leads))
+    return problems
 
 
-def _board(raw: dict, index: int, problems: list[str]) -> BoardEntry | None:
-    where = f"boards[{index}] ({raw.get('token', '?')})"
+def _board(
+    raw: dict, index: int, source: str, filename: str, problems: list[str]
+) -> BoardEntry | None:
+    where = f"{filename} boards[{index}] ({raw.get('token', '?')})"
     required = ("employer", "employer_slug", "token", "region", "enabled", "verification")
     missing = [k for k in required if k not in raw]
     if missing:
@@ -124,15 +170,18 @@ def _board(raw: dict, index: int, problems: list[str]) -> BoardEntry | None:
         evidence=str(raw.get("evidence", "")),
         checks=str(raw.get("checks", "")),
         group=raw.get("group"),
+        source_system=source,
+        brands=tuple(str(b) for b in raw.get("brands", [])),
     )
+    regions = get_connector(source).regions
     if not entry.employer:
         problems.append(f"{where}: employer is empty")
     if not _SLUG.fullmatch(entry.employer_slug):
         problems.append(f"{where}: invalid employer_slug {entry.employer_slug!r}")
     if not _TOKEN.fullmatch(entry.token):
         problems.append(f"{where}: invalid token {entry.token!r}")
-    if entry.region not in BOARD_URL:
-        problems.append(f"{where}: region must be 'us' or 'eu'")
+    if entry.region not in regions:
+        problems.append(f"{where}: region must be one of {list(regions)} for {source}")
     if not isinstance(entry.enabled, bool):
         problems.append(f"{where}: enabled must be true or false")
     if entry.verification not in ("verified", "pending"):
@@ -142,18 +191,22 @@ def _board(raw: dict, index: int, problems: list[str]) -> BoardEntry | None:
     if entry.enabled is True and not entry.official_source.startswith("https://"):
         problems.append(f"{where}: enabled boards need an https official_source")
     unknown = set(entry.metros) - _METROS
-    if unknown or not entry.metros:
-        problems.append(f"{where}: metros must be a non-empty subset of {sorted(_METROS)}")
+    if unknown:
+        problems.append(f"{where}: metros must be a subset of {sorted(_METROS)}")
+    if entry.enabled is True and not entry.metros:
+        # A pending board may honestly have no local evidence yet; an enabled one may not.
+        problems.append(f"{where}: enabled boards need at least one metro")
     return entry
 
 
-def _lead(raw: dict, status: str) -> Lead:
+def _lead(raw: dict, status: str, source: str) -> Lead:
     return Lead(
         employer=str(raw.get("employer", "")),
         tokens=tuple(raw.get("tokens", [])),
         status=status,
         notes=str(raw.get("notes", "")),
-        region=str(raw.get("region", "us")),
+        region=str(raw.get("region", "us" if source == "greenhouse" else "global")),
+        source_system=source,
     )
 
 
@@ -168,8 +221,9 @@ class SyncResult:
 def sync_registry(conn: psycopg.Connection, registry: Registry, now: datetime) -> SyncResult:
     """Insert or update employers and boards to match the registry, in one transaction.
 
-    Boards that are in the database but no longer in the registry are disabled, never
-    deleted, so their history stays intact.
+    Boards of a loaded source system that are in the database but no longer in the
+    registry are disabled, never deleted, so their history stays intact. Boards of source
+    systems the registry does not cover are left alone.
     """
     with conn.transaction():
         employer_ids: dict[str, int] = {}
@@ -194,9 +248,10 @@ def sync_registry(conn: psycopg.Connection, registry: Registry, now: datetime) -
                 INSERT INTO source_boards (
                     employer_id, source_system, board_key, board_url, is_active,
                     hosting_region, verification_status, metros, local_evidence,
-                    official_source_url, evidence_notes, special_checks, registry_synced_at)
-                VALUES (%s, 'greenhouse', %s, %s, %s, %s, %s, %s, %s,
-                        NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s)
+                    official_source_url, evidence_notes, special_checks, hiring_brands,
+                    registry_synced_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s, %s)
                 ON CONFLICT (source_system, board_key) DO UPDATE SET
                     employer_id = EXCLUDED.employer_id,
                     board_url = EXCLUDED.board_url,
@@ -208,10 +263,12 @@ def sync_registry(conn: psycopg.Connection, registry: Registry, now: datetime) -
                     official_source_url = EXCLUDED.official_source_url,
                     evidence_notes = EXCLUDED.evidence_notes,
                     special_checks = EXCLUDED.special_checks,
+                    hiring_brands = EXCLUDED.hiring_brands,
                     registry_synced_at = EXCLUDED.registry_synced_at
                 """,
                 (
                     employer_ids[b.employer_slug],
+                    b.source_system,
                     b.token,
                     b.board_url,
                     b.enabled,
@@ -222,19 +279,22 @@ def sync_registry(conn: psycopg.Connection, registry: Registry, now: datetime) -
                     b.official_source,
                     b.evidence,
                     b.checks,
+                    list(b.brands),
                     now,
                 ),
             )
 
-        tokens = [b.token for b in registry.boards]
-        stale = conn.execute(
-            """
-            UPDATE source_boards SET is_active = false
-            WHERE source_system = 'greenhouse' AND NOT (board_key = ANY(%s)) AND is_active
-            RETURNING board_key
-            """,
-            (tokens,),
-        ).fetchall()
+        stale = []
+        for source in registry.source_systems:
+            tokens = [b.token for b in registry.boards if b.source_system == source]
+            stale += conn.execute(
+                """
+                UPDATE source_boards SET is_active = false
+                WHERE source_system = %s AND NOT (board_key = ANY(%s)) AND is_active
+                RETURNING board_key
+                """,
+                (source, tokens),
+            ).fetchall()
 
     return SyncResult(
         employers_upserted=len(employer_ids),
