@@ -33,7 +33,24 @@ DEFAULT_REQUEST_INTERVAL = 1.0  # seconds between boards, to stay polite
 
 
 class CollectionBusy(Exception):
-    """Another collection is already running."""
+    """Another collection or replay is already running."""
+
+
+@contextmanager
+def collection_lock(conn: psycopg.Connection) -> Iterator[None]:
+    """Hold the application-wide processing lock, or raise CollectionBusy at once.
+
+    Collections and replays both take it, so they never interleave. Correctness does not
+    depend on it (constraints and row locks keep concurrent writers consistent); it keeps
+    runs and their summaries from overlapping.
+    """
+    got = conn.execute("SELECT pg_try_advisory_lock(%s)", (COLLECTION_LOCK_KEY,)).fetchone()[0]
+    if not got:
+        raise CollectionBusy("another collection or replay is already running")
+    try:
+        yield
+    finally:
+        conn.execute("SELECT pg_advisory_unlock(%s)", (COLLECTION_LOCK_KEY,))
 
 
 def make_client() -> httpx.Client:
@@ -104,31 +121,19 @@ class Collector:
 
     def collect(self, trigger: str = "manual", tokens: list[str] | None = None) -> RunReport:
         """Scan every enabled board, or only the given enabled tokens."""
-        with self._lock():
+        with collection_lock(self.conn):
             events, abandoned = self._recover_abandoned()
             return self._run(trigger, self._targets(tokens), events, abandoned)
 
     def retry_due(self) -> RunReport:
         """Scan only boards whose next retry is due now."""
-        with self._lock():
+        with collection_lock(self.conn):
             events, abandoned = self._recover_abandoned()
             due = set(incidents.due_retry_board_ids(self.conn, self.clock()))
             targets = [t for t in self._targets(None) if t.board_id in due]
             return self._run("retry", targets, events, abandoned)
 
     # --- internals -------------------------------------------------------------------
-
-    @contextmanager
-    def _lock(self) -> Iterator[None]:
-        got = self.conn.execute(
-            "SELECT pg_try_advisory_lock(%s)", (COLLECTION_LOCK_KEY,)
-        ).fetchone()[0]
-        if not got:
-            raise CollectionBusy("another collection is already running")
-        try:
-            yield
-        finally:
-            self.conn.execute("SELECT pg_advisory_unlock(%s)", (COLLECTION_LOCK_KEY,))
 
     def _targets(self, tokens: list[str] | None) -> list[BoardTarget]:
         rows = self.conn.execute(
@@ -284,7 +289,13 @@ class Collector:
                 counts = StoreCounts()
                 if parsed.outcome != "failed":
                     counts = store_scan_results(
-                        self.conn, target.board_id, scan_id, raw_id, parsed, fetch.fetched_at
+                        self.conn,
+                        target.board_id,
+                        scan_id,
+                        raw_id,
+                        parsed,
+                        observed_at=fetch.fetched_at,
+                        processed_at=self.clock(),
                     )
                 self._finish_scan(scan_id, parsed, counts)
                 event = incidents.record_outcome(
@@ -323,7 +334,8 @@ class Collector:
             """
             UPDATE board_scans SET status = %s, finished_at = %s, error_message = %s,
                 postings_seen = %s, jobs_reported = %s, jobs_received = %s, jobs_invalid = %s,
-                jobs_retained = %s, jobs_excluded = %s, jobs_needing_review = %s
+                jobs_retained = %s, jobs_excluded = %s, jobs_needing_review = %s,
+                jobs_new = %s, jobs_changed = %s, jobs_unchanged = %s
             WHERE board_scan_id = %s
             """,
             (
@@ -337,6 +349,9 @@ class Collector:
                 counts.retained if usable else None,
                 counts.excluded if usable else None,
                 counts.needing_review if usable else None,
+                counts.new_postings if usable else None,
+                counts.changed if usable else None,
+                counts.unchanged if usable else None,
                 scan_id,
             ),
         )
@@ -355,7 +370,8 @@ def summarize(report: RunReport) -> list[str]:
         )
     header = (
         f"{'employer':32} {'token':26} {'status':8} {'attempt':7} {'reported':>8} "
-        f"{'received':>8} {'invalid':>7} {'retained':>8} {'excluded':>8} {'review':>6}"
+        f"{'received':>8} {'invalid':>7} {'retained':>8} {'excluded':>8} {'review':>6} "
+        f"{'new':>4} {'changed':>7} {'same':>5}"
     )
     if report.outcomes:
         lines.append(header)
@@ -370,7 +386,10 @@ def summarize(report: RunReport) -> list[str]:
             f"{n(o.reported):>8} {n(o.received):>8} {n(o.invalid):>7} "
             f"{n(o.counts.retained if usable else None):>8} "
             f"{n(o.counts.excluded if usable else None):>8} "
-            f"{n(o.counts.needing_review if usable else None):>6}"
+            f"{n(o.counts.needing_review if usable else None):>6} "
+            f"{n(o.counts.new_postings if usable else None):>4} "
+            f"{n(o.counts.changed if usable else None):>7} "
+            f"{n(o.counts.unchanged if usable else None):>5}"
         )
         if o.error:
             lines.append(f"    {o.status}: {o.error}")

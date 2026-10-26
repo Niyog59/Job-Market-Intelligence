@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from jobmarket.normalize import SourceContent
+
 API_BASE = "https://boards-api.greenhouse.io/v1/boards"
 USER_AGENT = "job-market-intelligence/0.1 (+https://github.com/Niyog59/Job-Market-Intelligence)"
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -143,9 +145,10 @@ class JobRecord:
     record_index: int
 
     def content_hash(self) -> str:
-        """Fingerprint of the job content. Source timestamps such as updated_at are left
-        out on purpose: they can change without the job changing, and such changes must
-        not be recorded as new versions."""
+        """Exact source fingerprint: every field as the source sent it, except source
+        timestamps such as updated_at, which change without the job changing. Equal
+        fingerprints mean the source content is identical. Whether a difference is
+        meaningful is decided separately by jobmarket.normalize."""
         canonical = {
             "title": self.title,
             "location": self.location_name,
@@ -160,6 +163,17 @@ class JobRecord:
         }
         encoded = json.dumps(canonical, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def source_content(self) -> SourceContent:
+        return SourceContent(
+            title=self.title,
+            location=self.location_name,
+            content_html=self.content_html,
+            offices=self.offices,
+            departments=self.departments,
+            metadata=self.metadata,
+            description_text=self.description_text,
+        )
 
 
 @dataclass(frozen=True)

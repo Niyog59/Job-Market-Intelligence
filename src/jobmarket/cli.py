@@ -16,7 +16,9 @@ from jobmarket.incidents import next_retry_time
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
 from jobmarket.raw_store import RAW_RETENTION, cleanup_raw, raw_dir
+from jobmarket.replay import UnknownScan, available_scan_ids, replay_scans
 from jobmarket.sources import RegistryError, load_registry, registry_path, sync_registry
+from jobmarket.store import refingerprint_versions
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -267,6 +269,148 @@ def _cleanup_raw(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _replay(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn:
+        scan_ids = available_scan_ids(conn) if args.available else args.scan
+        try:
+            results = replay_scans(conn, raw_dir(), scan_ids, system_clock)
+        except CollectionBusy as exc:
+            print(f"Not started: {exc}.", file=sys.stderr)
+            return EXIT_BUSY
+        except UnknownScan as exc:
+            print(f"Not started: {exc}.", file=sys.stderr)
+            return EXIT_FAILURE
+    if not results:
+        print("No saved raw responses are available to replay.")
+    for r in results:
+        print(f"Scan {r.board_scan_id} ({r.token}, collected {_when(r.collected_at)}): {r.outcome}")
+        if r.counts:
+            c = r.counts
+            print(
+                f"    validation {r.validation}; postings new {c.new_postings}, versions new "
+                f"{c.new_versions}, observations new {c.new_observations} "
+                f"(changed {c.changed}, unchanged {c.unchanged}, of which cosmetic only "
+                f"{c.cosmetic_only}; older than current {c.historical}); already recorded "
+                f"{c.already_recorded}"
+            )
+            if r.scan_status != "complete":
+                print(
+                    f"    The scan was recorded as {r.scan_status}; replay adds history but does "
+                    "not change the scan's status, retries, or absence evidence."
+                )
+        if r.detail:
+            print(f"    {r.detail}")
+    outcomes = [r.outcome for r in results]
+    if results:
+        tally = ", ".join(f"{outcomes.count(o)} {o}" for o in dict.fromkeys(outcomes))
+        print(f"Replayed {len(results)} scan(s): {tally}.")
+    bad = {"failed", "checksum_mismatch", "file_missing"}
+    return EXIT_FAILURE if bad & set(outcomes) else EXIT_OK
+
+
+def _history(settings: Settings, args) -> int:
+    with db.connect(settings) as conn:
+        if args.posting is not None:
+            where, params = "p.posting_id = %s", (args.posting,)
+        elif args.board and args.job:
+            where, params = "b.board_key = %s AND p.source_posting_id = %s", (args.board, args.job)
+        else:
+            print("Give a posting id, or --board TOKEN --job SOURCE_ID.", file=sys.stderr)
+            return EXIT_FAILURE
+        posting = conn.execute(
+            "SELECT p.posting_id, e.name, b.board_key, p.source_posting_id, "
+            "p.first_discovered_at, p.last_observed_at, cv.version_no, co.observed_at, cv.title "
+            "FROM source_postings p JOIN source_boards b ON b.board_id = p.board_id "
+            "JOIN employers e ON e.employer_id = b.employer_id "
+            "LEFT JOIN posting_versions cv ON cv.version_id = p.current_version_id "
+            "LEFT JOIN posting_observations co ON co.observation_id = p.current_observation_id "
+            f"WHERE {where}",
+            params,
+        ).fetchone()
+        if posting is None:
+            print("No such posting.", file=sys.stderr)
+            return EXIT_FAILURE
+        posting_id, employer, token, source_id, first, last, cur_no, cur_at, cur_title = posting
+        by_kind = dict(
+            conn.execute(
+                "SELECT recorded_by, count(*) FROM posting_observations WHERE posting_id = %s "
+                "GROUP BY recorded_by",
+                (posting_id,),
+            ).fetchall()
+        )
+        stages = conn.execute(
+            "SELECT stage_no, version_no, first_observed_at, last_observed_at, observations, "
+            "change_window_start, change_window_end, changed_fields "
+            "FROM posting_version_stages WHERE posting_id = %s ORDER BY stage_no",
+            (posting_id,),
+        ).fetchall()
+        versions = conn.execute(
+            "SELECT version_no, detection, normalization_version, first_seen_at, recorded_at, "
+            "title FROM posting_versions WHERE posting_id = %s ORDER BY version_no",
+            (posting_id,),
+        ).fetchall()
+
+    print(f"Posting {posting_id}: {employer}, board {token}, job {source_id}")
+    observations = ", ".join(f"{n} {kind}" for kind, n in sorted(by_kind.items())) or "none"
+    print(f"  first discovered {_when(first)}, last observed {_when(last)}")
+    print(f"  observations: {observations}")
+    if cur_no is None:
+        print("  No content history: this posting has never been retained.")
+        return EXIT_OK
+    print(f"  current: v{cur_no} {cur_title!r}, observed {_when(cur_at)}")
+    print("Stages, in collection order (a change happened inside its window):")
+    for no, v_no, s_first, s_last, n, w_start, w_end, fields in stages:
+        line = f"  {no:>3}  v{v_no:<3} {_when(s_first)} to {_when(s_last)}  ({n} obs)"
+        if w_start is not None:
+            changed = ", ".join(fields) if fields else "fields not compared yet"
+            line += f"  changed after {_when(w_start)}, by {_when(w_end)}: {changed}"
+        print(line)
+    print("Versions, in recording order:")
+    for v_no, detection, rules, seen, recorded, title in versions:
+        print(
+            f"  v{v_no:<3} {detection:15} rules {rules or 'none (exact content)':22} "
+            f"first seen {_when(seen)}, recorded {_when(recorded)}  {title!r}"
+        )
+    return EXIT_OK
+
+
+def _refingerprint(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn:
+        result = refingerprint_versions(conn, system_clock())
+    print(
+        f"Evaluated {result.versions} version(s) under normalization rules {result.rules} "
+        f"({result.computed} newly computed). No versions were created or changed."
+    )
+    if result.rule_effects:
+        print(
+            f"{len(result.rule_effects)} version(s) have a different comparison form under "
+            "these rules than under the rules they were recorded with. The stored content is "
+            "the same, so this is an effect of the rules, not an employer edit:"
+        )
+        for version_id, rules in result.rule_effects:
+            print(f"  version {version_id} (recorded under {rules})")
+    return EXIT_OK
+
+
+def _check_history(settings: Settings, args) -> int:
+    with db.connect(settings) as conn:
+        problems = conn.execute(
+            "SELECT posting_id, problem FROM posting_history_problems ORDER BY posting_id"
+        ).fetchall()
+        totals = conn.execute(
+            "SELECT (SELECT count(*) FROM source_postings), "
+            "(SELECT count(*) FROM posting_versions), "
+            "(SELECT count(*) FROM posting_observations)"
+        ).fetchone()
+    print(
+        f"Checked {totals[0]} postings, {totals[1]} versions, {totals[2]} observations: "
+        f"{len(problems)} problem(s)."
+    )
+    for posting_id, problem in problems:
+        print(f"  posting {posting_id}: {problem}")
+    return EXIT_FAILURE if problems else EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jobmarket", description="Job Market Intelligence")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -316,6 +460,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = commands.add_parser("cleanup-raw", help="delete raw responses older than 4 days")
     cleanup.add_argument("--dry-run", action="store_true")
+
+    replay = commands.add_parser(
+        "replay", help="reprocess saved raw responses under their original collection time"
+    )
+    which = replay.add_mutually_exclusive_group(required=True)
+    which.add_argument("--scan", type=int, action="append", metavar="ID", help="repeatable")
+    which.add_argument(
+        "--available", action="store_true", help="every scan whose raw response is still stored"
+    )
+
+    history = commands.add_parser("history", help="content history of one posting")
+    history.add_argument("posting", nargs="?", type=int, help="posting id")
+    history.add_argument("--board", metavar="TOKEN")
+    history.add_argument("--job", metavar="SOURCE_ID", help="the source's job id")
+
+    commands.add_parser(
+        "refingerprint",
+        help="evaluate stored versions under the current normalization rules",
+    )
+    commands.add_parser("check-history", help="verify history and current-state consistency")
     return parser
 
 
@@ -329,6 +493,10 @@ HANDLERS = {
     "jobs": _jobs,
     "notifications": _notifications,
     "cleanup-raw": _cleanup_raw,
+    "replay": _replay,
+    "history": _history,
+    "refingerprint": _refingerprint,
+    "check-history": _check_history,
 }
 
 

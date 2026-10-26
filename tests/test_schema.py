@@ -85,16 +85,18 @@ class Rows:
     def version(self, posting_id, version_no=1, content="A"):
         return self.one(
             "INSERT INTO posting_versions (posting_id, version_no, content_hash, title, "
-            "first_seen_at) VALUES (%s, %s, %s, 'Data Engineer', %s) RETURNING version_id",
-            (posting_id, version_no, sha(content), T0),
+            "first_seen_at, detection, recorded_at) "
+            "VALUES (%s, %s, %s, 'Data Engineer', %s, 'first_seen', %s) RETURNING version_id",
+            (posting_id, version_no, sha(content), T0, T0),
         )
 
     def observation(self, scan_id, posting_id, version_id, raw_id, published_at=None):
         return self.one(
             "INSERT INTO posting_observations (board_scan_id, posting_id, version_id, "
-            "raw_response_id, observed_at, source_published_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING observation_id",
-            (scan_id, posting_id, version_id, raw_id, T0, published_at),
+            "raw_response_id, observed_at, source_published_at, source_fingerprint, "
+            "processed_at, recorded_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'collection') RETURNING observation_id",
+            (scan_id, posting_id, version_id, raw_id, T0, published_at, sha("A"), T0),
         )
 
     def chain(self):

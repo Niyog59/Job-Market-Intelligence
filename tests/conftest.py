@@ -12,11 +12,16 @@ import os
 import uuid
 from collections.abc import Iterator
 
+import httpx
 import psycopg
 import pytest
+from gh_fakes import FakeClock, ScriptedTransport, board, registry
 
 from jobmarket import db
+from jobmarket.collector import Collector
 from jobmarket.config import ConfigError, Settings, load_settings
+from jobmarket.migrate import apply_migrations
+from jobmarket.sources import sync_registry
 
 
 def _database_unavailable(reason: str):
@@ -62,3 +67,37 @@ def schema_conn(db_settings: Settings, isolated_schema: str) -> Iterator[psycopg
         db_settings, autocommit=True, options=f"-c search_path={isolated_schema}"
     ) as conn:
         yield conn
+
+
+@pytest.fixture
+def env(schema_conn, tmp_path):
+    """A migrated schema with two enabled boards (acme, beta), a scripted HTTP transport,
+    and a controlled clock. Raw responses are written under tmp_path."""
+    apply_migrations(schema_conn)
+    sync_registry(
+        schema_conn, registry(board("acme"), board("beta", employer="Beta")), FakeClock()()
+    )
+    transport = ScriptedTransport()
+    clock = FakeClock()
+
+    class Env:
+        conn = schema_conn
+        raw_root = tmp_path / "raw"
+
+        def __init__(self):
+            self.transport, self.clock = transport, clock
+
+        def collector(self):
+            # A new Collector each time, as after a restart: all state is in the database.
+            client = httpx.Client(transport=self.transport)
+            return Collector(
+                self.conn, client, self.raw_root, clock=self.clock, sleep=lambda s: None, interval=0
+            )
+
+        def one(self, sql, params=()):
+            return self.conn.execute(sql, params).fetchone()
+
+        def scalar(self, sql, params=()):
+            return self.one(sql, params)[0]
+
+    return Env()
