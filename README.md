@@ -185,8 +185,9 @@ applications, which this project never does).
   after the first failure (later if the server sends a longer `Retry-After`). Retry state
   is stored in the database, so it survives restarts. `retry-due` scans only boards whose
   retry is due; successful boards are not rerun. A collection run while no retry is due
-  neither uses nor resets the retry budget. If retries run late (there is no scheduler
-  yet), each later retry still waits at least 15 minutes after the previous attempt.
+  neither uses nor resets the retry budget. Late retries never come in a burst: a retry
+  run more than 5 minutes after its slot (there is no scheduler yet) moves the next one to
+  a full hour after it, so the three retries always span about three hours of attempts.
 - Within one attempt, a `429` or `503` with a `Retry-After` of 30 seconds or less is
   waited out once per board scan, however many pages the scan has; there are no other
   hidden HTTP retries, so pagination cannot multiply the three-retry budget.

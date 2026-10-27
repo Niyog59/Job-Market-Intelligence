@@ -429,3 +429,23 @@ def test_disabled_board_cannot_be_collected(env):
             "UPDATE source_boards SET is_active = true, "
             "verification_status = 'pending' WHERE board_key = 'beta'"
         )
+
+
+def test_overdue_retries_are_spread_out_not_fired_in_a_burst(env):
+    env.transport.queue("acme", SERVER_ERROR)
+    env.collector().collect(tokens=["acme"])
+    # No retry command runs for five hours: every planned slot (+1, +2, +3 h) has passed.
+    env.clock.advance(5 * HOUR)
+    report = env.collector().retry_due()
+    assert [o.attempt_kind for o in report.outcomes] == ["retry"]
+    used, nxt = env.one("SELECT retries_used, next_retry_at FROM collection_incidents")
+    # One retry ran now; the next waits a full hour after it, not a few minutes.
+    assert used == 1 and nxt - env.clock.now >= HOUR - timedelta(seconds=1)
+    assert env.collector().retry_due().run_id is None  # nothing else fires right away
+
+    env.clock.advance(HOUR)
+    env.collector().retry_due()
+    env.clock.advance(HOUR)
+    env.collector().retry_due()
+    status, used = env.one("SELECT status, retries_used FROM collection_incidents")
+    assert (status, used) == ("exhausted", 3)

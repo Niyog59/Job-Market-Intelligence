@@ -5,6 +5,11 @@ three hours after the first failure. Retry state lives in the database, so resta
 not lose or reset it, and nothing waits in-process for hours: `jobmarket retry-due` (run
 manually now, by a scheduler later) performs whatever retries are due.
 
+Late retries never come in a burst. A retry that runs within LATE_TOLERANCE of its slot
+keeps the planned schedule; one that runs later (for example because no command was run
+for a few hours) moves the next retry to a full RETRY_SPACING after it. So the three
+retries always span at least about three hours of real attempts.
+
 Attempt kinds:
   initial  no open incident when the attempt started
   retry    the incident's next retry was due; this attempt uses one retry
@@ -23,8 +28,9 @@ import psycopg
 
 MAX_RETRIES = 3
 RETRY_SPACING = timedelta(hours=1)
-# If retries run late (no scheduler yet), keep at least this gap between attempts.
-MIN_RETRY_GAP = timedelta(minutes=15)
+# A retry this close to its slot counts as on time and keeps the planned schedule, so the
+# few seconds a retry takes do not push every later slot back.
+LATE_TOLERANCE = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -73,15 +79,16 @@ def record_outcome(
 ) -> IncidentEvent:
     """Update the board's incident after a scan. Runs inside the caller's transaction."""
     row = conn.execute(
-        "SELECT incident_id, status, retries_used, opened_at, alert_notification_id "
-        "FROM collection_incidents WHERE board_id = %s AND status <> 'resolved' FOR UPDATE",
+        "SELECT incident_id, status, retries_used, opened_at, alert_notification_id, "
+        "next_retry_at FROM collection_incidents WHERE board_id = %s AND status <> 'resolved' "
+        "FOR UPDATE",
         (board_id,),
     ).fetchone()
 
     if status == "complete":
         if row is None:
             return IncidentEvent("none", None)
-        incident_id, _, _, _, alert_id = row
+        incident_id, _, _, _, alert_id, _ = row
         conn.execute(
             "UPDATE collection_incidents SET status = 'resolved', next_retry_at = NULL, "
             "resolved_at = %s, resolved_by_scan_id = %s, last_scan_id = %s "
@@ -100,7 +107,7 @@ def record_outcome(
         ).fetchone()[0]
         return IncidentEvent("opened", incident_id)
 
-    incident_id, inc_status, retries_used, opened_at, _ = row
+    incident_id, inc_status, retries_used, opened_at, _, due_at = row
     conn.execute(
         "UPDATE collection_incidents SET kind = %s, last_scan_id = %s, last_error = %s "
         "WHERE incident_id = %s",
@@ -116,8 +123,9 @@ def record_outcome(
             )
             return IncidentEvent("exhausted", incident_id)
         planned = opened_at + RETRY_SPACING * (retries_used + 1)
+        late = due_at is not None and now - due_at > LATE_TOLERANCE
         next_retry = _respect_retry_after(
-            max(planned, now + MIN_RETRY_GAP), now, retry_after_seconds
+            max(planned, now + RETRY_SPACING) if late else planned, now, retry_after_seconds
         )
         conn.execute(
             "UPDATE collection_incidents SET retries_used = %s, next_retry_at = %s "
