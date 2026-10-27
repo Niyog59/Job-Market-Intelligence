@@ -179,3 +179,98 @@ def test_screen_retains_relevant_texas_jobs_only():
     assert not screen("Staff Accountant", DATA, "Dallas, TX", []).retained
     ambiguous = screen("Backend Engineer", SOFTWARE, "Remote (US)", [])
     assert ambiguous.retained and ambiguous.needs_review
+
+
+# --- Module 5 refinements -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Data Entry Clerk",
+        "Paid Survey Participant - Dallas",
+        "Online Survey Taker (Remote, Texas)",
+        "Focus Group Participant",
+        "Mystery Shopper",
+        "Data Annotator",
+        "Search Engine Evaluator",
+        "AI Trainer - Writing",
+        "CNC Programmer",
+        "PLC Programmer",
+    ],
+)
+def test_survey_data_entry_and_machining_roles_are_excluded(title):
+    relevant, _, _, reasons = classify_relevance(title, DATA + " " + SOFTWARE)
+    assert not relevant and "role outside target families" in reasons[0]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Building Commissioning Engineer",
+        "Lead Structural Engineer",
+        "Process Engineer",
+        "Senior Validation Engineer",
+        "Physical Infrastructure Engineer (On-premise)",
+        "Electrical Engineer, Test Equipment Design",
+        "Controls Engineer, HVAC Systems",
+    ],
+)
+def test_other_engineering_disciplines_are_not_target_roles(title):
+    relevant, _, _, _ = classify_relevance(title, SOFTWARE + " Python, Git, CI/CD, AWS.")
+    assert not relevant
+
+
+def test_clear_software_titles_still_win_over_discipline_words():
+    assert classify_relevance("Electrical Software Engineer", "")[0]
+    assert classify_relevance("Senior Software Engineer, Mechanical Systems Simulation", "")[0]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Engineer, Software- open level (R5285)",
+        "Engineer I, Software Test and Automation",
+        "Senior Engineer, Software Integration",
+        "Manager, Software - Perception",
+    ],
+)
+def test_inverted_software_titles(title):
+    relevant, families, _, _ = classify_relevance(title, "")
+    assert relevant and families == ["software_engineering"]
+
+
+def test_forth_worth_spelling_is_read_as_fort_worth():
+    eligibility, _, _, reasons = classify_location(
+        "Forth Worth, Texas", [{"location": "Forth Worth, Texas"}], "Data Analyst", ""
+    )
+    assert eligibility == "local_dfw"
+    assert "source spelling 'Forth Worth' read as Fort Worth" in reasons
+
+
+def test_every_location_is_read_on_its_own():
+    lever_style = [{"location": "Arlington, VA"}, {"location": "Houston, TX"}]
+    assert classify_location("Arlington, VA", lever_style, "Data Engineer", "")[0] == (
+        "local_houston"
+    )  # Arlington, Virginia never becomes DFW from Houston's "TX"
+    pasadena = [{"location": "Pasadena, CA"}, {"location": "Austin, TX"}]
+    assert classify_location("Pasadena, CA", pasadena, "Data Engineer", "")[0] == "not_texas"
+    assert classify_location("Pasadena, TX", [], "Data Engineer", "")[0] == "local_houston"
+    # A secondary location counts even when the primary one is elsewhere.
+    secondary = [{"location": "Alpharetta, GA"}, {"location": "Dallas, TX"}]
+    assert classify_location("Alpharetta, GA", secondary, "Data Engineer", "")[0] == "local_dfw"
+
+
+def test_boilerplate_office_list_does_not_move_a_job_with_a_concrete_location():
+    text = "We are based in Toronto with offices in Dallas, Pittsburgh, and San Francisco."
+    eligibility, _, review, _ = classify_location(
+        "Toronto, ON", [{"location": "Toronto, ON"}], "Research Scientist", text
+    )
+    assert (eligibility, review) == ("not_texas", False)
+
+
+def test_lever_workplace_type_is_a_remote_signal():
+    remote = [{"location": "Remote"}, {"name": "Workplace type: remote"}]
+    assert classify_location("Remote", remote, "Data Engineer", "")[0] == "remote_ambiguous"
+    hybrid = [{"location": "Plano, TX"}, {"name": "Workplace type: hybrid"}]
+    assert classify_location("Plano, TX", hybrid, "Data Engineer", "")[0] == "local_dfw"

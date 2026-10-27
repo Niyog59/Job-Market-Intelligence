@@ -10,14 +10,29 @@ import psycopg
 
 from jobmarket import db
 from jobmarket.clock import system_clock
-from jobmarket.collector import CollectionBusy, Collector, make_client, request_interval, summarize
+from jobmarket.collector import (
+    CollectionBusy,
+    Collector,
+    concurrency,
+    make_client,
+    request_interval,
+    summarize,
+)
 from jobmarket.config import ConfigError, Settings, load_settings
+from jobmarket.connectors import Pacer
+from jobmarket.evidence import (
+    check_mappings,
+    check_pages,
+    make_page_client,
+    mapping_targets,
+    page_targets,
+)
 from jobmarket.incidents import next_retry_time
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
 from jobmarket.raw_store import RAW_RETENTION, cleanup_raw, raw_dir
 from jobmarket.replay import UnknownScan, available_scan_ids, replay_scans
-from jobmarket.sources import RegistryError, load_registry, registry_path, sync_registry
+from jobmarket.sources import RegistryError, load_registry, registry_paths, sync_registry
 from jobmarket.store import refingerprint_versions
 
 EXIT_OK = 0
@@ -64,13 +79,60 @@ def _migrate(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _check_mapping(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn, make_page_client() as client:
+        targets = mapping_targets(conn, args.all, args.source, args.board)
+        results = check_mappings(conn, client, targets, system_clock, Pacer(request_interval()))
+    for r in results:
+        t = r.target
+        status = "-" if r.http_status is None else r.http_status
+        print(f"{t.source_system:10} {t.token:26} {r.outcome:12} {status!s:>4}  {t.url}")
+        if r.matched:
+            print(f"    matched: {r.matched}")
+        if r.detail:
+            print(f"    {r.detail}")
+    tally = {}
+    for r in results:
+        tally[r.outcome] = tally.get(r.outcome, 0) + 1
+    print(
+        f"Checked {len(results)} official page(s): "
+        + (", ".join(f"{n} {o}" for o, n in sorted(tally.items())) or "none")
+        + ". Results are stored in board_mapping_checks; verification status is unchanged."
+    )
+    return EXIT_OK
+
+
+def _check_pages(settings: Settings, args) -> int:
+    with db.connect(settings, autocommit=True) as conn, make_page_client() as client:
+        targets = page_targets(conn, args.per_board, args.source, args.board)
+        results = check_pages(conn, client, targets, system_clock, Pacer(request_interval()))
+    for r in results:
+        t = r.target
+        status = "-" if r.http_status is None else r.http_status
+        print(f"{t.employer[:28]:28} {t.url_kind:11} {r.outcome:12} {status!s:>4}  {t.title[:50]}")
+        if r.detail:
+            print(f"    {r.detail}")
+    tally = {}
+    for r in results:
+        tally[r.outcome] = tally.get(r.outcome, 0) + 1
+    print(
+        f"Checked {len(results)} sampled page(s) (GET only; nothing was submitted): "
+        + (", ".join(f"{n} {o}" for o, n in sorted(tally.items())) or "none")
+        + ". This is a sample, not a check of every posting. Stored in posting_page_checks."
+    )
+    return EXIT_OK
+
+
 def _sources(settings: Settings, args) -> int:
+    if args.sources_command == "check-mapping":
+        return _check_mapping(settings, args)
     registry = load_registry()
     if args.sources_command == "sync":
         with db.connect(settings, autocommit=True) as conn:
             result = sync_registry(conn, registry, system_clock())
+        files = ", ".join(str(p) for p in registry_paths())
         print(
-            f"Synced {registry_path()}: {result.boards_upserted} boards "
+            f"Synced {files}: {result.boards_upserted} boards "
             f"({result.boards_enabled} enabled) for {result.employers_upserted} employers."
         )
         if result.boards_not_in_registry:
@@ -81,20 +143,24 @@ def _sources(settings: Settings, args) -> int:
         return EXIT_OK
 
     boards = registry.boards if args.all else registry.enabled
-    print(f"{'token':30} {'employer':34} {'region':6} {'status':9} metros")
+    print(f"{'source':10} {'token':28} {'employer':34} {'region':6} {'status':9} metros")
     for b in boards:
         state = "enabled" if b.enabled else b.verification
-        print(f"{b.token:30} {b.employer[:34]:34} {b.region:6} {state:9} {','.join(b.metros)}")
-    if args.all:
         print(
-            f"\n{len(registry.boards)} boards: {len(registry.enabled)} enabled, "
-            f"{len(registry.boards) - len(registry.enabled)} disabled candidates."
+            f"{b.source_system:10} {b.token:28} {b.employer[:34]:34} {b.region:6} {state:9} "
+            f"{','.join(b.metros) or '-'}"
         )
+    if args.all:
+        for source in registry.source_systems:
+            mine = [b for b in registry.boards if b.source_system == source]
+            enabled = sum(b.enabled for b in mine)
+            disabled = len(mine) - enabled
+            print(f"\n{source}: {len(mine)} boards, {enabled} enabled, {disabled} disabled.")
         print("\nUnverified leads and holds (not collected):")
         for lead in registry.leads:
             tokens = ", ".join(lead.tokens) or "token not found yet"
             print(
-                f"  [{lead.status}] {lead.employer}: {tokens}"
+                f"  [{lead.status}] {lead.source_system} {lead.employer}: {tokens}"
                 + (f" ({lead.notes})" if lead.notes else "")
             )
     return EXIT_OK
@@ -102,7 +168,13 @@ def _sources(settings: Settings, args) -> int:
 
 def _collect(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn, make_client() as client:
-        collector = Collector(conn, client, raw_dir(), interval=request_interval())
+        collector = Collector(
+            conn,
+            client,
+            raw_dir(),
+            interval=request_interval(),
+            workers_per_source=concurrency(),
+        )
         try:
             if args.command == "retry-due":
                 report = collector.retry_due()
@@ -132,11 +204,12 @@ def _collect(settings: Settings, args) -> int:
 def _status(settings: Settings, args) -> int:
     with db.connect(settings) as conn:
         rows = conn.execute(
-            "SELECT employer, token, enabled, last_scan_status, last_scan_finished_at, "
-            "last_complete_at, last_usable_at, retained_postings, incident_status, "
-            "retries_used, next_retry_at, alerted, last_error FROM board_status "
+            "SELECT employer, source_system, token, enabled, last_scan_status, last_attempt_at, "
+            "last_attempt_kind, last_scan_pages, last_complete_at, retained_postings, "
+            "incident_status, incident_kind, retries_used, next_retry_at, retry_due, "
+            "incident_attempts, alerted, last_error FROM board_status "
             + ("" if args.all else "WHERE enabled ")
-            + "ORDER BY employer, token"
+            + "ORDER BY employer, source_system, token"
         ).fetchall()
         pending = conn.execute(
             "SELECT count(*) FROM notifications WHERE status = 'pending'"
@@ -150,34 +223,48 @@ def _status(settings: Settings, args) -> int:
     if runs:
         print(f"Latest run: {runs[0]} ({runs[1]}) {runs[2]}, started {_when(runs[3])}")
     print(
-        f"{'employer':32} {'token':26} {'last scan':9} {'finished':21} {'last complete':21} "
-        f"{'kept':>5}  incident"
+        f"{'employer':30} {'source':10} {'token':24} {'last':8} {'attempt':21} {'pages':>5} "
+        f"{'last complete':21} {'kept':>5}  incident"
     )
     for (
         employer,
+        source,
         token,
         enabled,
         last,
-        finished,
+        attempted,
+        kind,
+        pages,
         complete,
-        _usable,
         retained,
         inc_status,
+        inc_kind,
         retries,
         next_retry,
+        due,
+        attempts,
         alerted,
         error,
     ) in rows:
         incident = "-"
         if inc_status == "retrying":
-            incident = f"retrying ({retries}/3 used, next {_when(next_retry)})"
+            when = "due now" if due else f"next {_when(next_retry)}"
+            incident = (
+                f"{inc_kind}: retrying ({retries}/3 retries used, {attempts} attempt(s), {when})"
+            )
         elif inc_status == "exhausted":
-            incident = f"retries exhausted ({'alert queued' if alerted else 'no alert yet'})"
-        name = employer[:32] + ("" if enabled else " (disabled)")
+            incident = (
+                f"{inc_kind}: retries exhausted after {attempts} attempt(s) "
+                f"({'alert queued' if alerted else 'no alert yet'})"
+            )
+        name = employer[:30] + ("" if enabled else " (disabled)")
+        attempt = f"{_when(attempted)}" if attempted else "never"
         print(
-            f"{name[:32]:32} {token[:26]:26} {last or 'never':9} {_when(finished):21} "
-            f"{_when(complete):21} {retained:>5}  {incident}"
+            f"{name[:30]:30} {source:10} {token[:24]:24} {last or 'never':8} {attempt:21} "
+            f"{'-' if pages is None else pages:>5} {_when(complete):21} {retained:>5}  {incident}"
         )
+        if kind and kind != "initial" and last:
+            print(f"    last attempt was a {kind} attempt")
         if last in ("failed", "partial") and error:
             print(f"    {last}: {error[:150]}")
     print(f"Notifications waiting in the outbox: {pending}")
@@ -422,18 +509,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     sources = commands.add_parser("sources", help="board registry")
     sources_commands = sources.add_subparsers(dest="sources_command", required=True)
-    sources_commands.add_parser("sync", help="load config/greenhouse_boards.toml into the database")
+    sources_commands.add_parser(
+        "sync", help="load the board registries (config/*_boards.toml) into the database"
+    )
+    mapping = sources_commands.add_parser(
+        "check-mapping",
+        help="look for each board on its employer's official careers page (records evidence)",
+    )
+    mapping.add_argument("--all", action="store_true", help="include disabled boards")
+    mapping.add_argument("--source", choices=["greenhouse", "lever"])
+    mapping.add_argument("--board", action="append", metavar="TOKEN")
     listing = sources_commands.add_parser("list", help="show registry boards")
     listing.add_argument(
         "--all", action="store_true", help="include disabled candidates, leads, and holds"
     )
 
-    collect = commands.add_parser("collect", help="scan enabled Greenhouse boards now")
+    collect = commands.add_parser("collect", help="scan enabled Greenhouse and Lever boards now")
     collect.add_argument(
         "--board",
         action="append",
         metavar="TOKEN",
-        help="scan only this enabled board (repeatable)",
+        help="scan only this enabled board (repeatable; SOURCE:TOKEN picks one source)",
     )
     collect.add_argument(
         "--scheduled",
@@ -480,6 +576,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate stored versions under the current normalization rules",
     )
     commands.add_parser("check-history", help="verify history and current-state consistency")
+
+    pages = commands.add_parser(
+        "check-pages",
+        help="GET a sample of retained postings' job and application pages (never submits)",
+    )
+    pages.add_argument("--per-board", type=int, default=2, metavar="N")
+    pages.add_argument("--source", choices=["greenhouse", "lever"])
+    pages.add_argument("--board", action="append", metavar="TOKEN")
     return parser
 
 
@@ -497,6 +601,7 @@ HANDLERS = {
     "history": _history,
     "refingerprint": _refingerprint,
     "check-history": _check_history,
+    "check-pages": _check_pages,
 }
 
 

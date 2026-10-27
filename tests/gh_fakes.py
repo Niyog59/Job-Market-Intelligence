@@ -2,6 +2,7 @@
 
 import html
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -85,24 +86,30 @@ class ScriptedTransport(httpx.MockTransport):
 class FakeClock:
     def __init__(self, start: datetime = T0) -> None:
         self.now = start
+        self._lock = threading.Lock()  # fetch workers read the clock from several threads
 
     def __call__(self) -> datetime:
-        self.now += timedelta(milliseconds=1)  # strictly increasing, like a real clock
-        return self.now
+        with self._lock:
+            self.now += timedelta(milliseconds=1)  # strictly increasing, like a real clock
+            return self.now
 
     def advance(self, delta: timedelta) -> None:
         self.now += delta
 
 
 def board(
-    token: str, employer: str | None = None, slug: str | None = None, enabled: bool = True
+    token: str,
+    employer: str | None = None,
+    slug: str | None = None,
+    enabled: bool = True,
+    source: str = "greenhouse",
 ) -> BoardEntry:
     name = employer or token.title()
     return BoardEntry(
         employer=name,
         employer_slug=slug or token,
         token=token,
-        region="us",
+        region="us" if source == "greenhouse" else "global",
         enabled=enabled,
         verification="verified" if enabled else "pending",
         metros=("dfw",),
@@ -111,6 +118,7 @@ def board(
         evidence="test",
         checks="",
         group=None,
+        source_system=source,
     )
 
 

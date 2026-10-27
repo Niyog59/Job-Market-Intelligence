@@ -10,52 +10,53 @@ human-facing `absolute_url` uses job-boards.eu.greenhouse.io. `content` is HTML-
 import hashlib
 import html
 import json
-import re
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
-from html.parser import HTMLParser
 from typing import Any
 
 import httpx
 
+from jobmarket.connectors import (
+    USER_AGENT,
+    BoardFetch,
+    InlineRetryBudget,
+    Pacer,
+    Page,
+    ParsedResponse,
+    Rejection,
+    SavedPage,
+    get_page,
+    html_to_text,
+    parse_time,
+)
 from jobmarket.normalize import SourceContent
 
-API_BASE = "https://boards-api.greenhouse.io/v1/boards"
-USER_AGENT = "job-market-intelligence/0.1 (+https://github.com/Niyog59/Job-Market-Intelligence)"
-REQUEST_TIMEOUT_SECONDS = 30.0
-# A rate-limited (429) or unavailable (503) response is retried once inside the same
-# attempt only when the server asks for a short wait; longer waits become a failed scan
-# whose retry is scheduled instead of blocking the worker.
-MAX_INLINE_RETRY_AFTER_SECONDS = 30.0
+__all__ = [
+    "GREENHOUSE",
+    "USER_AGENT",
+    "JobRecord",
+    "ParsedResponse",
+    "Rejection",
+    "fetch_jobs",
+    "html_to_text",
+    "jobs_url",
+    "parse_jobs_response",
+]
 
-KEPT_HEADERS = ("content-type", "date", "x-request-id", "retry-after", "cache-control")
+API_BASE = "https://boards-api.greenhouse.io/v1/boards"
+BOARD_URL = {
+    "us": "https://job-boards.greenhouse.io/{token}",
+    "eu": "https://job-boards.eu.greenhouse.io/{token}",
+}
+
+# Kept for callers that think of one Greenhouse request as a fetch result.
+FetchResult = Page
 
 
 def jobs_url(token: str) -> str:
     return f"{API_BASE}/{token}/jobs?content=true"
-
-
-@dataclass(frozen=True)
-class FetchResult:
-    request_url: str
-    fetched_at: datetime
-    status_code: int | None
-    body: bytes | None
-    headers: dict[str, str]
-    error: str | None = None
-    retry_after_seconds: float | None = None
-
-
-def _retry_after(headers: httpx.Headers) -> float | None:
-    value = headers.get("retry-after")
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        return None
 
 
 def fetch_jobs(
@@ -63,65 +64,12 @@ def fetch_jobs(
     token: str,
     clock: Callable[[], datetime],
     sleep: Callable[[float], None] = time.sleep,
-) -> FetchResult:
-    """Fetch one board. Transport problems are returned as a result, never raised."""
-    url = jobs_url(token)
-    for attempt in (1, 2):
-        fetched_at = clock()
-        try:
-            response = client.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-        except httpx.TimeoutException:
-            return FetchResult(url, fetched_at, None, None, {}, "request timed out")
-        except httpx.HTTPError as exc:
-            return FetchResult(url, fetched_at, None, None, {}, f"request failed: {exc}")
-
-        retry_after = _retry_after(response.headers)
-        if (
-            response.status_code in (429, 503)
-            and attempt == 1
-            and retry_after is not None
-            and retry_after <= MAX_INLINE_RETRY_AFTER_SECONDS
-        ):
-            sleep(retry_after)
-            continue
-        headers = {k: response.headers[k] for k in KEPT_HEADERS if k in response.headers}
-        return FetchResult(
-            url,
-            fetched_at,
-            response.status_code,
-            response.content,
-            headers,
-            retry_after_seconds=retry_after,
-        )
-    raise AssertionError("unreachable")
-
-
-class _TextExtractor(HTMLParser):
-    BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr"}
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self.BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self.BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        self.parts.append(data)
-
-
-def html_to_text(markup: str) -> str:
-    parser = _TextExtractor()
-    parser.feed(markup)
-    parser.close()
-    text = "".join(parser.parts).replace("\xa0", " ")
-    lines = (re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines())
-    return "\n".join(line for line in lines if line)
+    pacer: Pacer | None = None,
+) -> Page:
+    """Fetch one board: a single request. Transport problems are returned, never raised."""
+    return get_page(
+        client, jobs_url(token), 1, clock, pacer or Pacer(0, sleep), InlineRetryBudget(), sleep
+    )
 
 
 @dataclass(frozen=True)
@@ -143,6 +91,11 @@ class JobRecord:
     metadata: Any
     company_name: str | None
     record_index: int
+    page_no: int = 1
+    # Greenhouse has no separate application URL, creation time, or extra structured fields.
+    apply_url: str | None = None
+    created_at: datetime | None = None
+    source_fields: dict[str, Any] | None = None
 
     def content_hash(self) -> str:
         """Exact source fingerprint: every field as the source sent it, except source
@@ -176,36 +129,6 @@ class JobRecord:
         )
 
 
-@dataclass(frozen=True)
-class Rejection:
-    record_index: int | None
-    source_id: str | None
-    reason: str
-    detail: dict[str, Any] | None = None
-
-
-@dataclass
-class ParsedResponse:
-    """Validation result. outcome is "complete", "partial", or "failed"."""
-
-    outcome: str
-    jobs: list[JobRecord] = field(default_factory=list)
-    rejected: list[Rejection] = field(default_factory=list)
-    reported_total: int | None = None
-    received: int | None = None
-    error: str | None = None
-
-
-def _parse_time(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else None
-
-
 def _validate_job(raw: Any, index: int) -> JobRecord | Rejection:
     if not isinstance(raw, dict):
         return Rejection(index, None, "record is not an object")
@@ -219,7 +142,7 @@ def _validate_job(raw: Any, index: int) -> JobRecord | Rejection:
     url = raw.get("absolute_url")
     if not isinstance(url, str) or not url.startswith("https://"):
         return Rejection(index, sid, "missing or non-https absolute_url", {"absolute_url": url})
-    updated_at = _parse_time(raw.get("updated_at"))
+    updated_at = parse_time(raw.get("updated_at"))
     if updated_at is None:
         return Rejection(
             index, sid, "missing or unparseable updated_at", {"updated_at": raw.get("updated_at")}
@@ -228,7 +151,7 @@ def _validate_job(raw: Any, index: int) -> JobRecord | Rejection:
     if not isinstance(content, str):
         return Rejection(index, sid, "missing content (requested with content=true)")
     first_published_raw = raw.get("first_published")
-    first_published = _parse_time(first_published_raw)
+    first_published = parse_time(first_published_raw)
     if first_published_raw not in (None, "") and first_published is None:
         return Rejection(
             index, sid, "unparseable first_published", {"first_published": first_published_raw}
@@ -316,3 +239,36 @@ def parse_jobs_response(
         parsed.outcome = "partial"
         parsed.error = "; ".join(problems)
     return parsed
+
+
+class GreenhouseConnector:
+    """One request per board; completeness is checked against the API's own meta.total."""
+
+    source_system = "greenhouse"
+    regions = ("us", "eu")
+
+    def board_url(self, token: str, region: str) -> str:
+        return BOARD_URL[region].format(token=token)
+
+    def fetch(
+        self,
+        client: httpx.Client,
+        token: str,
+        region: str,
+        clock: Callable[[], datetime],
+        pacer: Pacer,
+        sleep: Callable[[float], None],
+    ) -> BoardFetch:
+        # EU-hosted boards are served by the same API host (see the module docstring).
+        return BoardFetch((fetch_jobs(client, token, clock, sleep, pacer),))
+
+    def parse(self, pages: Sequence[SavedPage]) -> ParsedResponse:
+        page = pages[0]
+        if page.body is None:
+            return ParsedResponse("failed", error=page.error or "no response received", pages=1)
+        parsed = parse_jobs_response(page.status_code, page.headers, page.body)
+        parsed.pages = 1
+        return parsed
+
+
+GREENHOUSE = GreenhouseConnector()

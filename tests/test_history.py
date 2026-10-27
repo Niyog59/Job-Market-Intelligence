@@ -561,8 +561,14 @@ def test_observations_from_before_comparison_rules_are_compared_exactly(h):
 def test_migration_backfills_existing_history(schema_conn):
     migrations = discover()
     apply_migrations(schema_conn, [m for m in migrations if m.version <= 2])
-    sync_registry(schema_conn, registry(board("acme")), FakeClock()())
     c = schema_conn
+    # A board row as the Module 3 code wrote it (today's sync writes later columns).
+    c.execute("INSERT INTO employers (name, slug) VALUES ('Acme', 'acme')")
+    c.execute(
+        "INSERT INTO source_boards (employer_id, source_system, board_key, board_url, is_active,"
+        " verification_status, metros) SELECT employer_id, 'greenhouse', 'acme', "
+        "'https://job-boards.greenhouse.io/acme', true, 'verified', '{dfw}' FROM employers"
+    )
     board_id = c.execute("SELECT board_id FROM source_boards").fetchone()[0]
     one = lambda sql, p=(): c.execute(sql, p).fetchone()[0]  # noqa: E731
     observed = [T0, T0 + HOUR]

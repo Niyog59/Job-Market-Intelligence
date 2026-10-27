@@ -1,9 +1,13 @@
-"""Collection runs across Greenhouse boards.
+"""Collection runs across job boards of every supported source (Greenhouse, Lever).
 
-One run scans a set of boards in sequence. For each board: start a board_scans row,
-fetch, store the raw response, validate, store usable records, and update the board's
-retry incident. A problem with one board is recorded on that board and never stops the
-others. Failed and partial scans never mark anything closed or remove records.
+One run scans a set of boards. Fetching happens in worker threads, one lane per source
+system by default, so the two providers are read at the same time while requests to each
+provider stay paced (Pacer). Each fetched board is then processed in the main thread, in a
+fixed order: start a board_scans row, store every raw page, validate through the board's
+connector, store usable records in one transaction, and update the board's retry
+incident. All database work stays on one connection in one thread. A problem with one
+board is recorded on that board and never stops the others. Failed and partial scans
+never mark anything closed or remove records.
 
 Only one collection can run at a time (a PostgreSQL advisory lock). Because the lock
 guarantees no other collector is active, any run or scan still marked "running" at start
@@ -13,7 +17,8 @@ was abandoned by a stopped process; it is marked failed so its retry state conti
 import os
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,13 +28,29 @@ from psycopg.types.json import Jsonb
 
 from jobmarket import incidents
 from jobmarket.clock import Clock, system_clock
-from jobmarket.greenhouse import USER_AGENT, ParsedResponse, fetch_jobs, parse_jobs_response
+from jobmarket.connectors import (
+    USER_AGENT,
+    BoardFetch,
+    Pacer,
+    Page,
+    ParsedResponse,
+    get_connector,
+    saved_pages,
+)
 from jobmarket.raw_store import store_body
 from jobmarket.store import StoreCounts, flag_possible_duplicates, store_scan_results
 
 COLLECTION_LOCK_KEY = 4_815_162_343
 REQUEST_INTERVAL_ENV = "JOBMARKET_REQUEST_INTERVAL"
-DEFAULT_REQUEST_INTERVAL = 1.0  # seconds between boards, to stay polite
+# Minimum seconds between two requests to the same provider, across all its workers.
+DEFAULT_REQUEST_INTERVAL = 1.0
+CONCURRENCY_ENV = "JOBMARKET_CONCURRENCY"
+# Boards of one provider fetched at the same time. Pacing still spaces their requests.
+DEFAULT_CONCURRENCY = 1
+MAX_CONCURRENCY = 4
+
+
+SUPPORTED_SOURCES = ("greenhouse", "lever")
 
 
 class CollectionBusy(Exception):
@@ -64,11 +85,19 @@ def request_interval() -> float:
     return float(os.environ.get(REQUEST_INTERVAL_ENV, DEFAULT_REQUEST_INTERVAL))
 
 
+def concurrency() -> int:
+    """Workers per source system, from JOBMARKET_CONCURRENCY, kept between 1 and 4."""
+    value = int(os.environ.get(CONCURRENCY_ENV, DEFAULT_CONCURRENCY))
+    return max(1, min(MAX_CONCURRENCY, value))
+
+
 @dataclass(frozen=True)
 class BoardTarget:
     board_id: int
     token: str
     employer: str
+    source_system: str = "greenhouse"
+    region: str = "us"
 
 
 @dataclass
@@ -79,6 +108,8 @@ class BoardOutcome:
     status: str
     attempt_kind: str
     error: str | None
+    source_system: str = "greenhouse"
+    pages: int | None = None
     reported: int | None = None
     received: int | None = None
     invalid: int | None = None
@@ -107,6 +138,7 @@ class Collector:
         clock: Clock = system_clock,
         sleep: Callable[[float], None] = time.sleep,
         interval: float = DEFAULT_REQUEST_INTERVAL,
+        workers_per_source: int = DEFAULT_CONCURRENCY,
     ) -> None:
         if not conn.autocommit:
             raise ValueError("the collector needs an autocommit connection")
@@ -116,6 +148,7 @@ class Collector:
         self.clock = clock
         self.sleep = sleep
         self.interval = interval
+        self.workers_per_source = max(1, min(MAX_CONCURRENCY, workers_per_source))
 
     # --- public ----------------------------------------------------------------------
 
@@ -137,12 +170,17 @@ class Collector:
 
     def _targets(self, tokens: list[str] | None) -> list[BoardTarget]:
         rows = self.conn.execute(
-            "SELECT b.board_id, b.board_key, e.name, b.is_active FROM source_boards b "
-            "JOIN employers e USING (employer_id) WHERE b.source_system = 'greenhouse' "
-            "ORDER BY e.name, b.board_key"
+            "SELECT b.board_id, b.board_key, e.name, b.is_active, b.source_system, "
+            "b.hosting_region FROM source_boards b JOIN employers e USING (employer_id) "
+            "WHERE b.source_system = ANY(%s) ORDER BY e.name, b.source_system, b.board_key",
+            (list(SUPPORTED_SOURCES),),
         ).fetchall()
         if tokens:
-            by_token = {r[1]: r for r in rows}
+            # A token names a board of any source; "source:token" picks one source.
+            by_token: dict[str, tuple] = {}
+            for r in rows:
+                by_token.setdefault(r[1], r)
+                by_token[f"{r[4]}:{r[1]}"] = r
             unknown = [t for t in tokens if t not in by_token]
             inactive = [t for t in tokens if t in by_token and not by_token[t][3]]
             if unknown or inactive:
@@ -159,7 +197,7 @@ class Collector:
                     )
                 )
             rows = [by_token[t] for t in tokens]
-        return [BoardTarget(r[0], r[1], r[2]) for r in rows if r[3]]
+        return [BoardTarget(r[0], r[1], r[2], r[4], r[5]) for r in rows if r[3]]
 
     def _recover_abandoned(self) -> tuple[list[incidents.IncidentEvent], int]:
         now = self.clock()
@@ -218,10 +256,8 @@ class Collector:
         ).fetchone()[0]
         report.run_id = run_id
 
-        for index, target in enumerate(targets):
-            if index:
-                self.sleep(self.interval)
-            outcome = self._collect_board(run_id, target)
+        for target, fetch in self._fetch_all(targets):
+            outcome = self._collect_board(run_id, target, fetch)
             report.outcomes.append(outcome)
             events.append(incidents.IncidentEvent(outcome.incident_event, outcome.incident_id))
 
@@ -246,45 +282,75 @@ class Collector:
             )
         return report
 
-    def _collect_board(self, run_id: int, target: BoardTarget) -> BoardOutcome:
+    def _fetch_all(self, targets: list[BoardTarget]) -> Iterator[tuple[BoardTarget, BoardFetch]]:
+        """Fetch every target, in parallel lanes per source system, and yield the results in
+        target order. Nothing here touches the database."""
+        with ExitStack() as stack:
+            pools: dict[str, ThreadPoolExecutor] = {}
+            pacers: dict[str, Pacer] = {}
+            futures: list[Future] = []
+            for target in targets:
+                source = target.source_system
+                if source not in pools:
+                    pools[source] = stack.enter_context(
+                        ThreadPoolExecutor(self.workers_per_source, f"fetch-{source}")
+                    )
+                    pacers[source] = Pacer(self.interval, self.sleep)
+                futures.append(pools[source].submit(self._fetch, target, pacers[source]))
+            for target, future in zip(targets, futures, strict=True):
+                yield target, future.result()
+
+    def _fetch(self, target: BoardTarget, pacer: Pacer) -> BoardFetch:
+        connector = get_connector(target.source_system)
+        try:
+            return connector.fetch(
+                self.client, target.token, target.region, self.clock, pacer, self.sleep
+            )
+        except Exception as exc:  # noqa: BLE001 - a connector bug must not stop the run
+            error = f"internal error while fetching: {type(exc).__name__}: {exc}"[:1000]
+            url = connector.board_url(target.token, target.region)
+            return BoardFetch((Page(1, url, self.clock(), None, None, {}, error),))
+
+    def _collect_board(self, run_id: int, target: BoardTarget, fetch: BoardFetch) -> BoardOutcome:
         now = self.clock()
         kind = incidents.attempt_kind(incidents.open_incident(self.conn, target.board_id), now)
         scan_id = self.conn.execute(
-            "INSERT INTO board_scans (run_id, board_id, started_at, status, attempt_kind) "
-            "VALUES (%s, %s, %s, 'running', %s) RETURNING board_scan_id",
-            (run_id, target.board_id, now, kind),
+            "INSERT INTO board_scans (run_id, board_id, started_at, status, attempt_kind, "
+            "pages_fetched) VALUES (%s, %s, %s, 'running', %s, %s) RETURNING board_scan_id",
+            (run_id, target.board_id, fetch.collected_at, kind, len(fetch.pages)),
         ).fetchone()[0]
-        outcome = BoardOutcome(target.token, target.employer, scan_id, "failed", kind, None)
+        outcome = BoardOutcome(
+            target.token, target.employer, scan_id, "failed", kind, None, target.source_system,
+            len(fetch.pages),
+        )  # fmt: skip
+        connector = get_connector(target.source_system)
 
-        fetch = fetch_jobs(self.client, target.token, self.clock, self.sleep)
         try:
-            raw_id = None
-            if fetch.body is not None:
+            raw_ids: dict[int, int] = {}
+            for page in fetch.received_pages:
                 stored = store_body(
-                    self.raw_root, target.token, fetch.fetched_at, scan_id, fetch.body
-                )
-                raw_id = self.conn.execute(
+                    self.raw_root, target.token, page.fetched_at, scan_id, page.body,
+                    target.source_system, page.sequence_no,
+                )  # fmt: skip
+                raw_ids[page.sequence_no] = self.conn.execute(
                     "INSERT INTO raw_responses (board_scan_id, sequence_no, request_url, "
                     "http_status, fetched_at, storage_uri, content_sha256, byte_size, "
-                    "response_headers) VALUES (%s, 1, %s, %s, %s, %s, %s, %s, %s) "
+                    "response_headers) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING raw_response_id",
                     (
                         scan_id,
-                        fetch.request_url,
-                        fetch.status_code,
-                        fetch.fetched_at,
+                        page.sequence_no,
+                        page.request_url,
+                        page.status_code,
+                        page.fetched_at,
                         stored.storage_uri,
                         stored.sha256,
                         stored.byte_size,
-                        Jsonb(fetch.headers),
+                        Jsonb(page.headers),
                     ),
                 ).fetchone()[0]
 
-            parsed = (
-                ParsedResponse("failed", error=fetch.error)
-                if fetch.error
-                else parse_jobs_response(fetch.status_code, fetch.headers, fetch.body)
-            )
+            parsed = connector.parse(saved_pages(fetch))
             with self.conn.transaction():
                 counts = StoreCounts()
                 if parsed.outcome != "failed":
@@ -292,9 +358,9 @@ class Collector:
                         self.conn,
                         target.board_id,
                         scan_id,
-                        raw_id,
+                        raw_ids,
                         parsed,
-                        observed_at=fetch.fetched_at,
+                        observed_at=fetch.collected_at,
                         processed_at=self.clock(),
                     )
                 self._finish_scan(scan_id, parsed, counts)
@@ -369,7 +435,8 @@ def summarize(report: RunReport) -> list[str]:
             "from a stopped run (marked failed)."
         )
     header = (
-        f"{'employer':32} {'token':26} {'status':8} {'attempt':7} {'reported':>8} "
+        f"{'employer':32} {'source':10} {'token':26} {'status':8} {'attempt':7} "
+        f"{'pages':>5} {'reported':>8} "
         f"{'received':>8} {'invalid':>7} {'retained':>8} {'excluded':>8} {'review':>6} "
         f"{'new':>4} {'changed':>7} {'same':>5}"
     )
@@ -382,7 +449,8 @@ def summarize(report: RunReport) -> list[str]:
 
         usable = o.status != "failed"
         lines.append(
-            f"{o.employer[:32]:32} {o.token[:26]:26} {o.status:8} {o.attempt_kind:7} "
+            f"{o.employer[:32]:32} {o.source_system:10} {o.token[:26]:26} {o.status:8} "
+            f"{o.attempt_kind:7} {n(o.pages):>5} "
             f"{n(o.reported):>8} {n(o.received):>8} {n(o.invalid):>7} "
             f"{n(o.counts.retained if usable else None):>8} "
             f"{n(o.counts.excluded if usable else None):>8} "

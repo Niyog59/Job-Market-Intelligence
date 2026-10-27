@@ -7,11 +7,15 @@ public listings on official company career pages and applicant tracking systems.
 
 Early development, focused on Dallas-Fort Worth and Greater Houston. What exists today:
 
-- A registry of 57 researched Greenhouse job boards (`config/greenhouse_boards.toml`):
-  21 boards with a verified official employer connection are enabled; 36 candidates
-  stay disabled until their connection is verified.
-- A Greenhouse collector that validates every response, keeps complete, partial, and
-  failed results apart per employer, and stores usable records with full history.
+- Registries of researched job boards on two applicant tracking systems:
+  `config/greenhouse_boards.toml` (57 Greenhouse boards, 21 enabled) and
+  `config/lever_boards.toml` (43 Lever boards, 30 enabled, plus one held). Only boards with
+  a verified official employer connection and local hiring evidence are enabled; the rest
+  stay disabled with the reason recorded. The registries come from a discovery pass and
+  do not cover the whole market.
+- One collector for both sources: a small connector per provider (HTTP, pagination,
+  parsing) feeding shared validation, storage, history, retries, and status. It keeps
+  complete, partial, and failed results apart per employer.
 - Rule-based screening that keeps relevant data, analytics, BI, software, data science,
   and ML roles located in DFW/Houston or remote and open to Texas residents.
 - Retry incidents (three retries over about three hours), an alert/recovery outbox, and
@@ -84,9 +88,10 @@ Optional settings:
 
 | Variable                     | Default                         | Notes |
 |------------------------------|---------------------------------|-------|
-| `JOBMARKET_REGISTRY`         | `config/greenhouse_boards.toml` | board registry file |
+| `JOBMARKET_REGISTRY`         | `config/greenhouse_boards.toml,config/lever_boards.toml` | comma-separated board registry files |
 | `JOBMARKET_RAW_DIR`          | `data/raw`                      | where raw responses are stored (ignored by Git) |
-| `JOBMARKET_REQUEST_INTERVAL` | `1.0`                           | seconds between board requests |
+| `JOBMARKET_REQUEST_INTERVAL` | `1.0`                           | minimum seconds between two requests to the same provider |
+| `JOBMARKET_CONCURRENCY`      | `1`                             | boards of one provider fetched at the same time (1 to 4) |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -97,9 +102,9 @@ Optional settings:
 |---------|--------------|
 | `jobmarket check-db` | Connect and run `SELECT 1`; print database, user, version |
 | `jobmarket migrate [--status]` | Apply pending migrations, or list them |
-| `jobmarket sources sync` | Load the board registry into the database (boards are never deleted) |
+| `jobmarket sources sync` | Load the board registries into the database (boards are never deleted) |
 | `jobmarket sources list [--all]` | Show enabled boards, or all boards, leads, and holds |
-| `jobmarket collect [--board TOKEN ...] [--scheduled]` | Scan enabled boards now |
+| `jobmarket collect [--board [SOURCE:]TOKEN ...] [--scheduled]` | Scan enabled Greenhouse and Lever boards now |
 | `jobmarket retry-due` | Run only the retries that are due now |
 | `jobmarket status [--all]` | Per-board last result, last complete scan, retained jobs, incidents |
 | `jobmarket jobs [--board TOKEN] [--early-career] [--review] [--limit N]` | Retained jobs, newest discoveries first |
@@ -109,6 +114,8 @@ Optional settings:
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
+| `jobmarket sources check-mapping [--all] [--source S] [--board TOKEN]` | Look for each board on its employer's official careers page; store the evidence |
+| `jobmarket check-pages [--per-board N] [--source S] [--board TOKEN]` | GET a sample of retained postings' job and application pages; store the results |
 
 Exit codes: `0` success, `1` failure (database, migration, a collection where every
 board failed, or a replay that failed or found a missing or altered file), `2`
@@ -117,30 +124,77 @@ configuration or registry error, `3` another collection or replay is running.
 ## How collection works
 
 ```
-config/greenhouse_boards.toml --sources sync--> employers, source_boards
-                                                      |
-jobmarket collect / retry-due                         v
-  GET https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true
-    -> raw response saved to data/raw/... (raw_responses row: URL, status, sha256, size)
-    -> validate: HTTP 200, JSON content type, jobs list, required fields per record,
-       record count equals meta.total
-         complete | partial (usable, with rejected records) | failed (nothing usable)
+config/greenhouse_boards.toml  \
+config/lever_boards.toml        --sources sync--> employers, source_boards
+                                                        |
+jobmarket collect / retry-due                           v
+  fetch (worker threads, one lane per provider, requests paced per provider)
+    Greenhouse  GET https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true
+    Lever       GET https://api.lever.co/v0/postings/{token}?mode=json&skip=N&limit=100
+                (repeated until a short page; api.eu.lever.co for EU-instance boards)
+  then, per board in a fixed order, in the main thread:
+    -> every page saved to data/raw/<source>/<token>/... (one raw_responses row per page:
+       URL, status, sha256, size)
+    -> the board's connector validates the pages:
+         complete | partial (usable, but something is missing or wrong) | failed
     -> for each valid job: source_postings (identity, first discovered, last observed)
        and posting_screenings (relevance, Texas eligibility, seniority, sponsorship)
-    -> retained jobs: posting_observations (one per scan) and posting_versions (a new
-       row only for a meaningful change; see "Posting history")
+    -> retained jobs: posting_observations (one per scan, pointing at its page) and
+       posting_versions (a new row only for a meaningful change; see "Posting history")
     -> collection_incidents: retry state; notifications: alert/recovery outbox
 ```
 
-- The single documented API host serves EU-hosted boards too; the region only changes
-  human-facing board links (`job-boards.eu.greenhouse.io`). No pagination is assumed.
-- Application URLs (`absolute_url`) are stored exactly as returned.
+### Sources
+
+A connector (`jobmarket.connectors`) knows one provider: how to request a board and how to
+turn the saved pages into validated records. Everything after that is shared, so both
+sources get the same history, completeness, retry, and status guarantees.
+
+- **Greenhouse** (`jobmarket.greenhouse`): one request per board. Complete means every
+  record is valid and the count equals the API's `meta.total`. The single documented API
+  host serves EU-hosted boards too; the region only changes human-facing links.
+- **Lever** (`jobmarket.lever`): the API pages with `skip` and `limit` and reports no
+  total. A scan is complete only when it reaches a page shorter than the limit (an empty
+  page after an exactly full one counts). A failed or missing later page, a page that
+  repeats earlier postings, a page larger than requested, or the 50-page cap make the scan
+  partial: what arrived is kept, and nothing unseen is treated as gone. Each board's
+  instance (`global` or `eu`) comes from the employer's official job link. `hostedUrl`,
+  `applyUrl`, `allLocations`, `workplaceType`, `salaryRange`, and the other structured
+  fields are stored. `createdAt` (not in Lever's documentation) is stored as the posting's
+  creation time and never used as a publication date; Lever gives no update time.
+
+Identity is source system + board + the source's job id, so the same title at two
+employers or on two sources is never merged. Possible duplicates (same employer, title,
+and description) are flagged in `posting_duplicate_flags`, never merged.
+
+Requests use a descriptive User-Agent, a 30-second timeout, at most
+`JOBMARKET_CONCURRENCY` boards per provider at a time, and at least
+`JOBMARKET_REQUEST_INTERVAL` seconds between requests to the same provider. No numeric
+request quota is assumed for either API (Lever's documented limit applies to submitting
+applications, which this project never does).
+
 - Only complete scans count a job as missing (`complete_scan_absences`). Failed and
   partial scans never change existing records. Nothing is closed yet.
-- Possible duplicates (same employer, title, and description across boards or
-  city-targeted postings) are recorded in `posting_duplicate_flags`, never merged.
 - Sponsorship is `not_stated` unless the posting says whether it is available; a
   question asking applicants about sponsorship is recorded as `asked_only`.
+
+### Evidence
+
+Three kinds of evidence are kept apart, because none of them proves the others:
+
+- **Official mapping** (`board_mapping_checks`, `jobmarket sources check-mapping`): whether
+  the employer's own careers page references the exact board (a job-board link, a postings
+  API call, or an embed naming it). `refused` means the site declined automated requests;
+  this is recorded and not worked around. `not_found` can mean the page loads jobs with
+  scripts. Checks never change a board's verification status; the registry records that
+  decision and its evidence.
+- **Published listing** (`posting_observations`, `last_observed_at`): the job was in the
+  source's listing at that collection time.
+- **Page availability** (`posting_page_checks`, `jobmarket check-pages`): a sampled GET of
+  the posting page and, for Lever, the application page. Nothing is ever submitted. A page
+  that loads shows only that it was published then; it does not prove funded headcount or
+  active interviewing. `refused`, `rate_limited`, `server_error`, and `unreachable` are
+  access or collection problems and never mean a job closed.
 
 ### Failures, retries, and alerts
 
@@ -149,11 +203,21 @@ jobmarket collect / retry-due                         v
   that board's scan.
 - A failed or partial scan opens an incident with retries due about 1, 2, and 3 hours
   after the first failure (later if the server sends a longer `Retry-After`). Retry state
-  is stored in the database, so it survives restarts. A collection run while no retry is
-  due neither uses nor resets the retry budget. A PostgreSQL advisory lock prevents
-  overlapping collections; scans left `running` by a stopped process are marked failed
-  on the next run.
-- `jobmarket status` reflects a failure as soon as the scan finishes. When the retries
+  is stored in the database, so it survives restarts. `retry-due` scans only boards whose
+  retry is due; successful boards are not rerun. A collection run while no retry is due
+  neither uses nor resets the retry budget. Late retries never come in a burst: a retry
+  run more than 5 minutes after its slot (there is no scheduler yet) moves the next one to
+  a full hour after it, so the three retries always span about three hours of attempts.
+- Within one attempt, a `429` or `503` with a `Retry-After` of 30 seconds or less is
+  waited out once per board scan, however many pages the scan has; there are no other
+  hidden HTTP retries, so pagination cannot multiply the three-retry budget.
+- A PostgreSQL advisory lock lets only one collection, retry run, or replay work at a time,
+  so two commands can never claim the same retries; scans left `running` by a stopped
+  process are marked failed on the next run.
+- `jobmarket status` (and the `board_status` view) shows, per board, the source, the last
+  attempt and its kind, pages fetched, the last complete scan, and any open incident with
+  retries used, attempts, and whether a retry is due. It reflects a failure as soon as the
+  scan finishes. When the retries
   are exhausted, one alert is queued per incident (including whole-run failures); when an
   alerted incident is resolved, one recovery notice is queued. Messages list the affected
   employers, errors, retries used, last successful collection, and what remains usable.
@@ -258,7 +322,7 @@ raw_responses    ─< posting_observations
 | `source_boards`        | public job board of an employer in one source system              |
 | `collection_runs`      | scheduled or manual scan                                          |
 | `board_scans`          | board scanned during a run (`running`, `complete`, `partial`, `failed`) |
-| `raw_responses`        | preserved response received during a board scan (bytes stored outside the database) |
+| `raw_responses`        | preserved response page received during a board scan (bytes stored outside the database) |
 | `source_postings`      | job as one board identifies it, with first discovery and last observation times |
 | `posting_versions`     | meaningfully distinct content stage of a posting, with its original content |
 | `posting_version_comparisons` | comparison form and fingerprint of a version under one rules version |
@@ -269,6 +333,8 @@ raw_responses    ─< posting_observations
 | `notifications`        | queued alert or recovery message (the outbox) |
 | `posting_duplicate_flags` | possible duplicate postings, for review |
 | `replay_runs`          | attempt to reprocess a saved raw response |
+| `board_mapping_checks` | check of a board's official careers page for a reference to that board |
+| `posting_page_checks`  | sampled check of a posting's job or application page |
 
 Views: `board_status` (one row per board for status displays), `retained_jobs`
 (retained postings with their current content), `posting_version_stages` (content stages
@@ -277,9 +343,9 @@ checks; expected empty).
 
 Design rules enforced by the schema:
 
-- The source's publication time, our first discovery time, our last observation time,
-  and content change times are separate columns. A missing source date is stored as
-  `NULL`, never guessed.
+- The source's publication time, its creation time (Lever), our first discovery time, our
+  last observation time, and content change times are separate columns. A missing source
+  date is stored as `NULL`, never guessed.
 - Only a `complete` board scan records a definite posting count; `partial` and `failed`
   scans are stored explicitly and never imply a job closed.
 - Natural identities are unique (one posting per board and source ID, one observation per
@@ -331,4 +397,4 @@ PostgreSQL 17 service container, installs the package, runs `ruff` and `pytest` 
 `JOBMARKET_REQUIRE_DB=1`, runs `jobmarket check-db`, applies the migrations twice to
 confirm the second run changes nothing, loads the board registry, runs the history
 scenarios, and runs the history integrity checks. Collection tests use a scripted HTTP
-transport; CI never contacts Greenhouse.
+transport; CI never contacts Greenhouse or Lever.

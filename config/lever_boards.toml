@@ -1,0 +1,526 @@
+# Lever job boards for Dallas-Fort Worth and Greater Houston coverage.
+#
+# "verified" means three things were established: an official employer-to-board connection
+# from the employer's own careers source, local hiring evidence (a DFW or Houston location on
+# the board), and an answering postings API. It is not a certification by Lever and does not
+# mean every posting was checked. Only verified boards are enabled. "pending" boards stay
+# disabled until the missing evidence is found; a readable board or a matching name is not
+# enough. "holds" are boards whose identity or scope is in doubt.
+#
+# Research snapshot 2026-10-26 (44 candidates: 25 verified, 18 pending, 1 held), rechecked on
+# 2026-10-26 with full pagination and official careers pages. This is a discovery pass, not a census
+# of the market.
+#
+# Fields as in greenhouse_boards.toml, plus
+#   region   "global" (jobs.lever.co) or "eu" (jobs.eu.lever.co), from the official link
+#   brands   hiring brands served by one shared board
+
+source = "lever"
+schema_version = 1
+researched_on = "2026-10-26"
+
+# --- Verified boards (enabled) -------------------------------------------------------
+
+[[boards]]
+employer = "Topaz Labs"
+employer_slug = "topaz-labs"
+token = "topazlabs"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.topazlabs.com/careers"
+evidence = "Official careers page links to jobs.lever.co/topazlabs (rechecked 2026-10-26)."
+[[boards]]
+employer = "Venus Aerospace"
+employer_slug = "venus-aerospace"
+token = "venusaero"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston, TX"
+official_source = "https://www.venusaero.com/careers"
+evidence = "Official careers page links to jobs.lever.co/venusaero (rechecked 2026-10-26)."
+[[boards]]
+employer = "PDI Technologies"
+employer_slug = "pdi-technologies"
+token = "pditechnologies"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, TX; Houston, TX"
+official_source = "https://pditechnologies.com/careers/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+checks = "Temple, TX roles are outside DFW/Houston."
+[[boards]]
+employer = "Match Group"
+employer_slug = "match-group"
+token = "matchgroup"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, Texas"
+official_source = "https://mtch.com/careers/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+[[boards]]
+employer = "Total Expert"
+employer_slug = "total-expert"
+token = "totalexpert"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.totalexpert.com/company/careers"
+evidence = "Official careers page embeds the Lever jobs widget with accountName 'totalexpert' (rechecked 2026-10-26)."
+[[boards]]
+employer = "Octopus Energy"
+employer_slug = "octopus-energy"
+token = "octoenergy"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston (US)"
+official_source = "https://octopus.energy/careers/"
+evidence = "Official careers page links to jobs.lever.co/octoenergy (rechecked 2026-10-26)."
+checks = "Global board; most roles are outside the US."
+[[boards]]
+employer = "Shield AI"
+employer_slug = "shield-ai"
+token = "shieldai"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, Texas"
+official_source = "https://shield.ai/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+checks = "Large board (660+ postings, several pages); many roles require clearance."
+[[boards]]
+employer = "Braviant Holdings"
+employer_slug = "braviant-holdings"
+token = "braviantholdings"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.braviantholdings.com/careers"
+evidence = "Official careers page embeds the Lever jobs widget with accountName 'braviantholdings' (rechecked 2026-10-26)."
+[[boards]]
+employer = "Waabi"
+employer_slug = "waabi"
+token = "waabi"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.waabi.ai/careers"
+evidence = "Official careers page links to jobs.lever.co/waabi (rechecked 2026-10-26)."
+[[boards]]
+employer = "Bellwether"
+employer_slug = "bellwether"
+token = "bellwetheram-2"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.bellwetherco.com/careers"
+evidence = "Official careers page links to jobs.lever.co/bellwetheram-2 (rechecked 2026-10-26)."
+[[boards]]
+employer = "Purple Land Management"
+employer_slug = "purple-land-management"
+token = "purplelandmgmt"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Fort Worth, TX; Houston, TX; The Woodlands, TX"
+official_source = "https://www.purplelandmgmt.com/join-us"
+evidence = "Official careers page links to jobs.lever.co/purplelandmgmt (rechecked 2026-10-26)."
+checks = "Mostly land and title roles; regional labels such as 'South Texas' are not DFW/Houston."
+[[boards]]
+employer = "Service Wire"
+employer_slug = "service-wire"
+token = "servicewire"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston, TX 77044"
+official_source = "https://www.servicewire.com/Careers.htm"
+evidence = "Official careers page links to jobs.lever.co/servicewire (rechecked 2026-10-26)."
+[[boards]]
+employer = "Contact Government Services"
+employer_slug = "contact-government-services"
+token = "cgsfederal"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, TX; Houston, TX"
+official_source = "https://cgsfederal.com/join-our-team/"
+evidence = "Official careers page links to jobs.lever.co/cgsfederal (rechecked 2026-10-26)."
+checks = "Federal contractor (1,400+ postings). Arlington, VA is not Arlington, TX. Screen duties: 'data' in a title is not enough."
+[[boards]]
+employer = "Kpler"
+employer_slug = "kpler"
+token = "kpler"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.kpler.com/company/careers"
+evidence = "Official careers page links to jobs.lever.co/kpler (rechecked 2026-10-26)."
+checks = "Resolved in the 2026-10-26 recheck: the full API now answers and lists Houston roles."
+[[boards]]
+employer = "Brighton Jones"
+employer_slug = "brighton-jones"
+token = "brightonjones"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, TX; Houston, TX"
+official_source = "https://www.brightonjones.com/careers/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+[[boards]]
+employer = "solidcore"
+employer_slug = "solidcore"
+token = "solidcore"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Addison, Dallas, Plano, Southlake, Houston, and Katy, Texas"
+official_source = "https://solidcore.co/job-openings"
+evidence = "Official careers page links to jobs.lever.co/solidcore (rechecked 2026-10-26)."
+checks = "Resolved in the 2026-10-26 recheck: the full board (not only its first page) lists DFW and Houston studios. Mostly studio roles; Arlington, Virginia is not Texas."
+[[boards]]
+employer = "Daniels Health"
+employer_slug = "daniels-health"
+token = "daniels-sharpsmart"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, TX; Houston, TX; Arlington, TX"
+official_source = "https://www.danielshealth.com/careers"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+[[boards]]
+employer = "Fleetzero"
+employer_slug = "fleetzero"
+token = "fleetzero"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston, TX"
+official_source = "https://www.fleetzero.com/"
+evidence = "Official careers page links to jobs.lever.co/fleetzero (rechecked 2026-10-26)."
+[[boards]]
+employer = "Contentsquare"
+employer_slug = "contentsquare"
+token = "contentsquare"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, Houston, and Plano, Texas"
+official_source = "https://contentsquare.com/careers/"
+evidence = "Official careers page links to jobs.lever.co/contentsquare (rechecked 2026-10-26)."
+[[boards]]
+employer = "Brindley Engineering"
+employer_slug = "brindley-engineering"
+token = "brindleyengineering"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston, TX"
+official_source = "https://www.brindleyengineering.com/join-our-team/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+checks = "Engineering firm: civil, process, and project engineering roles are not target families."
+[[boards]]
+employer = "Wade Trim"
+employer_slug = "wade-trim"
+token = "wadetrim"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, TX; Fort Worth, TX; Houston, TX"
+official_source = "https://www.wadetrim.com/"
+evidence = "Official careers page links to jobs.lever.co/wadetrim (rechecked 2026-10-26)."
+checks = "Civil engineering firm: most engineering roles are not target families."
+[[boards]]
+employer = "CAI"
+employer_slug = "cai"
+token = "cagents"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Houston, Dallas, Coppell, and Conroe, Texas"
+official_source = "https://caiready.com/jobs/data-center-services-commissioning-project-manager/"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+checks = "Commissioning and data-center facilities roles are not target families."
+[[boards]]
+employer = "Wellfit Technologies"
+employer_slug = "wellfit-technologies"
+token = "wellfit"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Irving, TX"
+official_source = "https://wellfit.com/about-us/"
+evidence = "Official About Us page links to jobs.lever.co/wellfit (resolved in the 2026-10-26 recheck)."
+[[boards]]
+employer = "United Flow Technologies"
+employer_slug = "united-flow-technologies"
+token = "uft"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Irving, TX; Spring, TX"
+official_source = "https://www.uft.com/"
+evidence = "Official careers page links to jobs.lever.co/uft (rechecked 2026-10-26)."
+[[boards]]
+employer = "Berkshire Hathaway Homestate Companies"
+employer_slug = "bhhc"
+token = "bhhc"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano, Texas"
+official_source = "https://bhhc.com/careers-at-bhhc/wc-careers/career-in-claims/"
+evidence = "Official careers page links to jobs.lever.co/bhhc (rechecked 2026-10-26)."
+checks = "Mostly claims and insurance roles."
+[[boards]]
+employer = "DN LLC"
+employer_slug = "dn-llc"
+token = "dnllc"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Irving, TX; Frisco, TX"
+official_source = "https://www.dnllc.com/careers/life-at-dn/"
+evidence = "Official careers page links to jobs.lever.co/dnllc (rechecked 2026-10-26)."
+[[boards]]
+employer = "GoodLeap"
+employer_slug = "goodleap"
+token = "goodleap"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano, TX"
+official_source = "https://www.goodleap.com/careers"
+evidence = "Official careers page links to jobs.lever.co/goodleap (rechecked 2026-10-26)."
+[[boards]]
+employer = "CyberOne Security"
+employer_slug = "cyberone-security"
+token = "cyberonesecurity"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Plano, TX; Houston, TX"
+official_source = "https://cyberonesecurity.com/about/careers/"
+evidence = "Official careers page links to jobs.lever.co/cyberonesecurity (rechecked 2026-10-26)."
+[[boards]]
+employer = "Texas Original"
+employer_slug = "texas-original"
+token = "texas-original"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano, Hurst, and 'Forth Worth' (source spelling), Texas"
+official_source = "https://texasoriginal.com/careers/"
+evidence = "Official careers page links to jobs.lever.co/texas-original (resolved in the 2026-10-26 recheck)."
+checks = "The source spells Fort Worth as 'Forth Worth'; the text is kept as published. Mostly dispensary and cultivation roles."
+[[boards]]
+employer = "D.A. Davidson"
+employer_slug = "da-davidson"
+token = "dadavidson"
+region = "global"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano, TX"
+official_source = "https://www.dadavidson.com/Careers"
+evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
+
+# --- Pending boards (disabled until the missing evidence is found) -------------------
+
+[[boards]]
+employer = "Zimperium"
+employer_slug = "zimperium"
+token = "zimperium"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, Texas"
+official_source = "https://zimperium.com/company/careers"
+evidence = "Official careers page embeds the Lever jobs widget with accountName 'Zimperium'. The API answers 'Document not found' for that exact spelling and serves postings only at 'zimperium', so the exact token is not confirmed."
+[[boards]]
+employer = "Texas Stock Exchange"
+employer_slug = "texas-stock-exchange"
+token = "txse"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.txse.com/careers"
+evidence = "Official careers page loads its jobs with scripts; no Lever reference was found in it on 2026-10-26."
+[[boards]]
+employer = "Zoox"
+employer_slug = "zoox"
+token = "zoox"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Houston, TX; Dallas, TX"
+official_source = "https://zoox.com/careers"
+evidence = "Official careers page and its scripts showed no Lever reference on 2026-10-26."
+checks = "Few Texas roles among 230+ postings."
+[[boards]]
+employer = "Field AI"
+employer_slug = "field-ai"
+token = "field-ai"
+region = "global"
+enabled = false
+verification = "pending"
+metros = []
+local_evidence = "None found: no DFW or Houston location among 108 postings on 2026-10-26"
+official_source = "https://www.fieldai.com/careers"
+evidence = "Official careers page embeds the Lever jobs widget with accountName 'field-ai' (mapping confirmed 2026-10-26)."
+checks = "Stays disabled until DFW or Houston hiring is shown."
+[[boards]]
+employer = "Gopuff"
+employer_slug = "gopuff"
+token = "gopuff"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, Houston, and several DFW suburbs"
+official_source = ""
+evidence = "The official careers page refused this project's client (HTTP 403) on 2026-10-26; mapping not established."
+checks = "Mostly store and facility roles (790 postings)."
+[[boards]]
+employer = "Bounteous"
+employer_slug = "bounteous"
+token = "bounteous"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, TX"
+official_source = "https://www.bounteous.com/careers/"
+evidence = "The official careers search references UKG, not Lever (2026-10-26); this Lever board may not be current."
+[[boards]]
+employer = "RWS"
+employer_slug = "rws"
+token = "rws"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, Texas"
+official_source = "https://www.rws.com/careers/"
+evidence = "Official careers pages answered HTTP 202 without content to this project's client on 2026-10-26; mapping not established."
+checks = "Language and AI-data services: many 'data' roles are annotation or survey work; 'data' alone is not enough."
+[[boards]]
+employer = "TSMG / Service Measure"
+employer_slug = "tsmg-service-measure"
+token = "tsmg"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, TX (research sample)"
+official_source = ""
+evidence = "The postings API returned HTTP 500 on 2026-10-26 (research sample had 100 rows). tsmg.com redirected to tata.com/tsmg; its relation to this board is not established."
+checks = "Inspect duties and eligibility; 'data' alone is not enough."
+[[boards]]
+employer = "BoxLunch / Hot Topic"
+employer_slug = "boxlunch-hot-topic"
+token = "boxlunch"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Houston, Frisco, Grapevine, and other Texas stores"
+official_source = "https://www.workatboxlunch.com/"
+evidence = "boxlunch.com/careers and hottopic.com/careers lead to workatboxlunch.com and workatht.com; neither showed a Lever reference on 2026-10-26."
+checks = "One shared board for two brands: scan it once. 3,000+ postings, mostly stores."
+brands = ["BoxLunch", "Hot Topic"]
+[[boards]]
+employer = "D&M Auto Leasing"
+employer_slug = "dm-auto-leasing"
+token = "dmautoleasing"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Houston, Dallas, and Fort Worth, TX"
+official_source = "https://www.dmautoleasing.com/careers/"
+evidence = "The official careers page links to Paylocity, not Lever (2026-10-26); this Lever board may not be current."
+checks = "Group of hiring brands; keep them on one board entry."
+[[boards]]
+employer = "Culligan Quench"
+employer_slug = "culligan-quench"
+token = "quenchwater"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Grapevine, Dallas/Fort Worth, and Houston, TX"
+official_source = "https://quenchwater--careers.multiscreensite.com/"
+evidence = "quenchwater.com now redirects to quench.culligan.com; its careers site showed no Lever reference on 2026-10-26."
+[[boards]]
+employer = "Prophet Homes"
+employer_slug = "prophet-homes"
+token = "prophethomes"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas, Plano, Fort Worth, and Houston, TX"
+official_source = "https://www.prophethomes.com/careers"
+evidence = "Official careers page and its script bundle showed no Lever reference on 2026-10-26."
+[[boards]]
+employer = "Worldwide Mission Critical"
+employer_slug = "worldwide-mission-critical"
+token = "worldwidemissioncritical"
+region = "global"
+enabled = false
+verification = "pending"
+metros = ["dfw"]
+local_evidence = "Dallas, TX; Plano, TX"
+official_source = "https://www.worldwidemissioncritical.com/careers/"
+evidence = "The official careers page links to Paylocity (confirmed 2026-10-26); the reachable Lever board is not assumed current."
+
+# --- Holds (not collected) -----------------------------------------------------------
+
+[[holds]]
+employer = "Toward Jobs"
+tokens = ["usasurveyjob"]
+notes = "City-targeted survey and data-entry ads (1,500+ postings) do not establish a local employer operation or an eligible technical role. Employer identity, mapping, and scope unresolved."

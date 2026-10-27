@@ -1,11 +1,14 @@
 """Reprocess saved raw responses under their original board scan and collection time.
 
-A replay reads a stored response, checks it against its recorded SHA-256, validates it
-again, and stores it with the same routine as a live collection, but with the original
-collection time and a later processing time. Because observations are unique per (board
-scan, posting) and current state only moves forward in collection time, replaying a
-response that was already processed adds nothing, and replaying an older one adds history
-without replacing newer state.
+A replay reads every stored page of a scan, checks each against its recorded SHA-256,
+validates them again with the board's connector, and stores the result with the same
+routine as a live collection, but with the original collection time and a later
+processing time. A page that never arrived was never stored, so a replay of a scan that
+stopped early is judged partial again, as the original was.
+
+Because observations are unique per (board scan, posting) and current state only moves
+forward in collection time, replaying a scan that was already processed adds nothing, and
+replaying an older one adds history without replacing newer state.
 
 Replay never changes the scan's recorded status, its retry incident, or alerts: those
 describe what happened at collection time. It also never applies a scan's absence evidence
@@ -24,7 +27,7 @@ import psycopg
 
 from jobmarket.clock import Clock
 from jobmarket.collector import collection_lock
-from jobmarket.greenhouse import parse_jobs_response
+from jobmarket.connectors import SavedPage, get_connector
 from jobmarket.raw_store import RAW_RETENTION
 from jobmarket.store import StoreCounts, store_scan_results
 
@@ -47,10 +50,10 @@ class ReplayResult:
 
 
 def available_scan_ids(conn: psycopg.Connection) -> list[int]:
-    """Scans whose raw response is still stored, oldest collection first."""
+    """Scans whose raw pages are all still stored, oldest collection first."""
     rows = conn.execute(
-        "SELECT board_scan_id FROM raw_responses WHERE purged_at IS NULL AND sequence_no = 1 "
-        "ORDER BY fetched_at, board_scan_id"
+        "SELECT board_scan_id FROM raw_responses GROUP BY board_scan_id "
+        "HAVING bool_and(purged_at IS NULL) ORDER BY min(fetched_at), board_scan_id"
     ).fetchall()
     return [r[0] for r in rows]
 
@@ -71,43 +74,57 @@ def _replay_one(
 ) -> ReplayResult:
     started = clock()
     row = conn.execute(
-        "SELECT s.board_id, b.board_key, s.status, r.raw_response_id, r.fetched_at, "
-        "r.storage_uri, r.content_sha256, r.http_status, r.response_headers, r.purged_at "
-        "FROM board_scans s JOIN source_boards b ON b.board_id = s.board_id "
-        "LEFT JOIN raw_responses r ON r.board_scan_id = s.board_scan_id AND r.sequence_no = 1 "
-        "WHERE s.board_scan_id = %s",
+        "SELECT s.board_id, b.board_key, b.source_system, s.status FROM board_scans s "
+        "JOIN source_boards b ON b.board_id = s.board_id WHERE s.board_scan_id = %s",
         (scan_id,),
     ).fetchone()
     if row is None:
         raise UnknownScan(f"there is no board scan {scan_id}")
-    board_id, token, scan_status, raw_id, collected_at, uri, sha, status, headers, purged = row
+    board_id, token, source_system, scan_status = row
+    stored = conn.execute(
+        "SELECT raw_response_id, sequence_no, fetched_at, request_url, storage_uri, "
+        "content_sha256, http_status, response_headers, purged_at FROM raw_responses "
+        "WHERE board_scan_id = %s ORDER BY sequence_no",
+        (scan_id,),
+    ).fetchall()
+    collected_at = stored[0][2] if stored else None
+    raw_id = stored[0][0] if stored else None
     result = ReplayResult(scan_id, token, collected_at, scan_status)
 
-    body = None
-    if raw_id is None:
+    pages: list[SavedPage] | None = None
+    purged = [r[8] for r in stored if r[8] is not None]
+    if not stored:
         result.outcome = "no_response"
         result.detail = "no response was received in this scan, so there is nothing to replay"
-    elif purged is not None:
+    elif purged:
         result.outcome = "expired"
         result.detail = (
             f"the raw response was deleted by the {RAW_RETENTION.days}-day raw retention on "
-            f"{purged.isoformat(timespec='minutes')} and cannot be replayed; history already "
-            "recorded from it is kept"
+            f"{max(purged).isoformat(timespec='minutes')} and cannot be replayed; history "
+            "already recorded from it is kept"
         )
     else:
-        try:
-            body = (raw_root / uri).read_bytes()
-        except FileNotFoundError:
-            result.outcome = "file_missing"
-            result.detail = f"the raw response file {uri} is missing from {raw_root}"
-        else:
+        pages = []
+        for _, seq, _, url, uri, sha, status, headers, _ in stored:
+            try:
+                body = (raw_root / uri).read_bytes()
+            except FileNotFoundError:
+                result.outcome = "file_missing"
+                result.detail = f"the raw response file {uri} is missing from {raw_root}"
+                pages = None
+                break
             if hashlib.sha256(body).hexdigest() != sha:
                 result.outcome = "checksum_mismatch"
-                result.detail = "the stored file does not match its recorded SHA-256; not used"
-                body = None
+                result.detail = (
+                    f"the stored file {uri} does not match its recorded SHA-256; not used"
+                )
+                pages = None
+                break
+            pages.append(SavedPage(seq, url, status, headers or {}, body))
+        raw_ids = {r[1]: r[0] for r in stored}
 
-    if body is not None:
-        parsed = parse_jobs_response(status, headers or {}, body)
+    if pages is not None:
+        parsed = get_connector(source_system).parse(pages)
         result.validation = parsed.outcome
         if parsed.outcome == "failed":
             result.outcome = "unusable"
@@ -120,7 +137,7 @@ def _replay_one(
                         conn,
                         board_id,
                         scan_id,
-                        raw_id,
+                        raw_ids,
                         parsed,
                         observed_at=collected_at,
                         processed_at=clock(),
