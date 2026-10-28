@@ -26,6 +26,9 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Availability verification: postings move between observed, possibly unavailable,
   assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
   suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
+- Duplicate handling: records are grouped only on strong evidence (employer requisition
+  ID, identical job-specific application URL); weaker similarity is flagged for review.
+  Every source record keeps its own history and availability.
 - Unit, database, and end-to-end collection tests, and a GitHub Actions workflow that
   runs them against PostgreSQL 17.
 
@@ -116,6 +119,9 @@ Optional settings:
 | `jobmarket availability show POSTING_ID` | A posting's availability state and every transition with its reason and evidence |
 | `jobmarket availability close POSTING_ID --reason R --evidence-url URL --evidence-text T` | Mark a posting closed on official evidence |
 | `jobmarket availability holds [--all]` | Board holds against mass disappearances |
+| `jobmarket duplicates list [--all]` | Duplicate groups and open possible duplicates |
+| `jobmarket duplicates confirm FLAG_ID --reason R` / `dismiss FLAG_ID --reason R` | Review a possible duplicate |
+| `jobmarket duplicates dissolve GROUP_ID --reason R` | Undo a duplicate group |
 | `jobmarket availability release HOLD_ID --reason collection-issue-resolved\|source-removals-verified --evidence T` | Release a hold after review |
 | `jobmarket notifications [--full] [--send]` | Show the alert outbox, or deliver it if SMTP is configured |
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
@@ -178,9 +184,8 @@ creates a second posting. If a record has no usable id but its job-specific URL 
 (Greenhouse `/jobs/<id>` or `gh_jid=<id>`, Lever `jobs.lever.co/<site>/<id>`), that id is
 used and the posting's `identity_basis` is `job_url` (shown as "identity from job URL" for
 review); a later record with the id confirms it. A record with neither is kept in
-`rejected_records` with its title and URL as evidence and makes the scan partial. Possible
-duplicates (same employer, title, and description) are flagged in
-`posting_duplicate_flags`, never merged.
+`rejected_records` with its title and URL as evidence and makes the scan partial. Matching
+different records that may be the same opening is separate (see "Duplicates").
 
 Requests use a descriptive User-Agent, a 30-second timeout, at most
 `JOBMARKET_CONCURRENCY` boards per provider at a time, and at least
@@ -269,6 +274,48 @@ evidence; `jobmarket availability show` prints them.
 
 When availability tracking was introduced, every existing posting started as `observed`
 with no qualifying absences; earlier Module 3 counts remain in `complete_scan_absences`.
+
+## Duplicates
+
+Repeated ingestion and duplicate matching are different problems. Reprocessing the same
+source record can never create a second posting (identity is unique per board and source
+id). Duplicate matching compares *different* source records, often on different boards or
+sources, whose ids are not comparable. It runs after every collection, in one transaction,
+and is safe to repeat. Rules are versioned (`duplicates.RULE_VERSION`), and every group and
+flag stores its rule, version, and evidence. Confidence is a category, not a probability.
+
+**Grouped automatically (strong evidence)** in `duplicate_groups`:
+
+- `requisition_id`: the same employer and the same employer-issued requisition ID
+  (compared case- and space-insensitively) with the same normalized title. A requisition
+  used for different titles is flagged as `requisition_id_conflict` instead.
+- `application_url`: the same job-specific application URL (scheme and host case, trailing
+  slashes, and tracking parameters such as `utm_*` and `gh_src` ignored). A URL counts only
+  if it names the posting's id or carries an id-like value; a shared careers front page is
+  not evidence.
+
+**Flagged for review only** in `posting_duplicate_flags` (`title_location_description`):
+the same employer, the same normalized title (a trailing " - City, ST" is ignored), at least
+one shared location (every location of a multi-location posting counts), and the same
+description after normalization. Missing locations or descriptions never count as a match.
+Publication and discovery dates are stored as evidence only; discovery date is not
+publication date, and Lever gives no publication date. Conflicting evidence, such as two
+different requisition IDs, is recorded on the flag. Similar titles in different places or
+with different text are not flagged.
+
+Every source record keeps its own identity, history, and availability: closing one record
+never closes its counterparts. Review is reversible and remembered:
+
+```bash
+jobmarket duplicates list
+jobmarket duplicates dismiss 12 --reason "separate teams, different hiring managers"
+jobmarket duplicates confirm 13 --reason "same opening posted on both boards"
+jobmarket duplicates dissolve 4 --reason "employer reuses requisition numbers per city"
+```
+
+A dismissed flag is not raised again, and a dissolved group is not recreated by its rule.
+The Module 3 flags (same title and description, no location check) are kept with status
+`superseded`; the current rule reopens any pair it also matches.
 
 ### Failures, retries, and alerts
 
@@ -405,7 +452,9 @@ raw_responses    ─< posting_observations
 | `rejected_records`     | record from a usable response that failed validation |
 | `collection_incidents` | run of unsuccessful scans of a board, with retry state |
 | `notifications`        | queued alert or recovery message (the outbox) |
-| `posting_duplicate_flags` | possible duplicate postings, for review |
+| `posting_duplicate_flags` | possible duplicate pair, with rule, evidence, and review status |
+| `duplicate_groups`     | group of source records judged the same opening, with rule and evidence |
+| `duplicate_group_members` | source record in a duplicate group |
 | `replay_runs`          | attempt to reprocess a saved raw response |
 | `board_mapping_checks` | check of a board's official careers page for a reference to that board |
 | `posting_availability_events` | availability state change of a posting, with reason, scan, and evidence |

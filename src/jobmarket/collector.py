@@ -26,7 +26,7 @@ import httpx
 import psycopg
 from psycopg.types.json import Jsonb
 
-from jobmarket import availability, incidents
+from jobmarket import availability, duplicates, incidents
 from jobmarket.clock import Clock, system_clock
 from jobmarket.connectors import (
     USER_AGENT,
@@ -38,7 +38,7 @@ from jobmarket.connectors import (
     saved_pages,
 )
 from jobmarket.raw_store import store_body
-from jobmarket.store import StoreCounts, flag_possible_duplicates, store_scan_results
+from jobmarket.store import StoreCounts, store_scan_results
 
 COLLECTION_LOCK_KEY = 4_815_162_343
 REQUEST_INTERVAL_ENV = "JOBMARKET_REQUEST_INTERVAL"
@@ -128,6 +128,7 @@ class RunReport:
     notifications: list[int] = field(default_factory=list)
     abandoned_scans_recovered: int = 0
     duplicate_flags_added: int = 0
+    duplicate_groups_created: int = 0
 
 
 class Collector:
@@ -275,7 +276,9 @@ class Collector:
 
         finished = self.clock()
         with self.conn.transaction():
-            report.duplicate_flags_added = flag_possible_duplicates(self.conn, finished)
+            dup = duplicates.run_rules(self.conn, finished)
+            report.duplicate_flags_added = dup.flags_added
+            report.duplicate_groups_created = dup.groups_created
             report.notifications = incidents.queue_notifications(
                 self.conn, run_id, status, events, finished
             )
@@ -506,6 +509,10 @@ def summarize(report: RunReport) -> list[str]:
             ]
             if any(changes):
                 lines.append("    availability: " + ", ".join(c for c in changes if c))
+    if report.duplicate_groups_created:
+        lines.append(
+            f"Duplicate groups created on strong evidence: {report.duplicate_groups_created}"
+        )
     if report.duplicate_flags_added:
         lines.append(f"Possible duplicates flagged (not merged): {report.duplicate_flags_added}")
     if report.notifications:
