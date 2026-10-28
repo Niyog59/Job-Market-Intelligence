@@ -199,6 +199,114 @@ class Description:
     display_rules: str = DISPLAY_RULES_VERSION
 
 
+_CATEGORY_NAMES = {
+    "data_analysis": "Data analysis", "bi": "Business intelligence",
+    "data_engineering": "Data engineering", "analytics_engineering": "Analytics engineering",
+    "backend": "Backend", "software_engineering": "Software engineering",
+    "full_stack": "Full stack", "data_science": "Data science", "ml": "Machine learning",
+    "other": "Other", "uncertain": "Unclear role",
+}  # fmt: skip
+_SPONSORSHIP_TEXT = {
+    "supported": "Visa sponsorship available",
+    "not_supported": "No visa sponsorship",
+    "not_stated": "Sponsorship not stated",
+    "ambiguous": "Sponsorship unclear",
+}
+
+
+def _words(value: str) -> str:
+    return value.replace("_", " ")
+
+
+def _years(item: dict) -> str:
+    lo, hi = item["min_years"], item["max_years"]
+    fmt = lambda v: f"{v:g}"  # noqa: E731
+    if lo is not None and hi is not None:
+        return f"{fmt(lo)}-{fmt(hi)} years"
+    if lo is not None:
+        return f"{fmt(lo)}+ years"
+    if hi is not None:
+        return f"up to {fmt(hi)} years"
+    return "experience"
+
+
+def summary_lines(normalized: dict) -> list[str]:
+    """Display-ready lines for an extraction result (role, requirements, eligibility,
+    location). Groups keep the posting's own relationship wording ("Python or Java")."""
+    n = normalized
+    lines = []
+    cats = [_CATEGORY_NAMES.get(c["category"], c["category"]) for c in n["role_categories"]]
+    lines.append(
+        f"Role: {', '.join(cats) or 'not stated'}; seniority "
+        f"{_words(n['seniority']['value'])}; {_words(n['employment_type']['value'])}"
+    )
+    grouped = {m["canonical"] for g in n["skill_groups"] for m in g["members"]}
+    for status, label in (("required", "Required"), ("preferred", "Preferred")):
+        groups = [g["display_text"] for g in n["skill_groups"] if g["status"] == status]
+        skills = [
+            s["canonical"]
+            for s in n["skills"]
+            if s["status"] == status and s["canonical"] not in grouped
+        ]
+        if groups or skills:
+            lines.append(f"{label}: {'; '.join(groups + skills)}")
+    unclear = [s["canonical"] for s in n["skills"] if s["status"] == "ambiguous"]
+    if unclear:
+        lines.append(f"Requirement level unclear: {', '.join(unclear)}")
+    alternatives = {a["group"]: a["display_text"] for a in n["alternatives"]}
+    shown = set()
+    for item in n["experience"]:
+        group = item["alternative_group"]
+        if group in alternatives:
+            if group not in shown:
+                shown.add(group)
+                lines.append(f"Experience or education: {alternatives[group]}")
+            continue
+        subject = f" {item['subject']}" if item["subject"] else ""
+        lines.append(f"Experience: {_years(item)}{subject} ({item['status']})")
+    for item in n["education"]:
+        group = item["alternative_group"]
+        if group in alternatives:
+            if group not in shown:
+                shown.add(group)
+                lines.append(f"Experience or education: {alternatives[group]}")
+            continue
+        fields = f" in {', '.join(item['fields'])}" if item["fields"] else ""
+        lines.append(f"Education: {_words(item['level'])}{fields} ({item['status']})")
+    if n["graduation"]["status"] != "not_stated":
+        g = n["graduation"]
+        lines.append(
+            f"Graduation: {g['earliest'] or '?'} to {g['latest'] or '?'}"
+            if g["status"] == "stated"
+            else "Graduation: unclear"
+        )
+    lines.append(_SPONSORSHIP_TEXT[n["sponsorship"]["status"]])
+    for key, label in (
+        ("work_authorization", "Work authorization"),
+        ("citizenship", "Citizenship"),
+        ("clearance", "Clearance"),
+    ):
+        status = n[key]["status"]
+        if status != "not_stated":
+            level = f" ({n[key]['level']})" if key == "clearance" and n[key]["level"] else ""
+            lines.append(f"{label}: {_words(status)}{level}")
+    places = []
+    for loc in n["locations"]:
+        parts = [p for p in (loc["city"], loc["state"], loc["country"]) if p]
+        places.append(", ".join(parts) if parts else loc["original"])
+    arrangement = n["work_arrangement"]
+    where = _words(arrangement["value"])
+    if arrangement["onsite_days_per_week"] is not None:
+        where += f", {arrangement['onsite_days_per_week']:g} day(s) a week on site"
+    elif arrangement["onsite_frequency_text"]:
+        where += f", {arrangement['onsite_frequency_text']}"
+    lines.append(f"Where: {'; '.join(places) or 'location not stated'} ({where})")
+    limits = [r["normalized_value"] for r in n["remote_restrictions"]]
+    if limits:
+        lines.append(f"Location limits: {'; '.join(limits)}")
+    return lines  # fmt: skip
+
+
 @dataclass(frozen=True)
 class ListingDetail:
     posting_id: int
