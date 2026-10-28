@@ -244,5 +244,5 @@ def test_cli_duplicates_review(cli_env, capsys):
     group = cli_env.scalar("SELECT group_id FROM duplicate_groups")
     assert cli.main(["duplicates", "dissolve", str(group), "--reason", "separate"]) == 0
     assert cli.main(["duplicates", "dissolve", str(group), "--reason", "again"]) == 1
-    assert cli.main(["jobs"]) == cli.EXIT_OK
+    assert cli.main(["jobs", "--all-levels"]) == cli.EXIT_OK
     assert "duplicate group" not in capsys.readouterr().out.split("dissolved")[-1]

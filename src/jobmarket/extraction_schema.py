@@ -17,8 +17,11 @@ from typing import Any
 
 from jobmarket.listings import plain_text, safe_description_html
 
-PROMPT_VERSION = "2026-10-28.1"  # instructions and document layout
-SCHEMA_VERSION = "2026-10-28.1"
+# .2: named-technology skills, requirement headings, stated-only employment type, title level
+# words, clearance eligibility, places vs remote limits, groups only for or/at-least, and the
+# early-career judgement (decisions 2026-10-28).
+PROMPT_VERSION = "2026-10-28.2"  # instructions and document layout
+SCHEMA_VERSION = "2026-10-28.2"  # .2: early_career
 
 ROLE_CATEGORIES = (
     "data_analysis", "bi", "data_engineering", "analytics_engineering", "backend",
@@ -49,6 +52,12 @@ CLEARANCE = ("required", "preferred", "must_be_eligible", "not_stated", "ambiguo
 GRADUATION = ("stated", "not_stated", "ambiguous")
 ARRANGEMENT = ("onsite", "hybrid", "remote", "multiple", "not_stated", "ambiguous")
 RESTRICTION_KIND = ("country", "state", "region", "timezone", "commuting_distance", "other")
+EARLY_CAREER = ("yes", "internship", "no", "unclear")
+EARLY_CAREER_BASIS = (
+    "new_grad", "recent_graduate", "rotational_program", "early_career_program", "entry_level",
+    "no_experience_required", "at_most_one_year", "internship", "experience_required",
+    "senior_level",
+)  # fmt: skip
 
 
 def _evidence() -> dict:
@@ -202,6 +211,13 @@ RESPONSE_SCHEMA: dict[str, Any] = _object(
                 }
             )
         ),
+        "early_career": _object(
+            {
+                "status": _enum(EARLY_CAREER),
+                "basis": _array(_enum(EARLY_CAREER_BASIS)),
+                "evidence": _evidence(),
+            }
+        ),
     }
 )
 
@@ -241,22 +257,35 @@ duties disagree)
   clear.
 - Related titles are not synonyms: Business Analyst, Systems Engineer, and Python Developer
   need duties to decide. basis says whether the title, the duties, or both support it.
-- Seniority (Intern, Junior, II, Senior, Staff, Lead...) is separate from the category.
-  Employment type is separate too (full-time, contract...).
+- Seniority (Intern, Junior, II, Senior, Staff, Lead...) is separate from the category. Use
+  the level word in the title when there is one (Senior Staff -> staff, Principal ->
+  principal, Lead -> lead, Associate -> entry); otherwise use explicit wording in the text;
+  otherwise "not_stated".
+- Employment type only when the document states it for this job (a field such as
+  "Commitment: Full-time", or "this is a full-time role"). Do not infer it from benefits
+  text or from silence.
 
 Skills
-- status: "required" when the document requires it (must have, required, minimum
-  qualifications); "preferred" for nice to have, preferred, bonus, plus; "mentioned" when
-  it only appears in duties or the tech stack without a requirement; "ambiguous" when the
-  requirement level is unclear.
-- Name each skill as written. Keep different technologies separate (Java and JavaScript
-  are different skills). Do not add skills that are not named.
-- skill_groups describe relationships between named skills: "Python or Java" is relation
-  any_of with members ["Python", "Java"]; "Python and SQL" is all_of; "two of Python,
-  Java, Go" is at_least with min_count 2. members must be names also listed in skills.
-  display_text is a natural reading of the relationship ("Python or Java"). If a
-  relationship is too complicated to represent, list the skills as "ambiguous" instead of
-  flattening it.
+- Skills are named technologies only: programming languages, frameworks, libraries, tools,
+  platforms, databases, cloud services, and named products (Python, Power BI, Snowflake,
+  AWS, Jira). Do not list methods or concepts (A/B testing, machine learning, Agile, APIs,
+  data modeling), soft skills, domain knowledge, or certifications.
+- One skill per technology, with its usual name and no qualifiers: "TypeScript/JavaScript"
+  is two skills (TypeScript, JavaScript); "CI/CD pipelines" is "CI/CD"; "Drupal 8/9" is
+  "Drupal". Keep different technologies separate (Java and JavaScript are different).
+  Do not add skills that are not named.
+- status: "required" when the document requires it. Items under headings such as
+  Requirements, Qualifications, Basic or Minimum Qualifications, What you'll need, What
+  we're looking for, or Must have are required unless their own wording says preferred,
+  nice to have, bonus, plus, or a plus. "preferred" for preferred, nice to have, bonus,
+  plus, ideally; "mentioned" when a technology only appears in duties or the tech stack;
+  "ambiguous" when the requirement level is unclear.
+- skill_groups are only for choices between named skills: "Python or Java" and examples
+  introduced by "such as" or "e.g." are any_of; "two of Python, Java, Go" is at_least with
+  min_count 2. A plain list joined by commas or "and" is not a group: list those skills
+  individually. members must be names also listed in skills. display_text is a natural
+  reading ("Python or Java"). If a relationship is too complicated to represent, list the
+  skills as "ambiguous" instead of flattening it.
 
 Experience and education
 - experience: scope "overall" for total years, "skill" for years with a named skill
@@ -276,19 +305,34 @@ Sponsorship, authorization, citizenship, clearance (keep these separate)
   in the US" is NOT a statement about sponsorship: record it under work_authorization and
   leave sponsorship "not_stated" unless sponsorship itself is mentioned.
 - citizenship: only explicit citizenship or US person requirements.
-- clearance: security clearance requirements, with the level when named.
+- clearance: "required" when the candidate must already hold a clearance;
+  "must_be_eligible" when they must be able to obtain one; "preferred" when it is a plus.
+  Include the level when named.
 
 Locations and work arrangement
-- locations: each location the document gives, with original text and city, state,
-  country only as stated or as directly written in the original (for example "Austin, TX"
-  gives city Austin, state TX). Never invent a missing city, state, or country, and never
-  give coordinates.
-- work_arrangement: onsite, hybrid, remote, or multiple when different locations have
-  different arrangements; onsite_days_per_week and onsite_frequency_text only when stated.
-- remote_restrictions: only explicit limits on where a remote worker may live or work
-  (country, state, region, time zone, commuting distance). "Remote" alone does not mean
-  worldwide and does not mean any particular country: record no restriction unless one is
-  stated.
+- locations: each physical place the document gives (city, metro, or country of an
+  office or work site), with original text and city, state, country only as stated or as
+  directly written in the original (for example "Austin, TX" gives city Austin, state TX).
+  "Remote", "Hybrid", and remote areas such as "Remote - US" are not locations. Never
+  invent a missing city, state, or country, and never give coordinates.
+- work_arrangement: onsite, hybrid, or remote; "multiple" when the posting offers remote
+  work as well as office-based (onsite or hybrid) locations, or different arrangements for
+  different locations; onsite_days_per_week and onsite_frequency_text only when stated.
+- remote_restrictions: only for remote work, the explicit limits on where a remote worker
+  may live or work, one entry per place (country, state, region, time zone). "Remote - US &
+  Canada" is two entries. A commuting-distance condition for an onsite or hybrid job is not
+  a remote restriction. "Remote" alone does not mean worldwide and does not mean any
+  particular country: record no restriction unless one is stated.
+
+Early career (is this job open to someone with no or very little experience?)
+- "yes" when the posting is a new-grad, recent-graduate, rotational, or early-career
+  program, an entry-level role, says no experience is needed, or asks for at most 1 year
+  of experience. basis lists the reasons.
+- "internship" for internships and co-ops.
+- "no" when the role asks for more than 1 year of experience or is clearly senior (Senior,
+  Staff, Principal, Lead, Manager and above). basis says which.
+- "unclear" when the posting gives no experience requirement or level either way.
+- Evidence quotes the wording that decides it.
 """
 
 

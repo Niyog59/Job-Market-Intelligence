@@ -42,7 +42,7 @@ LABEL_FIELDS = (
     "role_categories", "seniority", "employment_type", "required_skills", "preferred_skills",
     "skill_groups", "overall_min_years", "degree_or_experience_alternative", "sponsorship",
     "work_authorization", "citizenship", "clearance", "graduation", "work_arrangement",
-    "locations", "remote_restrictions",
+    "locations", "remote_restrictions", "early_career",
 )  # fmt: skip
 
 TEMPLATE = """\
@@ -83,6 +83,9 @@ graduation = "not_stated"          # stated not_stated ambiguous
 work_arrangement = "not_stated"    # onsite hybrid remote multiple not_stated ambiguous
 locations = []                     # "City, ST" or as written, e.g. ["Dallas, TX"]
 remote_restrictions = []           # stated limits only, e.g. ["United States"] or ["TX"]
+# early_career: yes (new grad, rotational, early-career program, entry level, no experience,
+#   or at most 1 year) internship no unclear
+early_career = "unclear"
 """
 
 _BLOCK = re.compile(r"```toml\n(.*?)```", re.S)
@@ -280,6 +283,7 @@ def model_view(normalized: dict) -> dict[str, Any]:
         "remote_restrictions": {
             _restriction(r["normalized_value"]) for r in n["remote_restrictions"]
         },
+        "early_career": (n.get("early_career") or {}).get("status", "not extracted"),
     }
 
 

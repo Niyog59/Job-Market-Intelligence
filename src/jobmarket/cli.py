@@ -287,27 +287,43 @@ def _status(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+# Default list: fresher-friendly jobs as judged by requirement extraction (decision
+# 2026-10-28). Every job is still collected and kept; the other levels are one flag away.
+_LEVELS = {"default": ("yes",), "internships": ("internship",)}
+
+
 def _jobs(settings: Settings, args) -> int:
     where, params = ["true"], []
     if args.board:
-        where.append("token = %s")
+        where.append("j.token = %s")
         params.append(args.board)
     if args.early_career:
-        where.append("early_career")
+        where.append("j.early_career")
     if args.review:
-        where.append("needs_review")
+        where.append("j.needs_review")
+    level = "all" if (args.all_levels or args.early_career) else (
+        "internships" if args.internships else "default")  # fmt: skip
+    if level != "all":
+        where.append("(c.derived ->> 'early_career') = ANY(%s)")
+        params.append(list(_LEVELS[level]))
     view = "retained_jobs" if args.all_states else "active_jobs"
+    source = f"{view} j LEFT JOIN current_extractions c ON c.posting_id = j.posting_id"
     with db.connect(settings) as conn:
         rows = conn.execute(
-            "SELECT employer, title, location_text, texas_eligibility, seniority, early_career, "
-            "families, sponsorship_status, needs_review, first_discovered_at, absolute_url, "
-            "availability_state, qualifying_absences, posting_id, identity_basis, "
-            "duplicate_group_id, open_duplicate_flags "
-            f"FROM {view} WHERE {' AND '.join(where)} "
-            "ORDER BY first_discovered_at DESC, employer, title LIMIT %s",
+            "SELECT j.employer, j.title, j.location_text, j.texas_eligibility, j.seniority, "
+            "j.early_career, j.families, j.sponsorship_status, j.needs_review, "
+            "j.first_discovered_at, j.absolute_url, j.availability_state, "
+            "j.qualifying_absences, j.posting_id, j.identity_basis, j.duplicate_group_id, "
+            "j.open_duplicate_flags "
+            f"FROM {source} WHERE {' AND '.join(where)} "
+            "ORDER BY j.first_discovered_at DESC, j.employer, j.title LIMIT %s",
             (*params, args.limit),
         ).fetchall()
         total = conn.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+        unchecked = conn.execute(
+            f"SELECT count(*) FROM {source} WHERE c.posting_id IS NULL "
+            "OR c.derived ->> 'early_career' IS NULL"
+        ).fetchone()[0]
         hidden = conn.execute(
             "SELECT count(*) FROM retained_jobs WHERE NOT availability_state = ANY(%s)",
             (list(ACTIVE_STATES),),
@@ -355,7 +371,13 @@ def _jobs(settings: Settings, args) -> int:
         elif state != "observed":
             print(f"    {state.replace('_', ' ')} (hidden from the active feed)")
     shown = "retained" if args.all_states else "active"
-    print(f"\nShowing {len(rows)} of {total} {shown} job(s).")
+    what = {"default": "fresher-friendly ", "internships": "internship ", "all": ""}[level]
+    print(f"\nShowing {len(rows)} {what}job(s) of {total} {shown} job(s).")
+    if level != "all":
+        print(
+            f"{unchecked} {shown} job(s) have no early-career answer yet (not extracted, or "
+            "extracted before that field existed) and are not shown; use --all-levels."
+        )
     if not args.all_states and hidden:
         print(f"{hidden} retained job(s) are assumed inactive or closed; use --all-states.")
     return EXIT_OK
@@ -1045,7 +1067,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-states", action="store_true", help="include assumed-inactive and closed jobs"
     )
     jobs.add_argument("--board", metavar="TOKEN")
-    jobs.add_argument("--early-career", action="store_true")
+    jobs.add_argument(
+        "--early-career",
+        action="store_true",
+        help="the screening rules' early-career flag (implies --all-levels)",
+    )
+    jobs.add_argument("--internships", action="store_true", help="internships instead")
+    jobs.add_argument("--all-levels", action="store_true", help="every level, not only freshers")
     jobs.add_argument("--review", action="store_true", help="only jobs flagged for review")
     jobs.add_argument("--limit", type=int, default=25)
 

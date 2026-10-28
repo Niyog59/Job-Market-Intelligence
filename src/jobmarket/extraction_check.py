@@ -173,6 +173,7 @@ def _claims(answer: dict):
         answer["work_arrangement"],
         (answer["work_arrangement"]["value"] != "not_stated"),
     )
+    yield "early_career", answer["early_career"], answer["early_career"]["status"] != "unclear"
     for key in ("role_categories", "skills", "skill_groups", "experience", "education",
                 "alternatives", "locations", "remote_restrictions"):  # fmt: skip
         for i, item in enumerate(answer[key]):
@@ -213,6 +214,13 @@ def _consistency(answer: dict) -> list[dict]:
         lo, hi = item["min_years"], item["max_years"]
         if lo is not None and hi is not None and lo > hi:
             warnings.append({"path": f"experience[{i}]", "issue": "min_years above max_years"})
+    if answer["early_career"]["status"] == "yes":
+        years = [e["min_years"] for e in answer["experience"]
+                 if e["status"] == "required" and e["scope"] in ("overall", "domain")
+                 and e["min_years"] is not None and e["min_years"] > 1]  # fmt: skip
+        if years:
+            warnings.append({"path": "early_career", "issue": "early-career 'yes' but more "
+                             "than 1 year is required", "detail": max(years)})  # fmt: skip
     for key in ("earliest", "latest"):
         value = answer["graduation"][key]
         if value is not None and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
@@ -305,6 +313,7 @@ def derive(normalized: dict) -> dict:
         "ai_relevant": relevant,
         "place": place,
         "ai_would_retain": relevant and place in RETAINED_PLACES,
+        "early_career": normalized.get("early_career", {}).get("status"),
         "sponsorship": normalized["sponsorship"]["status"],
         "work_arrangement": normalized["work_arrangement"]["value"],
     }

@@ -190,7 +190,7 @@ def test_remote_does_not_mean_worldwide():
 def test_derived_comparison_with_screening():
     derived = derive(normalize_answer(base_answer()))
     assert derived == {"role_categories": ["data_engineering"], "ai_relevant": True,
-                       "place": "local_dfw", "ai_would_retain": True,
+                       "place": "local_dfw", "ai_would_retain": True, "early_career": "unclear",
                        "sponsorship": "not_stated", "work_arrangement": "not_stated"}  # fmt: skip
     other = derive(normalize_answer(answer(role_categories=[
         {"category": "other", "basis": "duties", "evidence": []}])))  # fmt: skip
@@ -231,3 +231,14 @@ def test_api_errors_are_classified():
     assert classify_api_error(503, {}, "unavailable").kind == "server_error"
     assert classify_api_error(400, {}, "bad schema").kind == "client_error"
     assert classify_api_error(429, {}, "busy").kind == "rate_limited"  # no quota detail
+
+
+def test_early_career_yes_with_years_above_one_is_flagged():
+    exp = {"scope": "overall", "subject": None, "min_years": 3, "max_years": None,
+           "status": "required", "alternative_group": None, "evidence": []}  # fmt: skip
+    a = answer(experience=[exp], early_career={"status": "yes", "basis": ["entry_level"],
+                                               "evidence": ["Data Engineer"]})  # fmt: skip
+    checked = check_answer(a, DOC)
+    assert any(w["path"] == "early_career" and "more than 1 year" in w["issue"]
+               for w in checked.warnings)  # fmt: skip
+    assert "Early career: yes (entry level)" in summary_lines(checked.normalized)

@@ -47,6 +47,7 @@ def base_answer() -> dict:
         "work_arrangement": {"value": "not_stated", "onsite_days_per_week": None,
                              "onsite_frequency_text": None, "evidence": []},
         "remote_restrictions": [],
+        "early_career": {"status": "unclear", "basis": [], "evidence": []},
     }  # fmt: skip
 
 

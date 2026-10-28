@@ -50,9 +50,9 @@ Not yet in place:
   email is sent.
 - **A web interface.** Status is available through `jobmarket status` and the
   `board_status` database view.
-- **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence,
-  not for correctness. A manually reviewed evaluation set is being prepared; until it is
-  reviewed, no accuracy figure exists.
+- **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
+  It has been compared with labels on 30 listings, but those labels are drafts that a
+  person has not reviewed yet, so the comparison shows agreement, not accuracy.
 
 ## Requirements
 
@@ -132,7 +132,7 @@ Optional settings:
 | `jobmarket collect [--board [SOURCE:]TOKEN ...] [--scheduled]` | Scan enabled Greenhouse and Lever boards now |
 | `jobmarket retry-due` | Run only the retries that are due now |
 | `jobmarket status [--all]` | Per-board last result, last complete scan, retained jobs, incidents |
-| `jobmarket jobs [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs (observed or possibly unavailable), newest discoveries first |
+| `jobmarket jobs [--internships \| --all-levels] [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs, newest discoveries first: by default only fresher-friendly ones (see "Early career") |
 | `jobmarket availability show POSTING_ID` | A posting's availability state and every transition with its reason and evidence |
 | `jobmarket availability close POSTING_ID --reason R --evidence-url URL --evidence-text T` | Mark a posting closed on official evidence |
 | `jobmarket availability holds [--all]` | Board holds against mass disappearances |
@@ -362,6 +362,18 @@ kept apart from work authorization, citizenship, and clearance; and locations (o
 text plus city, state, country), work arrangement, explicit remote restrictions, and
 on-site frequency. "Not stated" is never turned into "no", "remote" never means
 worldwide, and no location or coordinate is invented.
+
+**Early career.** Each answer also says whether the job is open to someone with no or very
+little experience: `yes` for new-grad, recent-graduate, rotational, and early-career
+programs, entry-level roles, "no experience needed", or at most one year of experience;
+`internship`; `no`; or `unclear`, with the reasons and quotes. Python warns when `yes`
+comes with a required experience of more than one year. `jobmarket jobs` lists only the
+`yes` jobs by default (`--internships` for internships, `--all-levels` for everything);
+every job is still collected, screened, and kept, and jobs not yet extracted are counted
+rather than hidden silently.
+
+**Skills** are named technologies only (languages, frameworks, tools, platforms, databases,
+cloud services, products), not methods, concepts, soft skills, or certifications.
 
 **Input and safety.** The model receives one document per version: title, location fields,
 Lever workplace and commitment fields, and the description as display-safe text (headings

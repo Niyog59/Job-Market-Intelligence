@@ -236,6 +236,16 @@ def summary_lines(normalized: dict) -> list[str]:
     n = normalized
     lines = []
     cats = [_CATEGORY_NAMES.get(c["category"], c["category"]) for c in n["role_categories"]]
+    early = n.get("early_career")  # absent in answers made before schema 2026-10-28.2
+    if early:
+        reasons = ", ".join(_words(b) for b in early["basis"])
+        label = {
+            "yes": "Early career: yes",
+            "internship": "Internship",
+            "no": "Early career: no",
+            "unclear": "Early career: unclear",
+        }[early["status"]]
+        lines.append(f"{label}{f' ({reasons})' if reasons else ''}")  # fmt: skip
     lines.append(
         f"Role: {', '.join(cats) or 'not stated'}; seniority "
         f"{_words(n['seniority']['value'])}; {_words(n['employment_type']['value'])}"

@@ -324,3 +324,28 @@ def test_cli_status_show_and_run_without_limits(cli_x, monkeypatch, capsys):
     assert "[found]" in out
     assert cli.main(["extract", "run"]) == cli.EXIT_CONFIG_ERROR
     assert "JOBMARKET_AI_RPM" in capsys.readouterr().err
+
+
+def test_the_job_list_shows_fresher_friendly_jobs_by_default(cli_x, capsys):
+    cli_x.collect(T0, [job(1, title="Data Engineer"), job(2, title="Data Analyst"),
+                       job(3, title="Data Engineer Intern")])  # fmt: skip
+    levels = {"yes": ["new_grad"], "internship": ["internship"], "no": ["senior_level"]}
+    replies = [reply(answer(early_career={"status": s, "basis": b, "evidence": []}))
+               for s, b in levels.items()]  # fmt: skip
+    model = ScriptedModel(*replies)
+    cli_x.run(model, limit=1)
+    model.items = [replies[1]]
+    cli_x.run(model, limit=1)
+    model.items = [replies[2]]
+    cli_x.run(model, limit=1)
+    by_title = dict(cli_x.conn.execute(
+        "SELECT v.title, c.derived ->> 'early_career' FROM current_extractions c "
+        "JOIN posting_versions v USING (version_id)"))  # fmt: skip
+    fresher = next(t for t, s in by_title.items() if s == "yes")
+    assert cli.main(["jobs"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert fresher in out and "Showing 1 fresher-friendly job(s)" in out
+    assert cli.main(["jobs", "--internships"]) == cli.EXIT_OK
+    assert "Showing 1 internship job(s)" in capsys.readouterr().out
+    assert cli.main(["jobs", "--all-levels"]) == cli.EXIT_OK
+    assert "Showing 3 job(s)" in capsys.readouterr().out
