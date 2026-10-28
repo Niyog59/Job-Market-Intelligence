@@ -45,12 +45,14 @@ def test_successful_collection(env):
     acme = next(o for o in report.outcomes if o.token == "acme")
     assert (acme.reported, acme.received, acme.invalid) == (3, 3, 0)
     assert (acme.counts.retained, acme.counts.excluded) == (1, 2)
-    # Every valid job is identified; only the retained one gets content history.
+    # Every valid job is identified and gets content history, retained or not.
     assert env.scalar("SELECT count(*) FROM source_postings") == 3
-    assert env.scalar("SELECT count(*) FROM posting_versions") == 1
+    assert env.scalar("SELECT count(*) FROM posting_versions") == 3
+    assert env.scalar("SELECT count(*) FROM retained_jobs") == 1
     url, published = env.one(
         "SELECT v.absolute_url, o.source_published_at FROM posting_versions v "
-        "JOIN posting_observations o USING (version_id)"
+        "JOIN posting_observations o ON o.version_id = v.version_id "
+        "JOIN source_postings p ON p.posting_id = v.posting_id WHERE p.source_posting_id = '1'"
     )
     assert url == "https://job-boards.greenhouse.io/acme/jobs/1"
     assert published == datetime(2026, 10, 19, 14, 0, tzinfo=UTC)  # same instant as -05:00

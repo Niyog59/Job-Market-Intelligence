@@ -26,6 +26,7 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Availability verification: postings move between observed, possibly unavailable,
   assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
   suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
+- Content history for every listing, retained or not.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -154,7 +155,7 @@ jobmarket collect / retry-due                           v
          complete | partial (usable, but something is missing or wrong) | failed
     -> for each valid job: source_postings (identity, first discovered, last observed)
        and posting_screenings (relevance, Texas eligibility, seniority, sponsorship)
-    -> retained jobs: posting_observations (one per scan, pointing at its page) and
+    -> every valid job: posting_observations (one per scan, pointing at its page) and
        posting_versions (a new row only for a meaningful change; see "Posting history")
     -> collection_incidents: retry state; notifications: alert/recovery outbox
 ```
@@ -317,6 +318,9 @@ A dismissed flag is not raised again, and a dissolved group is not recreated by 
 The Module 3 flags (same title and description, no location check) are kept with status
 `superseded`; the current rule reopens any pair it also matches.
 
+Duplicate matching covers postings that are or have been retained (the Module 6 scope),
+even though every listing now has content history.
+
 ### Failures, retries, and alerts
 
 - Each board's scan is `complete`, `partial`, or `failed`. One board's failure never
@@ -357,8 +361,9 @@ source's job id, enforced by a unique constraint; titles are never identifiers.
 source's own `first_published` and `updated_at` are kept per observation as evidence,
 not treated as a posting date.
 
-**Observations.** Every scan of a tracked job (one that is or was ever retained) adds one
-observation. Observations are unique per (board scan, posting), so processing the same
+**Observations.** Every scan of a valid job, retained or not, adds one observation (until
+2026-10-27 only retained jobs were tracked; earlier excluded jobs get content history from
+the next scan that lists them). Observations are unique per (board scan, posting), so processing the same
 saved response again adds nothing.
 
 **Meaningful changes.** `jobmarket.normalize` builds a comparison form of each content:
@@ -368,6 +373,13 @@ typographic quote/dash variants, and timestamps are ignored; case, numbers, and 
 are kept. A new version is written only when the comparison form differs from the
 chronologically neighbouring observation. Unchanged content reuses the existing version,
 and returning to earlier content (A, B, A) is a new version, so the sequence is kept.
+
+**Long descriptions.** A description longer than 20,000 characters (the longest collected
+so far is about 15,800) is not stored: the version keeps its fingerprints, title,
+location, links, and `description_length`, with `description_omitted = 'too_long'`. Edits
+are still detected by fingerprint, including after a rule change (the new content is
+compared under the rules the old content was recorded with). Readers get the posting link
+instead of the text.
 Each version keeps its original source content (`content_html`, offices, metadata, and
 so on), its exact source fingerprint, and the rules version that detected it; its
 comparison form under each rules version is in `posting_version_comparisons`.
@@ -463,7 +475,9 @@ raw_responses    ─< posting_observations
 | `board_holds`          | board-level hold opened by a mass disappearance, with its review and release |
 | `posting_page_checks`  | sampled check of a posting's job or application page |
 
-Views: `board_status` (one row per board for status displays), `retained_jobs`
+Views: `board_status` (one row per board for status displays), `listings` (every listing
+with stored content, retained or not, with links, freshness, and availability),
+`retained_jobs`
 (retained postings with their current content and availability), `active_jobs` (the
 default feed: observed or possibly unavailable), `posting_version_stages` (content stages
 in collection order with change windows), and `posting_history_problems` (integrity

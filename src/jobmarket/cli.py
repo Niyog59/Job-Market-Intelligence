@@ -631,7 +631,10 @@ def _history(settings: Settings, args) -> int:
     print(f"  first discovered {_when(first)}, last observed {_when(last)}")
     print(f"  observations: {observations}")
     if cur_no is None:
-        print("  No content history: this posting has never been retained.")
+        print(
+            "  No content history yet: first seen before content was kept for every listing; "
+            "it is recorded the next time it is observed."
+        )
         return EXIT_OK
     print(f"  current: v{cur_no} {cur_title!r}, observed {_when(cur_at)}")
     print("Stages, in collection order (a change happened inside its window):")
@@ -657,6 +660,11 @@ def _refingerprint(settings: Settings, args) -> int:
         f"Evaluated {result.versions} version(s) under normalization rules {result.rules} "
         f"({result.computed} newly computed). No versions were created or changed."
     )
+    if result.omitted:
+        print(
+            f"{result.omitted} version(s) were skipped: their long description was not stored, "
+            "so they are compared by fingerprint only."
+        )
     if result.rule_effects:
         print(
             f"{len(result.rule_effects)} version(s) have a different comparison form under "
