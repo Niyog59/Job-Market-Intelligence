@@ -30,6 +30,7 @@ from jobmarket.evidence import (
     page_targets,
 )
 from jobmarket.incidents import next_retry_time
+from jobmarket.listings import listing_detail, plain_text
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
 from jobmarket.raw_store import RAW_RETENTION, cleanup_raw, raw_dir
@@ -653,6 +654,42 @@ def _history(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _listing(settings: Settings, args) -> int:
+    with db.connect(settings) as conn:
+        detail = listing_detail(conn, args.posting)
+    if detail is None:
+        print("No stored content for that posting.", file=sys.stderr)
+        return EXIT_FAILURE
+    d = detail.description
+    print(f"{detail.title} - {detail.employer} ({detail.source_system}:{detail.token})")
+    print(f"  locations: {'; '.join(detail.locations) or 'not stated'}")
+    print(f"  posting page: {detail.posting_url or 'none'}")
+    if detail.apply_url:
+        print(f"  application page: {detail.apply_url}")
+    print(
+        f"  availability: {detail.availability_state.replace('_', ' ')}"
+        f" (missing from {detail.qualifying_absences} qualifying scan(s)); last observed "
+        f"{_when(detail.last_observed_at)}; last trusted board check "
+        f"{_when(detail.last_trusted_check_at)}"
+    )
+    print(
+        f"  first discovered {_when(detail.first_discovered_at)}; source published "
+        f"{_when(detail.source_published_at) if detail.source_published_at else 'not given'}; "
+        f"this content seen since "
+        f"{_when(detail.content_seen_at)} (version {detail.version_no})"
+    )
+    print(f"  kept by screening: {'yes' if detail.retained else 'no'}")
+    print(f"  {d.source_note}")
+    if d.status == "omitted_too_long":
+        print(f"  Description not stored ({d.length} characters); see the posting page.")
+    elif d.status == "empty":
+        print("  The source supplied no description text.")
+    else:
+        print()
+        print(d.safe_html if args.html else plain_text(d.safe_html))
+    return EXIT_OK
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -766,6 +803,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--available", action="store_true", help="every scan whose raw response is still stored"
     )
 
+    listing = commands.add_parser("listing", help="one listing as a detail page would show it")
+    listing.add_argument("posting", type=int)
+    listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
     history = commands.add_parser("history", help="content history of one posting")
     history.add_argument("posting", nargs="?", type=int, help="posting id")
     history.add_argument("--board", metavar="TOKEN")
@@ -837,6 +877,7 @@ HANDLERS = {
     "check-pages": _check_pages,
     "availability": _availability,
     "duplicates": _duplicates,
+    "listing": _listing,
 }
 
 

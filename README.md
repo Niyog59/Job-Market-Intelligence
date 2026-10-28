@@ -26,7 +26,9 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Availability verification: postings move between observed, possibly unavailable,
   assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
   suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
-- Content history for every listing, retained or not.
+- Content history for every listing, retained or not, and a display-safe listing form
+  (sanitized description, original links, freshness, availability) for the job list and
+  detail pages to come.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -128,6 +130,7 @@ Optional settings:
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
+| `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
 | `jobmarket sources check-mapping [--all] [--source S] [--board TOKEN]` | Look for each board on its employer's official careers page; store the evidence |
@@ -320,6 +323,23 @@ The Module 3 flags (same title and description, no location check) are kept with
 
 Duplicate matching covers postings that are or have been retained (the Module 6 scope),
 even though every listing now has content history.
+
+## Listing data for display
+
+`jobmarket.listings.listing_detail()` returns what a detail page needs for one listing: the
+original title and locations, the source's posting page and separate application page,
+availability state, first discovery, source publication and creation dates, when the
+current content was first seen, the board's last trusted check, and the description.
+
+Descriptions are untrusted employer HTML and are never rendered as collected.
+`safe_description_html()` rebuilds them from an allowlist: headings, paragraphs, line
+breaks, lists, bold, italics, block quotes, and absolute `https` links (opened in a new tab
+with `rel="nofollow noopener noreferrer"`). Every other attribute and link type is dropped;
+scripts, styles, images, frames, and forms are removed with their content; text is escaped.
+The text is what the source API supplied, which can differ from the employer's page, so
+each description carries a note on where it came from. A description that was too long to
+store is reported as `omitted_too_long`, and an empty one as `empty`, never as complete.
+`jobmarket listing POSTING_ID` prints the same data in a terminal.
 
 ### Failures, retries, and alerts
 
