@@ -116,6 +116,7 @@ Optional settings:
 | `JOBMARKET_AI_RPM`, `JOBMARKET_AI_DAILY_LIMIT` | unset (required to run extraction) | the account's free-tier requests per minute and per day for that model, as shown in Google AI Studio |
 | `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
+| `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -149,6 +150,7 @@ Optional settings:
 | `jobmarket extract reprocess --reason R [--limit N] [--retained-only]` | Explicitly queue current content under the active configuration |
 | `jobmarket extract renormalize` | Re-apply skill and location clean-up to stored answers (no model calls) |
 | `jobmarket extract disagreements [--limit N]` | Listings where the AI and the screening rules disagree |
+| `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
@@ -409,6 +411,33 @@ Tables: `extraction_inputs` (the exact text sent), `extraction_jobs` (queue),
 `extraction_results` (answer, normalized form, warnings, evidence offsets, versions),
 `extraction_pauses`. Views: `current_extractions`, `extraction_usage_daily`,
 `screening_disagreements`.
+
+### Evaluation
+
+Extraction quality is measured against labelled cases, not assumed. A case pins one
+posting version; its file (under `data/eval/cases/`, outside Git because it contains copied
+posting text) holds the exact document the model receives and a TOML block of labels for a
+chosen set of fields: role categories, seniority, employment type, required and preferred
+skills, skill relationships, overall minimum years, degree-or-experience alternatives,
+sponsorship, work authorization, citizenship, clearance, graduation, work arrangement,
+locations, and remote restrictions.
+
+Each case says who stands behind its labels: `proposed` (drafted without seeing a model
+answer, not checked by a person) or `human_reviewed`. Reports keep the two apart; only
+human-reviewed cases are reported as accuracy. Cases are split into `practice`, used while
+adjusting the instructions, and `holdout`, kept unseen until a final run (`--final`).
+
+```bash
+jobmarket eval prepare --selection selection.json   # write case files (existing ones kept)
+jobmarket eval run --split practice                 # extract through the normal queue
+jobmarket eval report --split practice --cases      # per-field agreement and every mismatch
+jobmarket eval run --split holdout --final          # once, after tuning
+```
+
+Reports count, per field, the cases that match, and for lists the matched, extra, and
+missed items (skills are compared after alias clean-up), plus quotes not found and average
+tokens per listing. Matching labels shows agreement with those labels on those fields; it
+is not a general accuracy claim.
 
 ## Listing data for display
 
