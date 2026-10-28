@@ -10,6 +10,7 @@ human-facing `absolute_url` uses job-boards.eu.greenhouse.io. `content` is HTML-
 import hashlib
 import html
 import json
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -96,6 +97,7 @@ class JobRecord:
     apply_url: str | None = None
     created_at: datetime | None = None
     source_fields: dict[str, Any] | None = None
+    identity_basis: str = "source_id"
 
     def content_hash(self) -> str:
         """Exact source fingerprint: every field as the source sent it, except source
@@ -129,13 +131,33 @@ class JobRecord:
         )
 
 
+_URL_ID = re.compile(r"/jobs/(\d+)(?:[/?#]|$)|[?&]gh_jid=(\d+)")
+
+
+def id_from_url(url: Any) -> int | None:
+    """The job id in a job-specific Greenhouse URL (/jobs/<id> or ?gh_jid=<id>), if any."""
+    if not isinstance(url, str):
+        return None
+    match = _URL_ID.search(url)
+    return int(match.group(1) or match.group(2)) if match else None
+
+
 def _validate_job(raw: Any, index: int) -> JobRecord | Rejection:
     if not isinstance(raw, dict):
         return Rejection(index, None, "record is not an object")
     source_id = raw.get("id")
     sid = str(source_id) if source_id is not None else None
+    identity_basis = "source_id"
     if not isinstance(source_id, int) or isinstance(source_id, bool) or source_id <= 0:
-        return Rejection(index, sid, "missing or invalid id")
+        # Without an id, a job-specific URL that carries one is a stable identity; the
+        # posting is marked so its identity can be reviewed.
+        source_id = id_from_url(raw.get("absolute_url"))
+        identity_basis = "job_url"
+        if source_id is None:
+            return Rejection(
+                index, sid, "missing or invalid id and no job-specific URL: identity unknown",
+                {"title": raw.get("title"), "absolute_url": raw.get("absolute_url")},
+            )  # fmt: skip
     title = raw.get("title")
     if not isinstance(title, str) or not title.strip():
         return Rejection(index, sid, "missing title")
@@ -178,6 +200,7 @@ def _validate_job(raw: Any, index: int) -> JobRecord | Rejection:
         metadata=raw.get("metadata"),
         company_name=raw.get("company_name") if isinstance(raw.get("company_name"), str) else None,
         record_index=index,
+        identity_basis=identity_basis,
     )
 
 
@@ -249,6 +272,10 @@ class GreenhouseConnector:
 
     def board_url(self, token: str, region: str) -> str:
         return BOARD_URL[region].format(token=token)
+
+    def scope_key(self, region: str) -> str:
+        # The API host is the same for every region, so the region is not part of the scope.
+        return f"greenhouse:{API_BASE}/{{token}}/jobs?content=true"
 
     def fetch(
         self,

@@ -61,6 +61,20 @@ MAX_PAGES = 50
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{3,63}")
 
 
+_URL_ID = re.compile(
+    r"jobs(?:\.eu)?\.lever\.co/[^/?#]+/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def id_from_url(url: Any) -> str | None:
+    """The posting id in a Lever job page URL (jobs.lever.co/<site>/<id>), if any."""
+    if not isinstance(url, str):
+        return None
+    match = _URL_ID.search(url)
+    return match.group(1).lower() if match else None
+
+
 def postings_url(token: str, region: str, skip: int, limit: int = PAGE_SIZE) -> str:
     return f"{API_BASE[region]}/{token}?mode=json&skip={skip}&limit={limit}"
 
@@ -93,6 +107,7 @@ class LeverJob:
     first_published: datetime | None = None
     requisition_id: str | None = None
     internal_job_id: int | None = None
+    identity_basis: str = "source_id"
 
     @cached_property
     def content_html(self) -> str:
@@ -211,8 +226,19 @@ def _validate(raw: Any, index: int, page_no: int) -> LeverJob | Rejection:
         return reject(None, "record is not an object")
     source_id = raw.get("id")
     sid = source_id if isinstance(source_id, str) else None
+    identity_basis = "source_id"
     if not isinstance(source_id, str) or not _ID.fullmatch(source_id):
-        return reject(str(source_id) if source_id is not None else None, "missing or invalid id")
+        # Without an id, the posting id in its job-specific hostedUrl is a stable identity;
+        # the posting is marked so its identity can be reviewed.
+        source_id = id_from_url(raw.get("hostedUrl"))
+        identity_basis = "job_url"
+        if source_id is None:
+            return reject(
+                str(raw.get("id")) if raw.get("id") is not None else None,
+                "missing or invalid id and no job-specific URL: identity unknown",
+                {"text": raw.get("text"), "hostedUrl": raw.get("hostedUrl")},
+            )
+        sid = source_id
     title = _text(raw.get("text"))
     if title is None:
         return reject(sid, "missing title (text)")
@@ -269,6 +295,7 @@ def _validate(raw: Any, index: int, page_no: int) -> LeverJob | Rejection:
         salary_description_html=_text(salary_description),
         record_index=index,
         page_no=page_no,
+        identity_basis=identity_basis,
     )
 
 
@@ -367,6 +394,9 @@ class LeverConnector:
 
     def board_url(self, token: str, region: str) -> str:
         return BOARD_URL[region].format(token=token)
+
+    def scope_key(self, region: str) -> str:
+        return f"lever:{API_BASE[region]}/{{token}}?mode=json&limit={PAGE_SIZE}"
 
     def fetch(
         self,

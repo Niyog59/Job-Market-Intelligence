@@ -59,6 +59,7 @@ class PostingRecord(Protocol):
     source_fields: dict[str, Any] | None
     record_index: int
     page_no: int
+    identity_basis: str  # "source_id", or "job_url" when the id came from the job URL
 
     def content_hash(self) -> str: ...
 
@@ -290,6 +291,11 @@ class Connector(Protocol):
     regions: tuple[str, ...]
 
     def board_url(self, token: str, region: str) -> str: ...
+
+    def scope_key(self, region: str) -> str:
+        """How this connector reads a board: API host and request settings. Absence counts
+        compare only scans with equal scope keys."""
+        ...
 
     def fetch(
         self,

@@ -26,7 +26,7 @@ import httpx
 import psycopg
 from psycopg.types.json import Jsonb
 
-from jobmarket import incidents
+from jobmarket import availability, duplicates, incidents
 from jobmarket.clock import Clock, system_clock
 from jobmarket.connectors import (
     USER_AGENT,
@@ -38,7 +38,7 @@ from jobmarket.connectors import (
     saved_pages,
 )
 from jobmarket.raw_store import store_body
-from jobmarket.store import StoreCounts, flag_possible_duplicates, store_scan_results
+from jobmarket.store import StoreCounts, store_scan_results
 
 COLLECTION_LOCK_KEY = 4_815_162_343
 REQUEST_INTERVAL_ENV = "JOBMARKET_REQUEST_INTERVAL"
@@ -110,6 +110,7 @@ class BoardOutcome:
     error: str | None
     source_system: str = "greenhouse"
     pages: int | None = None
+    availability: "availability.ScanJudgement | None" = None
     reported: int | None = None
     received: int | None = None
     invalid: int | None = None
@@ -127,6 +128,7 @@ class RunReport:
     notifications: list[int] = field(default_factory=list)
     abandoned_scans_recovered: int = 0
     duplicate_flags_added: int = 0
+    duplicate_groups_created: int = 0
 
 
 class Collector:
@@ -139,6 +141,7 @@ class Collector:
         sleep: Callable[[float], None] = time.sleep,
         interval: float = DEFAULT_REQUEST_INTERVAL,
         workers_per_source: int = DEFAULT_CONCURRENCY,
+        hold_thresholds: "availability.HoldThresholds | None" = None,
     ) -> None:
         if not conn.autocommit:
             raise ValueError("the collector needs an autocommit connection")
@@ -149,6 +152,7 @@ class Collector:
         self.sleep = sleep
         self.interval = interval
         self.workers_per_source = max(1, min(MAX_CONCURRENCY, workers_per_source))
+        self.hold_thresholds = hold_thresholds or availability.HoldThresholds.from_env()
 
     # --- public ----------------------------------------------------------------------
 
@@ -272,7 +276,9 @@ class Collector:
 
         finished = self.clock()
         with self.conn.transaction():
-            report.duplicate_flags_added = flag_possible_duplicates(self.conn, finished)
+            dup = duplicates.run_rules(self.conn, finished)
+            report.duplicate_flags_added = dup.flags_added
+            report.duplicate_groups_created = dup.groups_created
             report.notifications = incidents.queue_notifications(
                 self.conn, run_id, status, events, finished
             )
@@ -314,16 +320,18 @@ class Collector:
     def _collect_board(self, run_id: int, target: BoardTarget, fetch: BoardFetch) -> BoardOutcome:
         now = self.clock()
         kind = incidents.attempt_kind(incidents.open_incident(self.conn, target.board_id), now)
+        connector = get_connector(target.source_system)
+        scope_key = connector.scope_key(target.region)
         scan_id = self.conn.execute(
             "INSERT INTO board_scans (run_id, board_id, started_at, status, attempt_kind, "
-            "pages_fetched) VALUES (%s, %s, %s, 'running', %s, %s) RETURNING board_scan_id",
-            (run_id, target.board_id, fetch.collected_at, kind, len(fetch.pages)),
+            "pages_fetched, scope_key) VALUES (%s, %s, %s, 'running', %s, %s, %s) "
+            "RETURNING board_scan_id",
+            (run_id, target.board_id, fetch.collected_at, kind, len(fetch.pages), scope_key),
         ).fetchone()[0]
         outcome = BoardOutcome(
             target.token, target.employer, scan_id, "failed", kind, None, target.source_system,
             len(fetch.pages),
         )  # fmt: skip
-        connector = get_connector(target.source_system)
 
         try:
             raw_ids: dict[int, int] = {}
@@ -364,6 +372,17 @@ class Collector:
                         processed_at=self.clock(),
                     )
                 self._finish_scan(scan_id, parsed, counts)
+                judgement = availability.judge_scan(
+                    self.conn,
+                    target.board_id,
+                    scan_id,
+                    parsed.outcome,
+                    counts.touched_postings,
+                    fetch.collected_at,
+                    scope_key,
+                    self.clock(),
+                    self.hold_thresholds,
+                )
                 event = incidents.record_outcome(
                     self.conn,
                     target.board_id,
@@ -380,6 +399,15 @@ class Collector:
             counts = StoreCounts()
             with self.conn.transaction():
                 self._finish_scan(scan_id, parsed, counts)
+                judgement = None
+                try:
+                    with self.conn.transaction():
+                        judgement = availability.judge_scan(
+                            self.conn, target.board_id, scan_id, "failed", [],
+                            fetch.collected_at, scope_key, self.clock(), self.hold_thresholds,
+                        )  # fmt: skip
+                except Exception:  # noqa: BLE001 - an unjudged scan simply counts nothing
+                    pass
                 event = incidents.record_outcome(
                     self.conn, target.board_id, scan_id, "failed", error, kind, self.clock()
                 )
@@ -392,6 +420,7 @@ class Collector:
         outcome.counts = counts
         outcome.incident_event = event.kind
         outcome.incident_id = event.incident_id
+        outcome.availability = judgement
         return outcome
 
     def _finish_scan(self, scan_id: int, parsed: ParsedResponse, counts: StoreCounts) -> None:
@@ -463,6 +492,27 @@ def summarize(report: RunReport) -> list[str]:
             lines.append(f"    {o.status}: {o.error}")
         if o.incident_event not in ("none",):
             lines.append(f"    incident: {o.incident_event.replace('_', ' ')}")
+        a = o.availability
+        if a is not None:
+            if a.outcome == "mass_disappearance":
+                lines.append(f"    availability HOLD opened (hold {a.hold_id}): {a.detail}")
+            elif a.outcome == "held":
+                lines.append(f"    availability: board on hold {a.hold_id}; absences not counted")
+            elif a.outcome in ("baseline", "scope_changed"):
+                lines.append(f"    availability: {a.detail}")
+            changes = [
+                f"{a.newly_possibly_unavailable} possibly unavailable"
+                if a.newly_possibly_unavailable
+                else "",
+                f"{a.newly_inactive} assumed inactive" if a.newly_inactive else "",
+                f"{a.reappeared} listed again" if a.reappeared else "",
+            ]
+            if any(changes):
+                lines.append("    availability: " + ", ".join(c for c in changes if c))
+    if report.duplicate_groups_created:
+        lines.append(
+            f"Duplicate groups created on strong evidence: {report.duplicate_groups_created}"
+        )
     if report.duplicate_flags_added:
         lines.append(f"Possible duplicates flagged (not merged): {report.duplicate_flags_added}")
     if report.notifications:

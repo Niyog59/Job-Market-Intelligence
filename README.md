@@ -23,6 +23,12 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Incremental history: a new content version only for meaningful changes, versioned
   normalization rules, current state ordered by collection time, and safe replay of
   saved responses.
+- Availability verification: postings move between observed, possibly unavailable,
+  assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
+  suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
+- Duplicate handling: records are grouped only on strong evidence (employer requisition
+  ID, identical job-specific application URL); weaker similarity is flagged for review.
+  Every source record keeps its own history and availability.
 - Unit, database, and end-to-end collection tests, and a GitHub Actions workflow that
   runs them against PostgreSQL 17.
 
@@ -92,6 +98,8 @@ Optional settings:
 | `JOBMARKET_RAW_DIR`          | `data/raw`                      | where raw responses are stored (ignored by Git) |
 | `JOBMARKET_REQUEST_INTERVAL` | `1.0`                           | minimum seconds between two requests to the same provider |
 | `JOBMARKET_CONCURRENCY`      | `1`                             | boards of one provider fetched at the same time (1 to 4) |
+| `JOBMARKET_HOLD_ALL_MISSING` | `true`                          | hold a board when every reference job is missing |
+| `JOBMARKET_HOLD_MIN_SHARE`, `JOBMARKET_HOLD_MIN_MISSING` | `0.5`, `10`        | hold a board when at least this share and this many reference jobs are missing |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -107,7 +115,14 @@ Optional settings:
 | `jobmarket collect [--board [SOURCE:]TOKEN ...] [--scheduled]` | Scan enabled Greenhouse and Lever boards now |
 | `jobmarket retry-due` | Run only the retries that are due now |
 | `jobmarket status [--all]` | Per-board last result, last complete scan, retained jobs, incidents |
-| `jobmarket jobs [--board TOKEN] [--early-career] [--review] [--limit N]` | Retained jobs, newest discoveries first |
+| `jobmarket jobs [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs (observed or possibly unavailable), newest discoveries first |
+| `jobmarket availability show POSTING_ID` | A posting's availability state and every transition with its reason and evidence |
+| `jobmarket availability close POSTING_ID --reason R --evidence-url URL --evidence-text T` | Mark a posting closed on official evidence |
+| `jobmarket availability holds [--all]` | Board holds against mass disappearances |
+| `jobmarket duplicates list [--all]` | Duplicate groups and open possible duplicates |
+| `jobmarket duplicates confirm FLAG_ID --reason R` / `dismiss FLAG_ID --reason R` | Review a possible duplicate |
+| `jobmarket duplicates dissolve GROUP_ID --reason R` | Undo a duplicate group |
+| `jobmarket availability release HOLD_ID --reason collection-issue-resolved\|source-removals-verified --evidence T` | Release a hold after review |
 | `jobmarket notifications [--full] [--send]` | Show the alert outbox, or deliver it if SMTP is configured |
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
@@ -164,8 +179,13 @@ sources get the same history, completeness, retry, and status guarantees.
   creation time and never used as a publication date; Lever gives no update time.
 
 Identity is source system + board + the source's job id, so the same title at two
-employers or on two sources is never merged. Possible duplicates (same employer, title,
-and description) are flagged in `posting_duplicate_flags`, never merged.
+employers or on two sources is never merged, and reprocessing the same record never
+creates a second posting. If a record has no usable id but its job-specific URL carries one
+(Greenhouse `/jobs/<id>` or `gh_jid=<id>`, Lever `jobs.lever.co/<site>/<id>`), that id is
+used and the posting's `identity_basis` is `job_url` (shown as "identity from job URL" for
+review); a later record with the id confirms it. A record with neither is kept in
+`rejected_records` with its title and URL as evidence and makes the scan partial. Matching
+different records that may be the same opening is separate (see "Duplicates").
 
 Requests use a descriptive User-Agent, a 30-second timeout, at most
 `JOBMARKET_CONCURRENCY` boards per provider at a time, and at least
@@ -173,8 +193,8 @@ Requests use a descriptive User-Agent, a 30-second timeout, at most
 request quota is assumed for either API (Lever's documented limit applies to submitting
 applications, which this project never does).
 
-- Only complete scans count a job as missing (`complete_scan_absences`). Failed and
-  partial scans never change existing records. Nothing is closed yet.
+- Failed and partial scans never change existing records or advance absences; whether a
+  missing job is hidden is decided by the availability rules below.
 - Sponsorship is `not_stated` unless the posting says whether it is available; a
   question asking applicants about sponsorship is recorded as `asked_only`.
 
@@ -192,9 +212,110 @@ Three kinds of evidence are kept apart, because none of them proves the others:
   source's listing at that collection time.
 - **Page availability** (`posting_page_checks`, `jobmarket check-pages`): a sampled GET of
   the posting page and, for Lever, the application page. Nothing is ever submitted. A page
-  that loads shows only that it was published then; it does not prove funded headcount or
+  that says applications are closed is recorded as `closed_notice` and closes the posting
+  (see "Availability"). A page that otherwise loads shows only that it was published then; it does not prove funded headcount or
   active interviewing. `refused`, `rate_limited`, `server_error`, and `unreachable` are
   access or collection problems and never mean a job closed.
+
+## Availability
+
+Each source posting has one state, changed only on trustworthy evidence and never deleted:
+
+| State | Meaning | In the active feed |
+|---|---|---|
+| `observed` | found in a valid source response | yes |
+| `possibly_unavailable` | missing from one or two qualifying scans | yes, with a warning |
+| `assumed_inactive` | missing from a third qualifying scan | no (`jobs --all-states` shows it) |
+| `closed` | official evidence that applications are closed | no |
+
+**Qualifying scans.** An absence counts only after a complete, fully processed scan of the
+same board read under the same scope (source, API host, and request settings) as the
+board's comparison reference, with no board hold and no mass disappearance. Failed and
+partial scans pause counting: they neither advance nor reset it. Each scan is judged once
+(`absence_checks`), so replaying a saved response never counts again; replays do not judge
+scans. The first complete scan of a board becomes its reference without counting
+anything. A scan under a different scope does not count either and becomes the new
+reference, so counting resumes from the next scan.
+
+**Reappearance.** A posting listed again by any usable scan (complete or partial) returns
+to `observed` and its count resets; its first-discovery time and history are kept. A closed
+posting listed again stays closed and the reappearance is recorded for review.
+
+**Mass-disappearance protection.** Each complete scan is compared with the job IDs of the
+board's reference scan, not just with its total. If every reference job is missing (even
+on a small board), or at least 50% and at least 10 of them are, the board is put on hold
+(`board_holds`): absences are not counted, while new jobs, reappearances, and explicit
+closures are still recorded. A repeated suspicious result keeps the hold. A person
+releases it after review:
+
+```bash
+jobmarket availability holds
+jobmarket availability release 7 --reason collection-issue-resolved \
+    --evidence "board token was mistyped in the registry; fixed and rescanned"
+jobmarket availability release 8 --reason source-removals-verified \
+    --evidence "employer careers page now lists 2 openings"
+```
+
+`collection-issue-resolved` keeps the board's last trusted reference.
+`source-removals-verified` makes the latest complete scan the reference, so the removed
+jobs are compared normally from then on. In both cases counting restarts with the next
+qualifying scan, and scans taken during the hold are never counted. `jobmarket status`
+shows active holds and each board's last trusted check.
+
+**Closed.** `jobmarket availability close` records the official evidence (URL, the text,
+and a reason) and hides the posting at once; it works during a hold. `jobmarket
+check-pages` also closes a posting when the posting's own page (the final URL still names
+the posting, so not a board front page or an error page) says in visible text that
+applications are closed, for example "no longer accepting applications" or "this position
+has been filled"; the page check and the matched sentence are stored as the evidence. A missing posting, a
+404, or any request error is never treated as a closure or as evidence that someone was
+hired. Every transition is in `posting_availability_events` with its reason, scan, and
+evidence; `jobmarket availability show` prints them.
+
+When availability tracking was introduced, every existing posting started as `observed`
+with no qualifying absences; earlier Module 3 counts remain in `complete_scan_absences`.
+
+## Duplicates
+
+Repeated ingestion and duplicate matching are different problems. Reprocessing the same
+source record can never create a second posting (identity is unique per board and source
+id). Duplicate matching compares *different* source records, often on different boards or
+sources, whose ids are not comparable. It runs after every collection, in one transaction,
+and is safe to repeat. Rules are versioned (`duplicates.RULE_VERSION`), and every group and
+flag stores its rule, version, and evidence. Confidence is a category, not a probability.
+
+**Grouped automatically (strong evidence)** in `duplicate_groups`:
+
+- `requisition_id`: the same employer and the same employer-issued requisition ID
+  (compared case- and space-insensitively) with the same normalized title. A requisition
+  used for different titles is flagged as `requisition_id_conflict` instead.
+- `application_url`: the same job-specific application URL (scheme and host case, trailing
+  slashes, and tracking parameters such as `utm_*` and `gh_src` ignored). A URL counts only
+  if it names the posting's id or carries an id-like value; a shared careers front page is
+  not evidence.
+
+**Flagged for review only** in `posting_duplicate_flags` (`title_location_description`):
+the same employer, the same normalized title (a trailing " - City, ST" is ignored), at least
+one shared location (every location of a multi-location posting counts), and the same
+description after normalization. Missing locations or descriptions never count as a match.
+Publication and discovery dates are stored as evidence only; discovery date is not
+publication date, and Lever gives no publication date. Conflicting evidence, such as two
+different requisition IDs, is recorded on the flag. Similar titles in different places or
+with different text are not flagged.
+
+Every source record keeps its own identity, history, and availability: closing one record
+never closes its counterparts. Review is reversible and remembered:
+
+```bash
+jobmarket duplicates list
+jobmarket duplicates dismiss 12 --reason "separate teams, different hiring managers"
+jobmarket duplicates confirm 13 --reason "same opening posted on both boards"
+jobmarket duplicates dissolve 4 --reason "employer reuses requisition numbers per city"
+```
+
+A dismissed flag is not raised again, and a dissolved group is not recreated by its rule.
+The Module 3 flags (same title and description, no location check) are kept with status
+`superseded`; the current rule reopens any pair it also matches.
 
 ### Failures, retries, and alerts
 
@@ -331,13 +452,20 @@ raw_responses    ─< posting_observations
 | `rejected_records`     | record from a usable response that failed validation |
 | `collection_incidents` | run of unsuccessful scans of a board, with retry state |
 | `notifications`        | queued alert or recovery message (the outbox) |
-| `posting_duplicate_flags` | possible duplicate postings, for review |
+| `posting_duplicate_flags` | possible duplicate pair, with rule, evidence, and review status |
+| `duplicate_groups`     | group of source records judged the same opening, with rule and evidence |
+| `duplicate_group_members` | source record in a duplicate group |
 | `replay_runs`          | attempt to reprocess a saved raw response |
 | `board_mapping_checks` | check of a board's official careers page for a reference to that board |
+| `posting_availability_events` | availability state change of a posting, with reason, scan, and evidence |
+| `board_scan_listings`  | posting listed by a complete scan (the comparison reference for later scans) |
+| `absence_checks`       | judgement of one scan for absence counting (qualifying, held, and so on) |
+| `board_holds`          | board-level hold opened by a mass disappearance, with its review and release |
 | `posting_page_checks`  | sampled check of a posting's job or application page |
 
 Views: `board_status` (one row per board for status displays), `retained_jobs`
-(retained postings with their current content), `posting_version_stages` (content stages
+(retained postings with their current content and availability), `active_jobs` (the
+default feed: observed or possibly unavailable), `posting_version_stages` (content stages
 in collection order with change windows), and `posting_history_problems` (integrity
 checks; expected empty).
 

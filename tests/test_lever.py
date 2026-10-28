@@ -85,8 +85,14 @@ def test_cosmetic_and_meaningful_lever_differences():
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        (lambda j: j.pop("id"), "missing or invalid id"),
-        (lambda j: j.update(id="a/b"), "missing or invalid id"),
+        (
+            lambda j: (j.pop("id"), j.update(hostedUrl="https://jobs.lever.co/lev")),
+            "no job-specific URL: identity unknown",
+        ),
+        (
+            lambda j: j.update(id="a/b", hostedUrl="https://jobs.lever.co/lev/apply"),
+            "no job-specific URL: identity unknown",
+        ),
         (lambda j: j.update(text="  "), "missing title (text)"),
         (lambda j: j.update(hostedUrl="http://jobs.lever.co/x"), "missing or non-https hostedUrl"),
         (lambda j: j.update(applyUrl="ftp://x"), "non-https applyUrl"),
@@ -301,3 +307,11 @@ def test_inline_retry_budget_allows_one_short_wait():
     budget = InlineRetryBudget()
     assert not budget.take(None) and not budget.take(31)
     assert budget.take(2) and not budget.take(2)
+
+
+def test_missing_id_falls_back_to_the_job_url_and_is_marked():
+    raw = lever_job(7)
+    raw.pop("id")
+    (job,) = lever.parse_pages([page(1, [raw])]).jobs
+    assert job.source_id == lever_id(7) and job.identity_basis == "job_url"
+    assert lever.parse_pages([page(1, [lever_job(7)])]).jobs[0].identity_basis == "source_id"

@@ -165,12 +165,22 @@ def _store_job(
 
     inserted = conn.execute(
         "INSERT INTO source_postings (board_id, source_posting_id, first_discovered_at, "
-        "last_observed_at) VALUES (%s, %s, %s, %s) "
+        "last_observed_at, identity_basis) VALUES (%s, %s, %s, %s, %s) "
         "ON CONFLICT (board_id, source_posting_id) DO NOTHING RETURNING posting_id",
-        (board_id, source_id, observed_at, observed_at),
+        (board_id, source_id, observed_at, observed_at, job.identity_basis),
     ).fetchone()
     if inserted:
         counts.new_postings += 1
+        conn.execute(
+            "INSERT INTO posting_availability_events (posting_id, from_state, to_state, "
+            "qualifying_absences, reason, board_scan_id, occurred_at, recorded_at) "
+            "VALUES (%s, NULL, 'observed', 0, 'first observed', %s, %s, %s)",
+            (inserted[0], board_scan_id, observed_at, processed_at),
+        )
+        conn.execute(
+            "UPDATE source_postings SET availability_changed_at = %s WHERE posting_id = %s",
+            (observed_at, inserted[0]),
+        )
     # The lock is taken before anything else is read, so every later statement in this
     # transaction sees the committed results of any transaction that held it before.
     posting_id = conn.execute(
@@ -185,9 +195,12 @@ def _store_job(
             "first_discovered_at = LEAST(first_discovered_at, %(t)s), "
             "last_observed_at = GREATEST(last_observed_at, %(t)s), "
             "complete_scan_absences = CASE WHEN %(t)s >= last_observed_at THEN 0 "
-            "ELSE complete_scan_absences END "
+            "ELSE complete_scan_absences END, "
+            # An id seen in the source record confirms an identity first taken from a URL.
+            "identity_basis = CASE WHEN %(b)s = 'source_id' THEN 'source_id' "
+            "ELSE identity_basis END "
             "WHERE posting_id = %(p)s",
-            {"t": observed_at, "p": posting_id},
+            {"t": observed_at, "p": posting_id, "b": job.identity_basis},
         )
 
     current_key = conn.execute(
@@ -548,41 +561,3 @@ def refingerprint_versions(
                 if earlier.fingerprint != current.fingerprint:
                     effects.append((version_id, recorded_rules))
     return RefingerprintResult(rules, len(rows), computed, effects)
-
-
-def flag_possible_duplicates(conn: psycopg.Connection, detected_at: datetime) -> int:
-    """Flag retained postings that look like the same vacancy, without merging them.
-
-    Same employer, same normalized title, and the same description text in their current
-    versions, across boards or across city-targeted postings. Each member is linked to the
-    lowest posting id of its group, so a group of n postings creates n - 1 flags rather than
-    every pair.
-    """
-    cur = conn.execute(
-        """
-        WITH current AS (
-            SELECT p.posting_id, b.employer_id,
-                   lower(regexp_replace(
-                       regexp_replace(v.title, '\\s+-\\s+[^-]+,\\s*[^-]+$', ''),
-                       '\\s+', ' ', 'g')) AS norm_title,
-                   md5(coalesce(v.description_text, '')) AS desc_hash
-            FROM source_postings p
-            JOIN posting_versions v ON v.version_id = p.current_version_id
-            JOIN source_boards b ON b.board_id = p.board_id
-            JOIN posting_screenings ps ON ps.posting_id = p.posting_id
-            WHERE ps.retained
-        ), grouped AS (
-            SELECT posting_id,
-                   min(posting_id) OVER (PARTITION BY employer_id, norm_title, desc_hash)
-                       AS anchor,
-                   count(*) OVER (PARTITION BY employer_id, norm_title, desc_hash) AS n
-            FROM current
-        )
-        INSERT INTO posting_duplicate_flags (posting_id, related_posting_id, reason, detected_at)
-        SELECT anchor, posting_id, 'same employer, title, and description', %s
-        FROM grouped WHERE n > 1 AND posting_id <> anchor
-        ON CONFLICT DO NOTHING
-        """,
-        (detected_at,),
-    )
-    return cur.rowcount
