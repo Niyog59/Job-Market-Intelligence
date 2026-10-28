@@ -112,3 +112,10 @@ def test_cli_listing(h, monkeypatch, isolated_schema, capsys):
     assert cli.main(["listing", str(posting)]) == cli.EXIT_OK
     out = capsys.readouterr().out
     assert "Role" in out and "  - Build pipelines" in out and "posting page: https://" in out
+
+
+def test_lever_workplace_type_is_not_shown_as_a_place():
+    from jobmarket.listings import _locations
+
+    offices = [{"name": "Plano, Texas"}, {"name": "Workplace type: hybrid"}]
+    assert _locations("Plano, Texas", offices) == ["Plano, Texas"]

@@ -231,7 +231,9 @@ def _locations(location_text: str | None, offices: Any) -> list[str]:
     for office in offices or []:
         if isinstance(office, dict):
             value = office.get("location") or office.get("name")
-            if isinstance(value, str) and value and value not in found:
+            # Lever's workplace type is stored alongside offices; it is not a place.
+            if (isinstance(value, str) and value and value not in found
+                    and not value.startswith("Workplace type:")):  # fmt: skip
                 found.append(value)
     return found
 
