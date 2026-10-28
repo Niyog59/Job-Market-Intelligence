@@ -8,6 +8,8 @@ from gh_fakes import gh_job, ok
 
 from jobmarket import availability, cli, db
 from jobmarket.availability import AvailabilityError, HoldThresholds, close_posting, release_hold
+from jobmarket.connectors import Pacer
+from jobmarket.evidence import check_pages, page_targets
 from jobmarket.greenhouse import GreenhouseConnector
 from jobmarket.replay import replay_scans
 
@@ -169,6 +171,34 @@ def test_manual_closure_hides_at_once_and_needs_evidence(acme):
     ).startswith("listed again after an official closure")
 
 
+def test_page_text_closure_only_on_the_postings_own_page(acme):
+    acme.scan([1, 2, 3])
+    pages = {
+        "/acme/jobs/1": httpx.Response(
+            200, text="<h1>Data Engineer</h1><p>We are no longer accepting applications.</p>"
+        ),
+        "/acme/jobs/2": httpx.Response(404, text="Not found"),
+        "/acme/jobs/3": httpx.Response(
+            302, headers={"location": "https://job-boards.greenhouse.io/acme"}
+        ),
+        "/acme": httpx.Response(200, text="This position has been filled."),
+    }
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: pages[r.url.path]), follow_redirects=True
+    )
+    targets = page_targets(acme.env.conn, per_board=5)
+    results = {r.target.source_posting_id: r.outcome for r in check_pages(
+        acme.env.conn, client, targets, acme.env.clock, Pacer(0))}  # fmt: skip
+    assert results == {"1": "closed_notice", "2": "not_found", "3": "redirected"}
+    assert acme.state(1) == ("closed", 0)
+    assert acme.state(2) == ("observed", 0)  # a missing page is not proof of closure
+    assert acme.state(3) == ("observed", 0)  # a board front page is not the job's page
+    evidence = acme.env.scalar(
+        "SELECT evidence FROM posting_availability_events WHERE to_state = 'closed'"
+    )
+    assert evidence["source"] == "page check" and "no longer accepting" in evidence["text"]
+
+
 def test_all_jobs_missing_opens_a_hold_even_on_a_small_board(acme):
     acme.scan([1, 2])
     held = acme.scan([])
@@ -327,3 +357,14 @@ def test_cli_review_commands(cli_env, capsys):
     assert cli.main([*close, "--evidence-url", "https://x.example", "--evidence-text", "x"]) == 0
     assert cli.main(["jobs"]) == cli.EXIT_OK
     assert "assumed inactive or closed; use --all-states" in capsys.readouterr().out
+
+
+def test_closure_wording_inside_scripts_is_ignored():
+    from jobmarket.evidence import closure_notice
+
+    page = (
+        "<script>var i18n={closed:'This job is no longer accepting applications'}</script>"
+        "<h1>Data Engineer</h1><p>Apply below.</p>"
+    )
+    assert closure_notice(page) is None
+    assert "has been filled" in closure_notice("<p>This position has been filled.</p>")

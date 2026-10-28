@@ -8,7 +8,9 @@ refused rather than worked around. The registry stays the decision record: check
 change a board's verification status.
 
 Page check: for a sample of currently retained postings, GET the posting page and, if the
-source gives one, the application page. Applications are never submitted. A page that
+source gives one, the application page. Applications are never submitted. If the posting's
+own page explicitly says applications are closed, the posting is marked closed with that
+text as evidence. A page that
 loads shows only that it was published at check time; it does not prove funded headcount
 or active interviewing. Refusals, rate limits, server errors, and timeouts are access or
 collection problems, never evidence that a job closed.
@@ -22,7 +24,9 @@ from datetime import datetime
 import httpx
 import psycopg
 
+from jobmarket.availability import close_posting
 from jobmarket.connectors import REQUEST_TIMEOUT_SECONDS, USER_AGENT, Pacer
+from jobmarket.normalize import visible_text
 
 MAX_REDIRECTS = 5
 
@@ -212,6 +216,7 @@ def page_targets(
             JOIN source_boards b ON b.board_id = p.board_id
             JOIN employers e ON e.employer_id = b.employer_id
             WHERE ps.retained AND b.is_active
+              AND p.availability_state IN ('observed', 'possibly_unavailable')
               AND (%s::text IS NULL OR b.source_system = %s)
               AND (%s::text[] IS NULL OR b.board_key = ANY(%s))
         ) ranked
@@ -228,6 +233,28 @@ def page_targets(
                     PageTarget(pid, vid, employer, src, token, sid, title, kind, page_url)
                 )
     return targets
+
+
+# Wording that explicitly says the posting no longer takes applications. Only matched on the
+# posting's own page (the final URL still names the posting), never on a board front page
+# or an error page, and a missing or failing page is never treated as a closure.
+CLOSURE_PHRASES = re.compile(
+    r"no longer (accepting|taking) applications|not (currently )?accepting applications"
+    r"|applications? (are|is|have been|has been) closed|this (job|position|posting|role|"
+    r"opening|vacancy) (is|has been) (closed|filled)|position has been filled",
+    re.IGNORECASE,
+)
+
+
+def closure_notice(markup: str) -> str | None:
+    """The sentence of a page that explicitly says applications are closed, if any. Only
+    visible text counts: scripts and styles often carry interface strings for other states."""
+    text = " ".join(visible_text(markup).split())
+    match = CLOSURE_PHRASES.search(text)
+    if match is None:
+        return None
+    start = max(0, match.start() - 80)
+    return " ".join(text[start : match.end() + 80].split())
 
 
 def check_page(client: httpx.Client, target: PageTarget, pacer: Pacer) -> PageResult:
@@ -253,6 +280,9 @@ def check_page(client: httpx.Client, target: PageTarget, pacer: Pacer) -> PageRe
         return PageResult(
             target, "redirected", status, final, "landed on a page without the posting id"
         )
+    notice = closure_notice(response.text)
+    if notice:
+        return PageResult(target, "closed_notice", status, final, notice)
     return PageResult(target, "available", status, final, None)
 
 
@@ -266,20 +296,33 @@ def check_pages(
     results = []
     for target in targets:
         result = check_page(client, target, pacer)
-        conn.execute(
+        checked_at = clock()
+        check_id = conn.execute(
             "INSERT INTO posting_page_checks (posting_id, version_id, url_kind, url, checked_at, "
-            "http_status, final_url, outcome, detail) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "http_status, final_url, outcome, detail) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING page_check_id",
             (
                 target.posting_id,
                 target.version_id,
                 target.url_kind,
                 target.url,
-                clock(),
+                checked_at,
                 result.http_status,
                 result.final_url,
                 result.outcome,
                 result.detail,
             ),
-        )
+        ).fetchone()[0]
+        if result.outcome == "closed_notice":
+            close_posting(
+                conn,
+                target.posting_id,
+                "the employer's job page says applications are closed",
+                result.final_url,
+                result.detail,
+                checked_at,
+                source="page check",
+                page_check_id=check_id,
+            )
         results.append(result)
     return results

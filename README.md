@@ -201,7 +201,8 @@ Three kinds of evidence are kept apart, because none of them proves the others:
   source's listing at that collection time.
 - **Page availability** (`posting_page_checks`, `jobmarket check-pages`): a sampled GET of
   the posting page and, for Lever, the application page. Nothing is ever submitted. A page
-  that loads shows only that it was published then; it does not prove funded headcount or
+  that says applications are closed is recorded as `closed_notice` and closes the posting
+  (see "Availability"). A page that otherwise loads shows only that it was published then; it does not prove funded headcount or
   active interviewing. `refused`, `rate_limited`, `server_error`, and `unreachable` are
   access or collection problems and never mean a job closed.
 
@@ -251,7 +252,11 @@ qualifying scan, and scans taken during the hold are never counted. `jobmarket s
 shows active holds and each board's last trusted check.
 
 **Closed.** `jobmarket availability close` records the official evidence (URL, the text,
-and a reason) and hides the posting at once; it works during a hold. A missing posting, a
+and a reason) and hides the posting at once; it works during a hold. `jobmarket
+check-pages` also closes a posting when the posting's own page (the final URL still names
+the posting, so not a board front page or an error page) says in visible text that
+applications are closed, for example "no longer accepting applications" or "this position
+has been filled"; the page check and the matched sentence are stored as the evidence. A missing posting, a
 404, or any request error is never treated as a closure or as evidence that someone was
 hired. Every transition is in `posting_availability_events` with its reason, scan, and
 evidence; `jobmarket availability show` prints them.

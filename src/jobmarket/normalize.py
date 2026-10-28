@@ -128,6 +128,11 @@ def _visible_text(markup: str) -> str:
     return "".join(parser.parts)
 
 
+def visible_text(markup: str) -> str:
+    """The text a reader sees in an HTML fragment (no scripts or styles)."""
+    return _visible_text(markup)
+
+
 # --- compensation and employment type --------------------------------------------------------
 
 _COMPENSATION_FIELD = re.compile(r"salary|compensation|\bpay\b|pay range|wage|\bote\b", re.I)
