@@ -165,9 +165,9 @@ def _store_job(
 
     inserted = conn.execute(
         "INSERT INTO source_postings (board_id, source_posting_id, first_discovered_at, "
-        "last_observed_at) VALUES (%s, %s, %s, %s) "
+        "last_observed_at, identity_basis) VALUES (%s, %s, %s, %s, %s) "
         "ON CONFLICT (board_id, source_posting_id) DO NOTHING RETURNING posting_id",
-        (board_id, source_id, observed_at, observed_at),
+        (board_id, source_id, observed_at, observed_at, job.identity_basis),
     ).fetchone()
     if inserted:
         counts.new_postings += 1
@@ -195,9 +195,12 @@ def _store_job(
             "first_discovered_at = LEAST(first_discovered_at, %(t)s), "
             "last_observed_at = GREATEST(last_observed_at, %(t)s), "
             "complete_scan_absences = CASE WHEN %(t)s >= last_observed_at THEN 0 "
-            "ELSE complete_scan_absences END "
+            "ELSE complete_scan_absences END, "
+            # An id seen in the source record confirms an identity first taken from a URL.
+            "identity_basis = CASE WHEN %(b)s = 'source_id' THEN 'source_id' "
+            "ELSE identity_basis END "
             "WHERE posting_id = %(p)s",
-            {"t": observed_at, "p": posting_id},
+            {"t": observed_at, "p": posting_id, "b": job.identity_basis},
         )
 
     current_key = conn.execute(

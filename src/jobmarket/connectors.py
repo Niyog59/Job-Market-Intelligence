@@ -59,6 +59,7 @@ class PostingRecord(Protocol):
     source_fields: dict[str, Any] | None
     record_index: int
     page_no: int
+    identity_basis: str  # "source_id", or "job_url" when the id came from the job URL
 
     def content_hash(self) -> str: ...
 

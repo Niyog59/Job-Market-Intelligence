@@ -173,8 +173,14 @@ sources get the same history, completeness, retry, and status guarantees.
   creation time and never used as a publication date; Lever gives no update time.
 
 Identity is source system + board + the source's job id, so the same title at two
-employers or on two sources is never merged. Possible duplicates (same employer, title,
-and description) are flagged in `posting_duplicate_flags`, never merged.
+employers or on two sources is never merged, and reprocessing the same record never
+creates a second posting. If a record has no usable id but its job-specific URL carries one
+(Greenhouse `/jobs/<id>` or `gh_jid=<id>`, Lever `jobs.lever.co/<site>/<id>`), that id is
+used and the posting's `identity_basis` is `job_url` (shown as "identity from job URL" for
+review); a later record with the id confirms it. A record with neither is kept in
+`rejected_records` with its title and URL as evidence and makes the scan partial. Possible
+duplicates (same employer, title, and description) are flagged in
+`posting_duplicate_flags`, never merged.
 
 Requests use a descriptive User-Agent, a 30-second timeout, at most
 `JOBMARKET_CONCURRENCY` boards per provider at a time, and at least
