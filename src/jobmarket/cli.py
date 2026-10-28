@@ -2,13 +2,14 @@
 
 import argparse
 import sys
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import psycopg
 
-from jobmarket import db
+from jobmarket import db, extraction
 from jobmarket.availability import ACTIVE_STATES, AvailabilityError, close_posting, release_hold
 from jobmarket.clock import system_clock
 from jobmarket.collector import (
@@ -30,7 +31,7 @@ from jobmarket.evidence import (
     page_targets,
 )
 from jobmarket.incidents import next_retry_time
-from jobmarket.listings import listing_detail, plain_text
+from jobmarket.listings import listing_detail, plain_text, summary_lines
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
 from jobmarket.raw_store import RAW_RETENTION, cleanup_raw, raw_dir
@@ -690,6 +691,163 @@ def _listing(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _extract(settings: Settings, args) -> int:
+    try:
+        config = extraction.ExtractionConfig.from_env()
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    command = args.extract_command
+    if command == "run":
+        return _extract_run(settings, config, args)
+    with db.connect(settings, autocommit=True) as conn:
+        if command == "status":
+            _extract_status(extraction.status(conn, config, system_clock()))
+        elif command == "show":
+            return _extract_show(conn, args)
+        elif command == "reprocess":
+            try:
+                result = extraction.reprocess(
+                    conn, config, system_clock(), args.reason, args.limit, args.retained_only
+                )
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_FAILURE
+            print(
+                f"Queued {result.queued} listing(s) under {config.key}; reset {result.reset} "
+                f"that had given up; superseded {result.superseded} open job(s) under other "
+                "configurations. Nothing is sent until `jobmarket extract run`."
+            )
+        elif command == "renormalize":
+            n = extraction.renormalize(conn, system_clock())
+            print(f"Re-normalized {n} stored answer(s); no model calls were made.")
+        elif command == "disagreements":
+            rows = conn.execute(
+                "SELECT posting_id, employer, title, rules_retained, ai_would_retain, "
+                "rule_families, ai_categories, rule_texas_eligibility, ai_place "
+                "FROM screening_disagreements ORDER BY rules_retained DESC, posting_id LIMIT %s",
+                (args.limit,),
+            ).fetchall()
+            total = conn.execute("SELECT count(*) FROM screening_disagreements").fetchone()[0]
+            print(f"{total} listing(s) where the AI and the rules disagree (rules decide):")
+            for pid, emp, title, kept, ai, fams, cats, elig, place in rows:
+                print(
+                    f"  {pid:>6}  rules {'keep' if kept else 'skip'} / AI "
+                    f"{'keep' if ai else 'skip'}  {emp}: {title}\n"
+                    f"          rules {list(fams or [])} {elig}; AI {cats} {place}"
+                )
+    return EXIT_OK
+
+
+def _extract_run(settings: Settings, config, args) -> int:
+    import os
+
+    from jobmarket.gemini import API_KEY_ENV, GeminiClient
+
+    key = os.environ.get(API_KEY_ENV, "").strip()
+    if not key:
+        print(f"Configuration error: {API_KEY_ENV} is not set.", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    try:
+        config.require_limits()
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    with db.connect(settings, autocommit=True) as conn:
+        try:
+            report = extraction.run_extraction(
+                conn, client.generate, config, system_clock, time.sleep, args.limit
+            )
+        except extraction.ExtractionBusy as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_BUSY
+    print(
+        f"Extraction run {report.run_id} ({config.key}): {report.requests} request(s), "
+        f"{report.succeeded} extracted ({report.warnings} with warnings), {report.reused} "
+        f"reused without a request, {report.failed} failed ({report.gave_up} gave up), "
+        f"{report.superseded} superseded by newer content."
+    )
+    if report.queued_now:
+        print(f"Queued {report.queued_now} newly stored listing(s) first.")
+    print(f"Stopped: {report.stop_reason}.")
+    for error in report.errors[:10]:
+        print(f"  {error}")
+    return EXIT_OK
+
+
+def _extract_status(info: dict) -> None:
+    print(f"Active configuration: {info['config_key']}")
+    labels = {1: "new retained", 2: "retained backlog", 3: "new other", 4: "other backlog"}
+    if not info["queue"]:
+        print("  queue: empty")
+    for state, priority, n in info["queue"]:
+        print(f"  {state:10} {labels[priority]:17} {n:>6}")
+    if info["other_config_open"]:
+        print(
+            f"  {info['other_config_open']} open job(s) under other configurations "
+            "(not run; `extract reprocess` supersedes them)"
+        )
+    if info["not_yet_queued"]:
+        print(f"  {info['not_yet_queued']} listing(s) not queued yet (queued by the next run)")
+    req, ok, prompt, out, thought, total = info["usage_today"]
+    print(
+        f"Today ({info['pacific_day']}, Pacific): {req} request(s), {ok} successful; tokens "
+        f"{prompt} in, {out} out, {thought} thinking, {total} total."
+    )
+    if info["paid_equivalent_today"] is not None:
+        print(
+            f"  At paid rates this would be about ${info['paid_equivalent_today']:.4f}; the "
+            "free tier is not billed (planning figure only)."
+        )
+    if info["safety_stop_at"] is not None:
+        print(f"  Safety stop at {info['safety_stop_at']} request(s) today.")
+    if info["paused_until"]:
+        print(f"  Paused until {_when(info['paused_until'])} (daily quota).")
+    results = info["current_results"]
+    print(
+        f"Current results: {results.get('valid', 0)} valid, "
+        f"{results.get('valid_with_warnings', 0)} with warnings."
+    )
+
+
+def _extract_show(conn, args) -> int:
+    row = conn.execute(
+        "SELECT c.result_id, c.config_key, c.validation_status, c.normalized, c.derived, "
+        "r.validation_issues, r.evidence, r.created_at FROM current_extractions c "
+        "JOIN extraction_results r USING (result_id) WHERE c.posting_id = %s",
+        (args.posting,),
+    ).fetchone()
+    if row is None:
+        job = conn.execute(
+            "SELECT j.status, j.skip_reason, j.last_error FROM extraction_jobs j "
+            "JOIN source_postings p ON p.current_version_id = j.version_id "
+            "WHERE p.posting_id = %s ORDER BY j.job_id DESC LIMIT 1",
+            (args.posting,),
+        ).fetchone()
+        if job is None:
+            print("Not queued for extraction yet.")
+        else:
+            print(f"No result for the current content: {job[0]} {job[1] or ''} {job[2] or ''}")
+        return EXIT_OK
+    result_id, key, valid, norm, derived, issues, evidence, created = row
+    print(f"Result {result_id} ({key}), {valid}, extracted {_when(created)}")
+    for line in summary_lines(norm):
+        print(f"  {line}")
+    verdict = "would keep" if derived["ai_would_retain"] else "would skip"
+    print(
+        f"  compared with screening: AI {verdict}"
+        f" (categories {derived['role_categories']}, place {derived['place']})"
+    )
+    for issue in issues:
+        print(f"  warning: {issue['path']}: {issue['issue']} {issue.get('detail') or ''}")
+    if args.evidence:
+        for item in evidence:
+            mark = "found" if item["found"] else "NOT FOUND"
+            print(f"  [{mark}] {item['path']}: {item['quote']!r}")
+    return EXIT_OK
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -803,6 +961,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--available", action="store_true", help="every scan whose raw response is still stored"
     )
 
+    ext = commands.add_parser("extract", help="AI requirement extraction queue and results")
+    ext_cmds = ext.add_subparsers(dest="extract_command", required=True)
+    ext_cmds.add_parser("status", help="queue, today's usage, pause, and results")
+    ext_run = ext_cmds.add_parser("run", help="send queued listings to the model, within limits")
+    ext_run.add_argument("--limit", type=int, metavar="N", help="handle at most N jobs")
+    ext_show = ext_cmds.add_parser("show", help="the current extraction of one listing")
+    ext_show.add_argument("posting", type=int)
+    ext_show.add_argument("--evidence", action="store_true", help="list every quote")
+    ext_re = ext_cmds.add_parser(
+        "reprocess", help="queue current content under the active configuration (explicit)"
+    )
+    ext_re.add_argument("--reason", required=True)
+    ext_re.add_argument("--limit", type=int, metavar="N", help="queue at most N listings")
+    ext_re.add_argument("--retained-only", action="store_true")
+    ext_cmds.add_parser(
+        "renormalize", help="apply the current skill/location clean-up to stored answers"
+    )
+    ext_dis = ext_cmds.add_parser(
+        "disagreements", help="listings where the AI and the screening rules disagree"
+    )
+    ext_dis.add_argument("--limit", type=int, default=30)
+
     listing = commands.add_parser("listing", help="one listing as a detail page would show it")
     listing.add_argument("posting", type=int)
     listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
@@ -878,6 +1058,7 @@ HANDLERS = {
     "availability": _availability,
     "duplicates": _duplicates,
     "listing": _listing,
+    "extract": _extract,
 }
 
 

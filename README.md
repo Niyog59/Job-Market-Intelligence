@@ -26,6 +26,11 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Availability verification: postings move between observed, possibly unavailable,
   assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
   suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
+- Requirement extraction with Gemini (free tier): a persistent queue sends one request per
+  new or changed listing, Python validates the JSON answer and checks every quoted piece
+  of evidence against the posting, and results are stored with their model and rule
+  versions. Collection never waits for it. Rule-based screening still decides which jobs
+  are retained; disagreements with the AI are listed for review.
 - Content history for every listing, retained or not, and a display-safe listing form
   (sanitized description, original links, freshness, availability) for the job list and
   detail pages to come.
@@ -45,6 +50,9 @@ Not yet in place:
   email is sent.
 - **A web interface.** Status is available through `jobmarket status` and the
   `board_status` database view.
+- **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence,
+  not for correctness. A manually reviewed evaluation set is being prepared; until it is
+  reviewed, no accuracy figure exists.
 
 ## Requirements
 
@@ -103,6 +111,11 @@ Optional settings:
 | `JOBMARKET_CONCURRENCY`      | `1`                             | boards of one provider fetched at the same time (1 to 4) |
 | `JOBMARKET_HOLD_ALL_MISSING` | `true`                          | hold a board when every reference job is missing |
 | `JOBMARKET_HOLD_MIN_SHARE`, `JOBMARKET_HOLD_MIN_MISSING` | `0.5`, `10`        | hold a board when at least this share and this many reference jobs are missing |
+| `GEMINI_API_KEY`             | unset                           | Gemini API key for requirement extraction; secret, never committed or printed |
+| `JOBMARKET_AI_MODEL`, `JOBMARKET_AI_THINKING` | `gemini-3.5-flash-lite`, `minimal` | extraction model and thinking level |
+| `JOBMARKET_AI_RPM`, `JOBMARKET_AI_DAILY_LIMIT` | unset (required to run extraction) | the account's free-tier requests per minute and per day for that model, as shown in Google AI Studio |
+| `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
+| `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -130,6 +143,12 @@ Optional settings:
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
+| `jobmarket extract status` | Extraction queue, today's requests and tokens, pause, safety stop, results |
+| `jobmarket extract run [--limit N]` | Send queued listings to the model, one at a time, within the configured limits |
+| `jobmarket extract show POSTING_ID [--evidence]` | The current extraction of a listing, with warnings and quotes |
+| `jobmarket extract reprocess --reason R [--limit N] [--retained-only]` | Explicitly queue current content under the active configuration |
+| `jobmarket extract renormalize` | Re-apply skill and location clean-up to stored answers (no model calls) |
+| `jobmarket extract disagreements [--limit N]` | Listings where the AI and the screening rules disagree |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
@@ -324,12 +343,80 @@ The Module 3 flags (same title and description, no location check) are kept with
 Duplicate matching covers postings that are or have been retained (the Module 6 scope),
 even though every listing now has content history.
 
+## Requirement extraction
+
+A language model (Gemini, through the official `google-genai` SDK) reads each listing and
+returns its requirements as JSON. Python decides what is sent, checks every answer, tidies
+names, stores everything with its versions, and controls retries and quota. Availability,
+duplicates, and retention stay rule-based.
+
+**What is extracted** (one request per listing version, all fields together): role
+categories (several may apply; titles are kept as published), seniority, employment type;
+skills as required, preferred, mentioned, or ambiguous, with AND/OR/"at least N"
+relationships kept as such ("Python or Java" keeps both names and its wording); overall and
+skill-specific experience with ranges, education, and education/experience alternatives;
+explicit graduation windows; sponsorship (supported, not supported, not stated, ambiguous),
+kept apart from work authorization, citizenship, and clearance; and locations (original
+text plus city, state, country), work arrangement, explicit remote restrictions, and
+on-site frequency. "Not stated" is never turned into "no", "remote" never means
+worldwide, and no location or coordinate is invented.
+
+**Input and safety.** The model receives one document per version: title, location fields,
+Lever workplace and commitment fields, and the description as display-safe text (headings
+and lists kept). The posting is wrapped in `<posting>` tags and the instructions say its
+contents are data, never instructions. Descriptions over 20,000 characters and empty ones
+are skipped (`too_long`, `no_description`) and stay listed.
+
+**Checks.** The API enforces the JSON schema; Python checks it again (types, allowed
+values, required fields, bounds). A malformed answer is retried and never stored. Each
+quote is then searched for in the exact document sent (case, spacing, and typographic
+differences ignored), and its character offsets are stored. A quote that is not found, a
+claim without a quote, a relationship naming an unlisted skill, or an inconsistent year
+range is a warning: the answer is kept and marked `valid_with_warnings`. These checks show
+an answer is well formed and quoted from the posting, not that it is correct.
+
+**Clean-up.** Skill names are merged only through an exact alias table (`Postgres` becomes
+`PostgreSQL`; `Java` and `JavaScript` stay apart; unknown names are kept as written).
+States become two-letter codes, common country names one spelling, and Texas cities are
+placed in the DFW or Houston area with the screening city lists.
+
+**Queue.** `jobmarket collect` queues new content (it never calls the model);
+`jobmarket extract run` processes the queue in priority order: new or edited retained
+listings, retained backlog, new or edited other listings, other backlog. Requests are sent
+one at a time, spaced to `JOBMARKET_AI_RPM` (and `JOBMARKET_AI_TPM` if set). A failed
+request is retried three times after 10, 30, and 90 seconds, or longer if Google says so;
+a job that still fails is retried in the next run, five runs at most, then waits for
+`extract reprocess`. A daily-quota error pauses extraction until midnight Pacific time.
+Runs stop at 90% of `JOBMARKET_AI_DAILY_LIMIT`. An interrupted run is recovered by the next
+one. Collection is unaffected by any of this.
+
+**Caching and versions.** Results are keyed by the posting version and the configuration
+(model, thinking level, prompt version, schema version). Unchanged content is never sent
+again; identical text in another version reuses the stored answer without a request; a
+result is never attached to newer content (the `current_extractions` view joins on the
+current version only), and older results are kept. A new model, prompt, or schema applies
+to new content only: `extract reprocess` queues older content explicitly. Python clean-up
+changes are applied with `extract renormalize`, without model calls.
+
+**Free tier only.** Nothing enables billing. The code cannot tell whether a Google project
+is billed, so the free tier is confirmed in Google AI Studio; limits are configured from
+the same page. `extract status` reports requests and tokens per Pacific day and what they
+would cost at paid rates, for planning only. Free-tier requests may be used by Google to
+improve its products; job descriptions are public listings.
+
+Tables: `extraction_inputs` (the exact text sent), `extraction_jobs` (queue),
+`extraction_runs`, `extraction_attempts` (every request, its outcome and token usage),
+`extraction_results` (answer, normalized form, warnings, evidence offsets, versions),
+`extraction_pauses`. Views: `current_extractions`, `extraction_usage_daily`,
+`screening_disagreements`.
+
 ## Listing data for display
 
 `jobmarket.listings.listing_detail()` returns what a detail page needs for one listing: the
 original title and locations, the source's posting page and separate application page,
 availability state, first discovery, source publication and creation dates, when the
-current content was first seen, the board's last trusted check, and the description.
+current content was first seen, the board's last trusted check, the description, and the
+extraction status with a display-ready summary (`summary_lines()`) when there is one.
 
 Descriptions are untrusted employer HTML and are never rendered as collected.
 `safe_description_html()` rebuilds them from an allowlist: headings, paragraphs, line
@@ -547,6 +634,10 @@ database a failure instead (CI does this).
 
 `python tests/history_scenarios.py` replays the history scenarios with printed SQL
 evidence (it also runs as part of `pytest`).
+
+Extraction tests never call Gemini: a scripted fake model returns prepared answers and
+errors (malformed JSON, schema violations, per-minute and daily quota errors, server and
+network failures), so CI needs no API key.
 
 Database tests create a temporary schema, work only inside it, and drop it afterwards;
 they do not modify existing tables in the configured database. The role needs permission

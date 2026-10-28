@@ -308,6 +308,36 @@ def summary_lines(normalized: dict) -> list[str]:
 
 
 @dataclass(frozen=True)
+class Extraction:
+    status: str  # extracted, pending, running, failed, gave_up, skipped, superseded, not_queued
+    result_id: int | None = None
+    validation_status: str | None = None
+    config_key: str | None = None
+    summary: list[str] | None = None
+    normalized: dict | None = None
+    skip_reason: str | None = None
+
+
+def _extraction(conn: psycopg.Connection, posting_id: int) -> Extraction:
+    row = conn.execute(
+        "SELECT result_id, validation_status, config_key, normalized FROM current_extractions "
+        "WHERE posting_id = %s",
+        (posting_id,),
+    ).fetchone()
+    if row:
+        return Extraction("extracted", row[0], row[1], row[2], summary_lines(row[3]), row[3])
+    job = conn.execute(
+        "SELECT j.status, j.skip_reason, j.config_key FROM extraction_jobs j "
+        "JOIN source_postings p ON p.current_version_id = j.version_id "
+        "WHERE p.posting_id = %s ORDER BY j.job_id DESC LIMIT 1",
+        (posting_id,),
+    ).fetchone()
+    if job is None:
+        return Extraction("not_queued")
+    return Extraction(job[0], config_key=job[2], skip_reason=job[1])
+
+
+@dataclass(frozen=True)
 class ListingDetail:
     posting_id: int
     employer: str
@@ -332,6 +362,7 @@ class ListingDetail:
     version_id: int
     version_no: int
     description: Description
+    extraction: Extraction
 
 
 def _locations(location_text: str | None, offices: Any) -> list[str]:
@@ -381,4 +412,5 @@ def listing_detail(conn: psycopg.Connection, posting_id: int) -> ListingDetail |
         pid, employer, source, token, sid, title, location, _locations(location, offices),
         safe_link(url), safe_link(apply), state, absences, changed, first, last, seen,
         published, created, trusted, retained, vid, vno, description,
+        _extraction(conn, pid),
     )  # fmt: skip
