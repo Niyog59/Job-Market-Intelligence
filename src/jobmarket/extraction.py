@@ -354,17 +354,18 @@ class _Pacer:
                 self.sleep(max(1.0, 60.0 - (now - rows[0][0]).total_seconds()))
 
 
-def _pick(conn, config: ExtractionConfig, tried: list[int]):
+def _pick(conn, config: ExtractionConfig, tried: list[int], only: list[int] | None):
     return conn.execute(
-        """
+        f"""
         SELECT j.job_id, j.version_id, j.posting_id, (p.current_version_id = j.version_id)
         FROM extraction_jobs j JOIN source_postings p ON p.posting_id = j.posting_id
         WHERE j.config_key = %s AND NOT (j.job_id = ANY(%s))
           AND (j.status = 'pending' OR (j.status = 'failed' AND j.runs_failed < %s))
+          {"AND j.job_id = ANY(%s)" if only is not None else ""}
         ORDER BY j.priority, j.created_at, j.job_id
         LIMIT 1
         """,
-        (config.key, tried, MAX_FAILED_RUNS),
+        (config.key, tried, MAX_FAILED_RUNS, *([only] if only is not None else [])),
     ).fetchone()
 
 
@@ -511,20 +512,23 @@ def run_extraction(
     clock: Clock,
     sleep: Callable[[float], None],
     limit: int | None = None,
+    only_jobs: list[int] | None = None,
 ) -> RunReport:
     """Work through the queue (see the module docstring). conn must be in autocommit mode;
     each step commits on its own so usage and results survive an interrupted run. limit caps
-    how many jobs this run handles."""
+    how many jobs this run handles. only_jobs restricts the run to those jobs (evaluation):
+    they are extracted for their own version even if newer content exists, and nothing else
+    is queued or run."""
     config.require_limits()
     if not conn.execute("SELECT pg_try_advisory_lock(%s)", (EXTRACTION_LOCK_KEY,)).fetchone()[0]:
         raise ExtractionBusy("another extraction run is in progress")
     try:
-        return _run(conn, generate, config, clock, sleep, limit)
+        return _run(conn, generate, config, clock, sleep, limit, only_jobs)
     finally:
         conn.execute("SELECT pg_advisory_unlock(%s)", (EXTRACTION_LOCK_KEY,))
 
 
-def _run(conn, generate, config, clock, sleep, limit) -> RunReport:
+def _run(conn, generate, config, clock, sleep, limit, only_jobs=None) -> RunReport:
     report = RunReport()
     now = clock()
     # Holding the lock, no other run is active: anything left "running" was interrupted.
@@ -532,8 +536,9 @@ def _run(conn, generate, config, clock, sleep, limit) -> RunReport:
         "UPDATE extraction_jobs SET status = 'pending', updated_at = %s WHERE status = 'running'",
         (now,),
     )
-    with conn.transaction():
-        report.queued_now = enqueue_new(conn, config, now)
+    if only_jobs is None:
+        with conn.transaction():
+            report.queued_now = enqueue_new(conn, config, now)
     report.run_id = conn.execute(
         "INSERT INTO extraction_runs (started_at, config_key) VALUES (%s, %s) RETURNING run_id",
         (now, config.key),
@@ -552,12 +557,12 @@ def _run(conn, generate, config, clock, sleep, limit) -> RunReport:
                     f"safety stop: {safety_stop_at(config)} requests today is "
                     f"{int(SAFETY_SHARE * 100)}% of the daily limit {config.daily_limit}"
                 )
-            picked = _pick(conn, config, tried)
+            picked = _pick(conn, config, tried, only_jobs)
             if picked is None:
                 break
             job_id, version_id, posting_id, current = picked
             tried.append(job_id)
-            if not current:
+            if not current and only_jobs is None:
                 conn.execute(
                     "UPDATE extraction_jobs SET status = 'superseded', updated_at = %s "
                     "WHERE job_id = %s",

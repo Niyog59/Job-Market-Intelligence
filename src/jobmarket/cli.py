@@ -5,6 +5,7 @@ import sys
 import time
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -848,6 +849,112 @@ def _extract_show(conn, args) -> int:
     return EXIT_OK
 
 
+def _eval(settings: Settings, args) -> int:
+    import json
+
+    from jobmarket import evaluation
+
+    directory = evaluation.eval_dir()
+    try:
+        config = extraction.ExtractionConfig.from_env()
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    if args.eval_command == "prepare":
+        selection = json.loads(args.selection.read_text())["cases"]
+        with db.connect(settings, autocommit=True) as conn:
+            written = evaluation.prepare(conn, directory, selection)
+        print(
+            f"Wrote {len(written)} case file(s) under {directory / 'cases'} (existing files kept)."
+        )
+        return EXIT_OK
+    try:
+        cases = evaluation.load_cases(directory)
+    except (ValueError, OSError) as exc:
+        print(f"Evaluation cases: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if args.eval_command == "run":
+        import os
+
+        from jobmarket.gemini import API_KEY_ENV, GeminiClient
+
+        key = os.environ.get(API_KEY_ENV, "").strip()
+        try:
+            config.require_limits()
+            if not key:
+                raise extraction.ExtractionNotConfigured(f"{API_KEY_ENV} is not set")
+        except extraction.ExtractionNotConfigured as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_ERROR
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+        with db.connect(settings, autocommit=True) as conn:
+            try:
+                report = evaluation.run_cases(
+                    conn, client.generate, config, system_clock, time.sleep, cases,
+                    args.split, args.final,
+                )  # fmt: skip
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_FAILURE
+        if report is None:
+            print("Every case in this split already has a result under the active configuration.")
+        else:
+            print(f"{report.requests} request(s), {report.succeeded} extracted, "
+                  f"{report.reused} reused, {report.failed} failed; stopped: "
+                  f"{report.stop_reason}.")  # fmt: skip
+        return EXIT_OK
+    with db.connect(settings) as conn:
+        try:
+            comparisons = evaluation.compare(conn, config, cases, args.split, args.final)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_FAILURE
+    _print_eval(evaluation, comparisons, args, config)
+    return EXIT_OK
+
+
+def _print_eval(evaluation, comparisons, args, config) -> None:
+    summary = evaluation.summarize(comparisons)
+    print(f"Split {args.split}, configuration {config.key}")
+    for state, title in (
+        ("human_reviewed", "Human-reviewed labels (accuracy)"),
+        ("proposed", "Proposed labels, NOT human-reviewed (agreement only)"),
+    ):
+        part = summary[state]
+        if not part["cases"]:
+            continue
+        print(f"{title}: {part['cases']} case(s)")
+        for name, entry in part["fields"].items():
+            line = f"  {name:34} {entry['agree']}/{entry['cases']} cases match"
+            if "tp" in entry:
+                line += f"  (matched {entry['tp']}, extra {entry['fp']}, missed {entry['fn']})"
+            print(line)
+        print(f"  quotes not found in the posting: {part['quotes_not_found']}; claims without "
+              f"evidence: {part['claims_without_evidence']}")  # fmt: skip
+    if summary["missing_results"]:
+        print(f"No result yet for: {', '.join(summary['missing_results'])}")
+    tokens = [(c.prompt_tokens, c.output_tokens) for c in comparisons if c.prompt_tokens]
+    if tokens:
+        print(f"Usage per listing: {sum(t[0] for t in tokens) / len(tokens):.0f} input and "
+              f"{sum(t[1] for t in tokens) / len(tokens):.0f} output tokens on average "
+              f"({len(tokens)} listing(s))")  # fmt: skip
+    if args.cases:
+        for c in comparisons:
+            if c.result_id is None:
+                continue
+            print(f"{c.case.case_id} ({c.case.review}, posting {c.case.posting_id}):")
+            for name, (label, model) in c.mismatches.items():
+                print(f"  {name}: label {_fmt(label)} / model {_fmt(model)}")
+
+
+def _fmt(value) -> str:
+    if isinstance(value, (set, frozenset)):
+        return "{" + ", ".join(sorted(map(_fmt, value))) + "}"
+    if isinstance(value, tuple):
+        return "(" + ", ".join(map(_fmt, value)) + ")"
+    return str(value)
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -983,6 +1090,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ext_dis.add_argument("--limit", type=int, default=30)
 
+    ev = commands.add_parser("eval", help="evaluate extraction against labelled cases")
+    ev_cmds = ev.add_subparsers(dest="eval_command", required=True)
+    ev_prep = ev_cmds.add_parser("prepare", help="write case files for a selection (JSON)")
+    ev_prep.add_argument("--selection", required=True, type=Path)
+    for name, text in (("run", "extract the cases of one split"),
+                       ("report", "compare stored results with the labels")):  # fmt: skip
+        cmd = ev_cmds.add_parser(name, help=text)
+        cmd.add_argument("--split", required=True, choices=["practice", "holdout"])
+        cmd.add_argument("--final", action="store_true", help="required for the holdout")
+        if name == "report":
+            cmd.add_argument("--cases", action="store_true", help="list every mismatch")
+
     listing = commands.add_parser("listing", help="one listing as a detail page would show it")
     listing.add_argument("posting", type=int)
     listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
@@ -1059,6 +1178,7 @@ HANDLERS = {
     "duplicates": _duplicates,
     "listing": _listing,
     "extract": _extract,
+    "eval": _eval,
 }
 
 
