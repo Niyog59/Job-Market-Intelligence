@@ -28,12 +28,21 @@ US_STATES = {
 }  # fmt: skip
 _STATE_CODES = set(US_STATES.values())
 
+# Canadian provinces and territories, which postings name like US states ("Edmonton, AB").
+CA_PROVINCES = {
+    "alberta": "AB", "british columbia": "BC", "manitoba": "MB", "new brunswick": "NB",
+    "newfoundland and labrador": "NL", "nova scotia": "NS", "ontario": "ON",
+    "prince edward island": "PE", "quebec": "QC", "québec": "QC", "saskatchewan": "SK",
+    "northwest territories": "NT", "nunavut": "NU", "yukon": "YT",
+}  # fmt: skip
+
 COUNTRIES = {
     "united states": "United States", "united states of america": "United States",
     "usa": "United States", "us": "United States", "u.s.": "United States",
     "u.s.a.": "United States", "america": "United States",
     "canada": "Canada", "mexico": "Mexico", "méxico": "Mexico",
     "united kingdom": "United Kingdom", "uk": "United Kingdom", "u.k.": "United Kingdom",
+    "gb": "United Kingdom",
     "great britain": "United Kingdom", "england": "United Kingdom",
     "india": "India", "germany": "Germany", "france": "France", "ireland": "Ireland",
     "netherlands": "Netherlands", "the netherlands": "Netherlands", "spain": "Spain",
@@ -50,13 +59,14 @@ def _key(value: str) -> str:
 
 
 def state_code(state: str | None) -> str | None:
-    """Two-letter code for a US state name or code; anything else is returned as written."""
+    """Two-letter code for a US state or Canadian province name or code; anything else is
+    returned as written."""
     if not state or not state.strip():
         return None
     key = _key(state)
     if key.upper() in _STATE_CODES:
         return key.upper()
-    return US_STATES.get(key, _SPACES.sub(" ", state).strip())
+    return US_STATES.get(key) or CA_PROVINCES.get(key) or _SPACES.sub(" ", state).strip()
 
 
 def country_name(country: str | None) -> str | None:

@@ -163,7 +163,7 @@ def test_locations_are_tidied_but_never_invented():
         "city": "Plano", "state": "TX", "country": "United States", "metro": "dfw"}  # fmt: skip
     assert normalize_location(None, None, None) == {
         "city": None, "state": None, "country": None, "metro": None}  # fmt: skip
-    assert normalize_location("Toronto", "Ontario", "CA")["state"] == "Ontario"
+    assert normalize_location("Toronto", "Ontario", "CA")["state"] == "ON"  # province code
     assert state_code("Bavaria") == "Bavaria"
     assert metro_area("Sugar Land", "TX") == "houston"
     assert metro_area("Arlington", "VA") is None  # Arlington, Texas only

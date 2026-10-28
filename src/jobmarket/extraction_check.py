@@ -27,7 +27,7 @@ from jobmarket.extraction_schema import RESPONSE_SCHEMA, TARGET_CATEGORIES
 from jobmarket.places import country_name, normalize_location, state_code
 from jobmarket.skills import canonical_skill
 
-NORMALIZATION_VERSION = "2026-10-28.1"
+NORMALIZATION_VERSION = "2026-10-28.2"  # .2: Canadian provinces, "GB"
 
 # Same set as rule-based screening treats as available in DFW/Houston or to Texas residents.
 RETAINED_PLACES = ("local_dfw", "local_houston", "local_both", "remote_texas", "remote_ambiguous")

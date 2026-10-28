@@ -30,7 +30,7 @@ from typing import Any
 import psycopg
 
 from jobmarket.extraction import ExtractionConfig, run_extraction, version_document
-from jobmarket.places import country_name, normalize_location, state_code
+from jobmarket.places import US_STATES, country_name, normalize_location, state_code
 from jobmarket.skills import canonical_skill
 
 EVAL_DIR_ENV = "JOBMARKET_EVAL_DIR"
@@ -216,8 +216,14 @@ def _split(cases: list[Case], split: str, final: bool) -> list[Case]:
 # --- comparison --------------------------------------------------------------------------------
 
 
+def _skill(name: str) -> str:
+    """Canonical name for mapped skills; unmapped names compare without letter case."""
+    canonical, mapped = canonical_skill(name)
+    return canonical if mapped else canonical.lower()
+
+
 def _skills(names) -> set[str]:
-    return {canonical_skill(n)[0] for n in names}
+    return {_skill(n) for n in names}
 
 
 def _place(value: str) -> str:
@@ -230,7 +236,7 @@ def _place(value: str) -> str:
 
 def _restriction(value: str) -> str:
     code = state_code(value)
-    if code and len(code) == 2 and code.isupper():
+    if code in US_STATE_CODES:
         return code
     return (country_name(value) or value).lower()
 
@@ -245,20 +251,25 @@ def model_view(normalized: dict) -> dict[str, Any]:
     for loc in n["locations"]:
         if loc["city"] and loc["state"]:
             places.add(f"{loc['city']}, {loc['state']}".lower())
+        elif loc["city"]:
+            places.add(loc["city"].lower())
         else:
             places.add(loc["original"].strip().lower())
+    # A degree-or-experience alternative: one alternative group used by both kinds of item.
+    edu_groups = {e["alternative_group"] for e in n["education"] if e["alternative_group"]}
+    exp_groups = {e["alternative_group"] for e in n["experience"] if e["alternative_group"]}
     return {
         "role_categories": {c["category"] for c in n["role_categories"]},
         "seniority": n["seniority"]["value"],
         "employment_type": n["employment_type"]["value"],
-        "required_skills": {s["canonical"] for s in n["skills"] if s["status"] == "required"},
-        "preferred_skills": {s["canonical"] for s in n["skills"] if s["status"] == "preferred"},
+        "required_skills": _skills(s["name"] for s in n["skills"] if s["status"] == "required"),
+        "preferred_skills": _skills(s["name"] for s in n["skills"] if s["status"] == "preferred"),
         "skill_groups": {
-            (g["relation"], frozenset(m["canonical"] for m in g["members"]), g["status"])
+            (g["relation"], frozenset(_skills(m["name"] for m in g["members"])), g["status"])
             for g in n["skill_groups"]
-        },  # fmt: skip
+        },
         "overall_min_years": min(overall) if overall else "not_stated",
-        "degree_or_experience_alternative": bool(n["alternatives"]),
+        "degree_or_experience_alternative": bool(edu_groups & exp_groups),
         "sponsorship": n["sponsorship"]["status"],
         "work_authorization": n["work_authorization"]["status"],
         "citizenship": n["citizenship"]["status"],
@@ -266,7 +277,9 @@ def model_view(normalized: dict) -> dict[str, Any]:
         "graduation": n["graduation"]["status"],
         "work_arrangement": n["work_arrangement"]["value"],
         "locations": places,
-        "remote_restrictions": {_restriction(r["value"]) for r in n["remote_restrictions"]},
+        "remote_restrictions": {
+            _restriction(r["normalized_value"]) for r in n["remote_restrictions"]
+        },
     }
 
 
@@ -285,6 +298,8 @@ def label_view(labels: dict[str, Any]) -> dict[str, Any]:
         "remote_restrictions": {_restriction(v) for v in labels["remote_restrictions"]},
     }
 
+
+US_STATE_CODES = set(US_STATES.values())
 
 SET_FIELDS = ("role_categories", "required_skills", "preferred_skills", "skill_groups",
               "locations", "remote_restrictions")  # fmt: skip
