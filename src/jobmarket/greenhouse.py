@@ -250,6 +250,10 @@ class GreenhouseConnector:
     def board_url(self, token: str, region: str) -> str:
         return BOARD_URL[region].format(token=token)
 
+    def scope_key(self, region: str) -> str:
+        # The API host is the same for every region, so the region is not part of the scope.
+        return f"greenhouse:{API_BASE}/{{token}}/jobs?content=true"
+
     def fetch(
         self,
         client: httpx.Client,

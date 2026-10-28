@@ -23,6 +23,9 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Incremental history: a new content version only for meaningful changes, versioned
   normalization rules, current state ordered by collection time, and safe replay of
   saved responses.
+- Availability verification: postings move between observed, possibly unavailable,
+  assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
+  suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
 - Unit, database, and end-to-end collection tests, and a GitHub Actions workflow that
   runs them against PostgreSQL 17.
 
@@ -92,6 +95,8 @@ Optional settings:
 | `JOBMARKET_RAW_DIR`          | `data/raw`                      | where raw responses are stored (ignored by Git) |
 | `JOBMARKET_REQUEST_INTERVAL` | `1.0`                           | minimum seconds between two requests to the same provider |
 | `JOBMARKET_CONCURRENCY`      | `1`                             | boards of one provider fetched at the same time (1 to 4) |
+| `JOBMARKET_HOLD_ALL_MISSING` | `true`                          | hold a board when every reference job is missing |
+| `JOBMARKET_HOLD_MIN_SHARE`, `JOBMARKET_HOLD_MIN_MISSING` | `0.5`, `10`        | hold a board when at least this share and this many reference jobs are missing |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -107,7 +112,11 @@ Optional settings:
 | `jobmarket collect [--board [SOURCE:]TOKEN ...] [--scheduled]` | Scan enabled Greenhouse and Lever boards now |
 | `jobmarket retry-due` | Run only the retries that are due now |
 | `jobmarket status [--all]` | Per-board last result, last complete scan, retained jobs, incidents |
-| `jobmarket jobs [--board TOKEN] [--early-career] [--review] [--limit N]` | Retained jobs, newest discoveries first |
+| `jobmarket jobs [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs (observed or possibly unavailable), newest discoveries first |
+| `jobmarket availability show POSTING_ID` | A posting's availability state and every transition with its reason and evidence |
+| `jobmarket availability close POSTING_ID --reason R --evidence-url URL --evidence-text T` | Mark a posting closed on official evidence |
+| `jobmarket availability holds [--all]` | Board holds against mass disappearances |
+| `jobmarket availability release HOLD_ID --reason collection-issue-resolved\|source-removals-verified --evidence T` | Release a hold after review |
 | `jobmarket notifications [--full] [--send]` | Show the alert outbox, or deliver it if SMTP is configured |
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
@@ -173,8 +182,8 @@ Requests use a descriptive User-Agent, a 30-second timeout, at most
 request quota is assumed for either API (Lever's documented limit applies to submitting
 applications, which this project never does).
 
-- Only complete scans count a job as missing (`complete_scan_absences`). Failed and
-  partial scans never change existing records. Nothing is closed yet.
+- Failed and partial scans never change existing records or advance absences; whether a
+  missing job is hidden is decided by the availability rules below.
 - Sponsorship is `not_stated` unless the posting says whether it is available; a
   question asking applicants about sponsorship is recorded as `asked_only`.
 
@@ -195,6 +204,60 @@ Three kinds of evidence are kept apart, because none of them proves the others:
   that loads shows only that it was published then; it does not prove funded headcount or
   active interviewing. `refused`, `rate_limited`, `server_error`, and `unreachable` are
   access or collection problems and never mean a job closed.
+
+## Availability
+
+Each source posting has one state, changed only on trustworthy evidence and never deleted:
+
+| State | Meaning | In the active feed |
+|---|---|---|
+| `observed` | found in a valid source response | yes |
+| `possibly_unavailable` | missing from one or two qualifying scans | yes, with a warning |
+| `assumed_inactive` | missing from a third qualifying scan | no (`jobs --all-states` shows it) |
+| `closed` | official evidence that applications are closed | no |
+
+**Qualifying scans.** An absence counts only after a complete, fully processed scan of the
+same board read under the same scope (source, API host, and request settings) as the
+board's comparison reference, with no board hold and no mass disappearance. Failed and
+partial scans pause counting: they neither advance nor reset it. Each scan is judged once
+(`absence_checks`), so replaying a saved response never counts again; replays do not judge
+scans. The first complete scan of a board becomes its reference without counting
+anything. A scan under a different scope does not count either and becomes the new
+reference, so counting resumes from the next scan.
+
+**Reappearance.** A posting listed again by any usable scan (complete or partial) returns
+to `observed` and its count resets; its first-discovery time and history are kept. A closed
+posting listed again stays closed and the reappearance is recorded for review.
+
+**Mass-disappearance protection.** Each complete scan is compared with the job IDs of the
+board's reference scan, not just with its total. If every reference job is missing (even
+on a small board), or at least 50% and at least 10 of them are, the board is put on hold
+(`board_holds`): absences are not counted, while new jobs, reappearances, and explicit
+closures are still recorded. A repeated suspicious result keeps the hold. A person
+releases it after review:
+
+```bash
+jobmarket availability holds
+jobmarket availability release 7 --reason collection-issue-resolved \
+    --evidence "board token was mistyped in the registry; fixed and rescanned"
+jobmarket availability release 8 --reason source-removals-verified \
+    --evidence "employer careers page now lists 2 openings"
+```
+
+`collection-issue-resolved` keeps the board's last trusted reference.
+`source-removals-verified` makes the latest complete scan the reference, so the removed
+jobs are compared normally from then on. In both cases counting restarts with the next
+qualifying scan, and scans taken during the hold are never counted. `jobmarket status`
+shows active holds and each board's last trusted check.
+
+**Closed.** `jobmarket availability close` records the official evidence (URL, the text,
+and a reason) and hides the posting at once; it works during a hold. A missing posting, a
+404, or any request error is never treated as a closure or as evidence that someone was
+hired. Every transition is in `posting_availability_events` with its reason, scan, and
+evidence; `jobmarket availability show` prints them.
+
+When availability tracking was introduced, every existing posting started as `observed`
+with no qualifying absences; earlier Module 3 counts remain in `complete_scan_absences`.
 
 ### Failures, retries, and alerts
 
@@ -334,10 +397,15 @@ raw_responses    ─< posting_observations
 | `posting_duplicate_flags` | possible duplicate postings, for review |
 | `replay_runs`          | attempt to reprocess a saved raw response |
 | `board_mapping_checks` | check of a board's official careers page for a reference to that board |
+| `posting_availability_events` | availability state change of a posting, with reason, scan, and evidence |
+| `board_scan_listings`  | posting listed by a complete scan (the comparison reference for later scans) |
+| `absence_checks`       | judgement of one scan for absence counting (qualifying, held, and so on) |
+| `board_holds`          | board-level hold opened by a mass disappearance, with its review and release |
 | `posting_page_checks`  | sampled check of a posting's job or application page |
 
 Views: `board_status` (one row per board for status displays), `retained_jobs`
-(retained postings with their current content), `posting_version_stages` (content stages
+(retained postings with their current content and availability), `active_jobs` (the
+default feed: observed or possibly unavailable), `posting_version_stages` (content stages
 in collection order with change windows), and `posting_history_problems` (integrity
 checks; expected empty).
 

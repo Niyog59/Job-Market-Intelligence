@@ -291,6 +291,11 @@ class Connector(Protocol):
 
     def board_url(self, token: str, region: str) -> str: ...
 
+    def scope_key(self, region: str) -> str:
+        """How this connector reads a board: API host and request settings. Absence counts
+        compare only scans with equal scope keys."""
+        ...
+
     def fetch(
         self,
         client: httpx.Client,

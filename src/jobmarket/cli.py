@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 
 from jobmarket import db
+from jobmarket.availability import ACTIVE_STATES, AvailabilityError, close_posting, release_hold
 from jobmarket.clock import system_clock
 from jobmarket.collector import (
     CollectionBusy,
@@ -207,7 +208,8 @@ def _status(settings: Settings, args) -> int:
             "SELECT employer, source_system, token, enabled, last_scan_status, last_attempt_at, "
             "last_attempt_kind, last_scan_pages, last_complete_at, retained_postings, "
             "incident_status, incident_kind, retries_used, next_retry_at, retry_due, "
-            "incident_attempts, alerted, last_error FROM board_status "
+            "incident_attempts, alerted, last_error, hold_id, hold_missing_count, "
+            "hold_reference_count, last_trusted_check_at FROM board_status "
             + ("" if args.all else "WHERE enabled ")
             + "ORDER BY employer, source_system, token"
         ).fetchall()
@@ -245,6 +247,10 @@ def _status(settings: Settings, args) -> int:
         attempts,
         alerted,
         error,
+        hold_id,
+        hold_missing,
+        hold_reference,
+        trusted_at,
     ) in rows:
         incident = "-"
         if inc_status == "retrying":
@@ -267,6 +273,12 @@ def _status(settings: Settings, args) -> int:
             print(f"    last attempt was a {kind} attempt")
         if last in ("failed", "partial") and error:
             print(f"    {last}: {error[:150]}")
+        if hold_id:
+            print(
+                f"    AVAILABILITY HOLD {hold_id}: {hold_missing} of {hold_reference} jobs "
+                f"missing; absences paused. Last trusted check {_when(trusted_at)}. "
+                "Review with `jobmarket availability holds`."
+            )
     print(f"Notifications waiting in the outbox: {pending}")
     return EXIT_OK
 
@@ -280,15 +292,21 @@ def _jobs(settings: Settings, args) -> int:
         where.append("early_career")
     if args.review:
         where.append("needs_review")
+    view = "retained_jobs" if args.all_states else "active_jobs"
     with db.connect(settings) as conn:
         rows = conn.execute(
             "SELECT employer, title, location_text, texas_eligibility, seniority, early_career, "
-            "families, sponsorship_status, needs_review, first_discovered_at, absolute_url "
-            f"FROM retained_jobs WHERE {' AND '.join(where)} "
+            "families, sponsorship_status, needs_review, first_discovered_at, absolute_url, "
+            "availability_state, qualifying_absences, posting_id "
+            f"FROM {view} WHERE {' AND '.join(where)} "
             "ORDER BY first_discovered_at DESC, employer, title LIMIT %s",
             (*params, args.limit),
         ).fetchall()
-        total = conn.execute("SELECT count(*) FROM retained_jobs").fetchone()[0]
+        total = conn.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+        hidden = conn.execute(
+            "SELECT count(*) FROM retained_jobs WHERE NOT availability_state = ANY(%s)",
+            (list(ACTIVE_STATES),),
+        ).fetchone()[0]
     for (
         employer,
         title,
@@ -301,6 +319,9 @@ def _jobs(settings: Settings, args) -> int:
         review,
         discovered,
         url,
+        state,
+        absences,
+        posting_id,
     ) in rows:
         flags = [eligibility, seniority]
         if early:
@@ -309,10 +330,108 @@ def _jobs(settings: Settings, args) -> int:
             flags.append("NEEDS REVIEW")
         if sponsorship != "not_stated":
             flags.append(f"sponsorship: {sponsorship}")
-        print(f"{employer}: {title}")
+        print(f"{employer}: {title}  [posting {posting_id}]")
         print(f"    {location or 'no location'} | {', '.join(flags)} | {', '.join(families)}")
         print(f"    discovered {_when(discovered)} | {url}")
-    print(f"\nShowing {len(rows)} of {total} retained job(s).")
+        if state == "possibly_unavailable":
+            print(
+                f"    WARNING: possibly unavailable (missing from {absences} qualifying "
+                "scan(s)); it may still be open"
+            )
+        elif state != "observed":
+            print(f"    {state.replace('_', ' ')} (hidden from the active feed)")
+    shown = "retained" if args.all_states else "active"
+    print(f"\nShowing {len(rows)} of {total} {shown} job(s).")
+    if not args.all_states and hidden:
+        print(f"{hidden} retained job(s) are assumed inactive or closed; use --all-states.")
+    return EXIT_OK
+
+
+def _availability(settings: Settings, args) -> int:
+    cmd = args.availability_command
+    try:
+        if cmd == "close":
+            with db.connect(settings, autocommit=True) as conn:
+                before = close_posting(
+                    conn, args.posting, args.reason, args.evidence_url, args.evidence_text,
+                    system_clock(),
+                )  # fmt: skip
+            print(f"Posting {args.posting}: {before} -> closed. Evidence recorded.")
+            return EXIT_OK
+        if cmd == "release":
+            with db.connect(settings, autocommit=True) as conn:
+                new_ref = release_hold(
+                    conn, args.hold, args.reason.replace("-", "_"), args.evidence, system_clock()
+                )
+            print(f"Hold {args.hold} released ({args.reason}).")
+            print(
+                f"Scan {new_ref} is the board's new reference; "
+                if new_ref
+                else "The board keeps its last trusted reference; "
+            )
+            print("absence counting restarts with the next qualifying scan.")
+            return EXIT_OK
+    except AvailabilityError as exc:
+        print(f"Not done: {exc}.", file=sys.stderr)
+        return EXIT_FAILURE
+
+    with db.connect(settings) as conn:
+        if cmd == "holds":
+            rows = conn.execute(
+                "SELECT h.hold_id, e.name, b.source_system, b.board_key, h.status, h.trigger, "
+                "h.missing_count, h.reference_count, h.opened_at, h.opened_by_scan_id, "
+                "h.reference_scan_id, h.released_at, h.release_reason, h.release_evidence, "
+                "(SELECT count(*) FROM absence_checks c WHERE c.hold_id = h.hold_id) AS scans "
+                "FROM board_holds h JOIN source_boards b USING (board_id) "
+                "JOIN employers e USING (employer_id) "
+                + ("" if args.all else "WHERE h.status = 'active' ")
+                + "ORDER BY h.hold_id"
+            ).fetchall()
+            if not rows:
+                print("No active board holds." if not args.all else "No board holds.")
+            for (
+                hid, employer, source, token, status, trigger, missing, ref, opened,
+                by_scan, ref_scan, released, reason, evidence, scans,
+            ) in rows:  # fmt: skip
+                print(
+                    f"Hold {hid} [{status}] {employer} ({source} {token}): {missing} of {ref} "
+                    f"reference jobs missing ({trigger})"
+                )
+                print(
+                    f"    opened {_when(opened)} by scan {by_scan}; reference scan {ref_scan}; "
+                    f"{scans} scan(s) judged under this hold"
+                )
+                if released:
+                    print(f"    released {_when(released)}: {reason}; evidence: {evidence}")
+            return EXIT_OK
+
+        # show
+        posting = conn.execute(
+            "SELECT p.posting_id, e.name, b.board_key, p.source_posting_id, "
+            "p.availability_state, p.qualifying_absences, p.first_discovered_at, "
+            "p.last_observed_at FROM source_postings p JOIN source_boards b USING (board_id) "
+            "JOIN employers e USING (employer_id) WHERE p.posting_id = %s",
+            (args.posting,),
+        ).fetchone()
+        if posting is None:
+            print("No such posting.", file=sys.stderr)
+            return EXIT_FAILURE
+        pid, employer, token, sid, state, absences, first, last = posting
+        print(f"Posting {pid}: {employer}, board {token}, job {sid}")
+        print(
+            f"  state: {state} ({absences} qualifying absence(s)); first discovered "
+            f"{_when(first)}, last observed {_when(last)}"
+        )
+        for occurred, frm, to, _n, reason, scan, evidence in conn.execute(
+            "SELECT occurred_at, from_state, to_state, qualifying_absences, reason, "
+            "board_scan_id, evidence FROM posting_availability_events WHERE posting_id = %s "
+            "ORDER BY event_id",
+            (pid,),
+        ):
+            where = f" (scan {scan})" if scan else ""
+            print(f"  {_when(occurred)}  {frm or '-'} -> {to}{where}: {reason}")
+            if evidence and evidence.get("url"):
+                print(f"      evidence: {evidence.get('url')} | {evidence.get('text')}")
     return EXIT_OK
 
 
@@ -541,7 +660,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="per-board collection status")
     status.add_argument("--all", action="store_true", help="include disabled boards")
 
-    jobs = commands.add_parser("jobs", help="list retained jobs, newest discoveries first")
+    jobs = commands.add_parser("jobs", help="list active retained jobs, newest discoveries first")
+    jobs.add_argument(
+        "--all-states", action="store_true", help="include assumed-inactive and closed jobs"
+    )
     jobs.add_argument("--board", metavar="TOKEN")
     jobs.add_argument("--early-career", action="store_true")
     jobs.add_argument("--review", action="store_true", help="only jobs flagged for review")
@@ -577,6 +699,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands.add_parser("check-history", help="verify history and current-state consistency")
 
+    avail = commands.add_parser("availability", help="posting availability and board holds")
+    avail_cmds = avail.add_subparsers(dest="availability_command", required=True)
+    show = avail_cmds.add_parser("show", help="state and transition history of one posting")
+    show.add_argument("posting", type=int)
+    close = avail_cmds.add_parser("close", help="mark a posting closed on official evidence")
+    close.add_argument("posting", type=int)
+    close.add_argument("--reason", required=True)
+    close.add_argument("--evidence-url", required=True)
+    close.add_argument("--evidence-text", required=True, help="what the official source says")
+    holds = avail_cmds.add_parser("holds", help="board holds against mass disappearances")
+    holds.add_argument("--all", action="store_true", help="include released holds")
+    release = avail_cmds.add_parser("release", help="release a board hold after review")
+    release.add_argument("hold", type=int)
+    release.add_argument(
+        "--reason",
+        required=True,
+        choices=["collection-issue-resolved", "source-removals-verified"],
+    )
+    release.add_argument("--evidence", required=True, help="what was checked and found")
+
     pages = commands.add_parser(
         "check-pages",
         help="GET a sample of retained postings' job and application pages (never submits)",
@@ -602,6 +744,7 @@ HANDLERS = {
     "refingerprint": _refingerprint,
     "check-history": _check_history,
     "check-pages": _check_pages,
+    "availability": _availability,
 }
 
 

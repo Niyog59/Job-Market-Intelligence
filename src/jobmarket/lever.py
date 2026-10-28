@@ -368,6 +368,9 @@ class LeverConnector:
     def board_url(self, token: str, region: str) -> str:
         return BOARD_URL[region].format(token=token)
 
+    def scope_key(self, region: str) -> str:
+        return f"lever:{API_BASE[region]}/{{token}}?mode=json&limit={PAGE_SIZE}"
+
     def fetch(
         self,
         client: httpx.Client,

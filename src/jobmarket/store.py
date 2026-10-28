@@ -171,6 +171,16 @@ def _store_job(
     ).fetchone()
     if inserted:
         counts.new_postings += 1
+        conn.execute(
+            "INSERT INTO posting_availability_events (posting_id, from_state, to_state, "
+            "qualifying_absences, reason, board_scan_id, occurred_at, recorded_at) "
+            "VALUES (%s, NULL, 'observed', 0, 'first observed', %s, %s, %s)",
+            (inserted[0], board_scan_id, observed_at, processed_at),
+        )
+        conn.execute(
+            "UPDATE source_postings SET availability_changed_at = %s WHERE posting_id = %s",
+            (observed_at, inserted[0]),
+        )
     # The lock is taken before anything else is read, so every later statement in this
     # transaction sees the committed results of any transaction that held it before.
     posting_id = conn.execute(
