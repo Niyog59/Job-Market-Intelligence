@@ -1004,7 +1004,9 @@ def _analytics(settings: Settings, args) -> int:
         return EXIT_OK
     dbt_args = {"build": ["build"], "test": ["test"], "docs": ["docs", "generate"]}[command]
     if command == "build" and args.select:
-        dbt_args += ["--select", args.select]
+        # Run only tests whose parents are all selected, so a partial build does not test
+        # models it did not build.
+        dbt_args += ["--select", args.select, "--indirect-selection", "cautious"]
     target = getattr(args, "target", "analytics")
     try:
         outcome = analytics.run_dbt(dbt_args, target=target)

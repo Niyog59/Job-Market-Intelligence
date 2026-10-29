@@ -24,8 +24,10 @@ class Analytics:
         return f"{self.prefix}analytics_{layer}"
 
     def build(self, *args: str):
+        # With --select, only run tests whose parents are all selected (dbt "cautious").
+        extra = ["--indirect-selection", "cautious"] if "--select" in args else []
         outcome = run_dbt(
-            ["build", *args],
+            ["build", *args, *extra],
             target="owner",
             variables={"source_schema": self.source, "schema_prefix": self.prefix},
             quiet=True,
