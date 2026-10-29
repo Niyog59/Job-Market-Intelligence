@@ -63,13 +63,13 @@ def test_replaying_a_processed_scan_adds_nothing(env):
     (result,) = replay(env, scan)
 
     assert result.outcome == "processed" and result.validation == "partial"
-    assert (result.counts.new_observations, result.counts.already_recorded) == (0, 1)
+    assert (result.counts.new_observations, result.counts.already_recorded) == (0, 2)
     assert facts(env) == before
     row = env.one(
         "SELECT outcome, observations_new, observations_existing, collected_at, started_at "
         "FROM replay_runs"
     )
-    assert row[:3] == ("processed", 0, 1)
+    assert row[:3] == ("processed", 0, 2)  # both valid jobs were already recorded
     assert row[4] > row[3]  # processed later than collected; both kept
 
 

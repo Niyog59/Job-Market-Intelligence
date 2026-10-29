@@ -2,13 +2,15 @@
 
 import argparse
 import sys
+import time
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import psycopg
 
-from jobmarket import db
+from jobmarket import db, extraction
 from jobmarket.availability import ACTIVE_STATES, AvailabilityError, close_posting, release_hold
 from jobmarket.clock import system_clock
 from jobmarket.collector import (
@@ -30,6 +32,7 @@ from jobmarket.evidence import (
     page_targets,
 )
 from jobmarket.incidents import next_retry_time
+from jobmarket.listings import listing_detail, plain_text, summary_lines
 from jobmarket.migrate import MigrationError, apply_migrations, migration_status
 from jobmarket.notify import send_pending, smtp_settings
 from jobmarket.raw_store import RAW_RETENTION, cleanup_raw, raw_dir
@@ -284,27 +287,43 @@ def _status(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+# Default list: fresher-friendly jobs as judged by requirement extraction (decision
+# 2026-10-28). Every job is still collected and kept; the other levels are one flag away.
+_LEVELS = {"default": ("yes",), "internships": ("internship",)}
+
+
 def _jobs(settings: Settings, args) -> int:
     where, params = ["true"], []
     if args.board:
-        where.append("token = %s")
+        where.append("j.token = %s")
         params.append(args.board)
     if args.early_career:
-        where.append("early_career")
+        where.append("j.early_career")
     if args.review:
-        where.append("needs_review")
+        where.append("j.needs_review")
+    level = "all" if (args.all_levels or args.early_career) else (
+        "internships" if args.internships else "default")  # fmt: skip
+    if level != "all":
+        where.append("(c.derived ->> 'early_career') = ANY(%s)")
+        params.append(list(_LEVELS[level]))
     view = "retained_jobs" if args.all_states else "active_jobs"
+    source = f"{view} j LEFT JOIN current_extractions c ON c.posting_id = j.posting_id"
     with db.connect(settings) as conn:
         rows = conn.execute(
-            "SELECT employer, title, location_text, texas_eligibility, seniority, early_career, "
-            "families, sponsorship_status, needs_review, first_discovered_at, absolute_url, "
-            "availability_state, qualifying_absences, posting_id, identity_basis, "
-            "duplicate_group_id, open_duplicate_flags "
-            f"FROM {view} WHERE {' AND '.join(where)} "
-            "ORDER BY first_discovered_at DESC, employer, title LIMIT %s",
+            "SELECT j.employer, j.title, j.location_text, j.texas_eligibility, j.seniority, "
+            "j.early_career, j.families, j.sponsorship_status, j.needs_review, "
+            "j.first_discovered_at, j.absolute_url, j.availability_state, "
+            "j.qualifying_absences, j.posting_id, j.identity_basis, j.duplicate_group_id, "
+            "j.open_duplicate_flags "
+            f"FROM {source} WHERE {' AND '.join(where)} "
+            "ORDER BY j.first_discovered_at DESC, j.employer, j.title LIMIT %s",
             (*params, args.limit),
         ).fetchall()
         total = conn.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+        unchecked = conn.execute(
+            f"SELECT count(*) FROM {source} WHERE c.posting_id IS NULL "
+            "OR c.derived ->> 'early_career' IS NULL"
+        ).fetchone()[0]
         hidden = conn.execute(
             "SELECT count(*) FROM retained_jobs WHERE NOT availability_state = ANY(%s)",
             (list(ACTIVE_STATES),),
@@ -352,7 +371,13 @@ def _jobs(settings: Settings, args) -> int:
         elif state != "observed":
             print(f"    {state.replace('_', ' ')} (hidden from the active feed)")
     shown = "retained" if args.all_states else "active"
-    print(f"\nShowing {len(rows)} of {total} {shown} job(s).")
+    what = {"default": "fresher-friendly ", "internships": "internship ", "all": ""}[level]
+    print(f"\nShowing {len(rows)} {what}job(s) of {total} {shown} job(s).")
+    if level != "all":
+        print(
+            f"{unchecked} {shown} job(s) have no early-career answer yet (not extracted, or "
+            "extracted before that field existed) and are not shown; use --all-levels."
+        )
     if not args.all_states and hidden:
         print(f"{hidden} retained job(s) are assumed inactive or closed; use --all-states.")
     return EXIT_OK
@@ -631,7 +656,10 @@ def _history(settings: Settings, args) -> int:
     print(f"  first discovered {_when(first)}, last observed {_when(last)}")
     print(f"  observations: {observations}")
     if cur_no is None:
-        print("  No content history: this posting has never been retained.")
+        print(
+            "  No content history yet: first seen before content was kept for every listing; "
+            "it is recorded the next time it is observed."
+        )
         return EXIT_OK
     print(f"  current: v{cur_no} {cur_title!r}, observed {_when(cur_at)}")
     print("Stages, in collection order (a change happened inside its window):")
@@ -650,6 +678,305 @@ def _history(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _listing(settings: Settings, args) -> int:
+    with db.connect(settings) as conn:
+        detail = listing_detail(conn, args.posting)
+    if detail is None:
+        print("No stored content for that posting.", file=sys.stderr)
+        return EXIT_FAILURE
+    d = detail.description
+    print(f"{detail.title} - {detail.employer} ({detail.source_system}:{detail.token})")
+    print(f"  locations: {'; '.join(detail.locations) or 'not stated'}")
+    print(f"  posting page: {detail.posting_url or 'none'}")
+    if detail.apply_url:
+        print(f"  application page: {detail.apply_url}")
+    print(
+        f"  availability: {detail.availability_state.replace('_', ' ')}"
+        f" (missing from {detail.qualifying_absences} qualifying scan(s)); last observed "
+        f"{_when(detail.last_observed_at)}; last trusted board check "
+        f"{_when(detail.last_trusted_check_at)}"
+    )
+    print(
+        f"  first discovered {_when(detail.first_discovered_at)}; source published "
+        f"{_when(detail.source_published_at) if detail.source_published_at else 'not given'}; "
+        f"this content seen since "
+        f"{_when(detail.content_seen_at)} (version {detail.version_no})"
+    )
+    print(f"  kept by screening: {'yes' if detail.retained else 'no'}")
+    print(f"  {d.source_note}")
+    if d.status == "omitted_too_long":
+        print(f"  Description not stored ({d.length} characters); see the posting page.")
+    elif d.status == "empty":
+        print("  The source supplied no description text.")
+    else:
+        print()
+        print(d.safe_html if args.html else plain_text(d.safe_html))
+    return EXIT_OK
+
+
+def _extract(settings: Settings, args) -> int:
+    try:
+        config = extraction.ExtractionConfig.from_env()
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    command = args.extract_command
+    if command == "run":
+        return _extract_run(settings, config, args)
+    with db.connect(settings, autocommit=True) as conn:
+        if command == "status":
+            _extract_status(extraction.status(conn, config, system_clock()))
+        elif command == "show":
+            return _extract_show(conn, args)
+        elif command == "reprocess":
+            try:
+                result = extraction.reprocess(
+                    conn, config, system_clock(), args.reason, args.limit, args.retained_only
+                )
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_FAILURE
+            print(
+                f"Queued {result.queued} listing(s) under {config.key}; reset {result.reset} "
+                f"that had given up; superseded {result.superseded} open job(s) under other "
+                "configurations. Nothing is sent until `jobmarket extract run`."
+            )
+        elif command == "renormalize":
+            n = extraction.renormalize(conn, system_clock())
+            print(f"Re-normalized {n} stored answer(s); no model calls were made.")
+        elif command == "disagreements":
+            rows = conn.execute(
+                "SELECT posting_id, employer, title, rules_retained, ai_would_retain, "
+                "rule_families, ai_categories, rule_texas_eligibility, ai_place "
+                "FROM screening_disagreements ORDER BY rules_retained DESC, posting_id LIMIT %s",
+                (args.limit,),
+            ).fetchall()
+            total = conn.execute("SELECT count(*) FROM screening_disagreements").fetchone()[0]
+            print(f"{total} listing(s) where the AI and the rules disagree (rules decide):")
+            for pid, emp, title, kept, ai, fams, cats, elig, place in rows:
+                print(
+                    f"  {pid:>6}  rules {'keep' if kept else 'skip'} / AI "
+                    f"{'keep' if ai else 'skip'}  {emp}: {title}\n"
+                    f"          rules {list(fams or [])} {elig}; AI {cats} {place}"
+                )
+    return EXIT_OK
+
+
+def _extract_run(settings: Settings, config, args) -> int:
+    import os
+
+    from jobmarket.gemini import API_KEY_ENV, GeminiClient
+
+    key = os.environ.get(API_KEY_ENV, "").strip()
+    if not key:
+        print(f"Configuration error: {API_KEY_ENV} is not set.", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    try:
+        config.require_limits()
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    with db.connect(settings, autocommit=True) as conn:
+        try:
+            report = extraction.run_extraction(
+                conn, client.generate, config, system_clock, time.sleep, args.limit
+            )
+        except extraction.ExtractionBusy as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_BUSY
+    print(
+        f"Extraction run {report.run_id} ({config.key}): {report.requests} request(s), "
+        f"{report.succeeded} extracted ({report.warnings} with warnings), {report.reused} "
+        f"reused without a request, {report.failed} failed ({report.gave_up} gave up), "
+        f"{report.superseded} superseded by newer content."
+    )
+    if report.queued_now:
+        print(f"Queued {report.queued_now} newly stored listing(s) first.")
+    print(f"Stopped: {report.stop_reason}.")
+    for error in report.errors[:10]:
+        print(f"  {error}")
+    return EXIT_OK
+
+
+def _extract_status(info: dict) -> None:
+    print(f"Active configuration: {info['config_key']}")
+    labels = {1: "new retained", 2: "retained backlog", 3: "new other", 4: "other backlog"}
+    if not info["queue"]:
+        print("  queue: empty")
+    for state, priority, n in info["queue"]:
+        print(f"  {state:10} {labels[priority]:17} {n:>6}")
+    if info["other_config_open"]:
+        print(
+            f"  {info['other_config_open']} open job(s) under other configurations "
+            "(not run; `extract reprocess` supersedes them)"
+        )
+    if info["not_yet_queued"]:
+        print(f"  {info['not_yet_queued']} listing(s) not queued yet (queued by the next run)")
+    req, ok, prompt, out, thought, total = info["usage_today"]
+    print(
+        f"Today ({info['pacific_day']}, Pacific): {req} request(s), {ok} successful; tokens "
+        f"{prompt} in, {out} out, {thought} thinking, {total} total."
+    )
+    if info["paid_equivalent_today"] is not None:
+        print(
+            f"  At paid rates this would be about ${info['paid_equivalent_today']:.4f}; the "
+            "free tier is not billed (planning figure only)."
+        )
+    if info["safety_stop_at"] is not None:
+        print(f"  Safety stop at {info['safety_stop_at']} request(s) today.")
+    if info["paused_until"]:
+        print(f"  Paused until {_when(info['paused_until'])} (daily quota).")
+    results = info["current_results"]
+    print(
+        f"Current results: {results.get('valid', 0)} valid, "
+        f"{results.get('valid_with_warnings', 0)} with warnings."
+    )
+
+
+def _extract_show(conn, args) -> int:
+    row = conn.execute(
+        "SELECT c.result_id, c.config_key, c.validation_status, c.normalized, c.derived, "
+        "r.validation_issues, r.evidence, r.created_at FROM current_extractions c "
+        "JOIN extraction_results r USING (result_id) WHERE c.posting_id = %s",
+        (args.posting,),
+    ).fetchone()
+    if row is None:
+        job = conn.execute(
+            "SELECT j.status, j.skip_reason, j.last_error FROM extraction_jobs j "
+            "JOIN source_postings p ON p.current_version_id = j.version_id "
+            "WHERE p.posting_id = %s ORDER BY j.job_id DESC LIMIT 1",
+            (args.posting,),
+        ).fetchone()
+        if job is None:
+            print("Not queued for extraction yet.")
+        else:
+            print(f"No result for the current content: {job[0]} {job[1] or ''} {job[2] or ''}")
+        return EXIT_OK
+    result_id, key, valid, norm, derived, issues, evidence, created = row
+    print(f"Result {result_id} ({key}), {valid}, extracted {_when(created)}")
+    for line in summary_lines(norm):
+        print(f"  {line}")
+    verdict = "would keep" if derived["ai_would_retain"] else "would skip"
+    print(
+        f"  compared with screening: AI {verdict}"
+        f" (categories {derived['role_categories']}, place {derived['place']})"
+    )
+    for issue in issues:
+        print(f"  warning: {issue['path']}: {issue['issue']} {issue.get('detail') or ''}")
+    if args.evidence:
+        for item in evidence:
+            mark = "found" if item["found"] else "NOT FOUND"
+            print(f"  [{mark}] {item['path']}: {item['quote']!r}")
+    return EXIT_OK
+
+
+def _eval(settings: Settings, args) -> int:
+    import json
+
+    from jobmarket import evaluation
+
+    directory = evaluation.eval_dir()
+    try:
+        config = extraction.ExtractionConfig.from_env()
+    except extraction.ExtractionNotConfigured as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    if args.eval_command == "prepare":
+        selection = json.loads(args.selection.read_text())["cases"]
+        with db.connect(settings, autocommit=True) as conn:
+            written = evaluation.prepare(conn, directory, selection)
+        print(
+            f"Wrote {len(written)} case file(s) under {directory / 'cases'} (existing files kept)."
+        )
+        return EXIT_OK
+    try:
+        cases = evaluation.load_cases(directory)
+    except (ValueError, OSError) as exc:
+        print(f"Evaluation cases: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    if args.eval_command == "run":
+        import os
+
+        from jobmarket.gemini import API_KEY_ENV, GeminiClient
+
+        key = os.environ.get(API_KEY_ENV, "").strip()
+        try:
+            config.require_limits()
+            if not key:
+                raise extraction.ExtractionNotConfigured(f"{API_KEY_ENV} is not set")
+        except extraction.ExtractionNotConfigured as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_ERROR
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+        with db.connect(settings, autocommit=True) as conn:
+            try:
+                report = evaluation.run_cases(
+                    conn, client.generate, config, system_clock, time.sleep, cases,
+                    args.split, args.final,
+                )  # fmt: skip
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_FAILURE
+        if report is None:
+            print("Every case in this split already has a result under the active configuration.")
+        else:
+            print(f"{report.requests} request(s), {report.succeeded} extracted, "
+                  f"{report.reused} reused, {report.failed} failed; stopped: "
+                  f"{report.stop_reason}.")  # fmt: skip
+        return EXIT_OK
+    with db.connect(settings) as conn:
+        try:
+            comparisons = evaluation.compare(conn, config, cases, args.split, args.final)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_FAILURE
+    _print_eval(evaluation, comparisons, args, config)
+    return EXIT_OK
+
+
+def _print_eval(evaluation, comparisons, args, config) -> None:
+    summary = evaluation.summarize(comparisons)
+    print(f"Split {args.split}, configuration {config.key}")
+    for state, title in (
+        ("human_reviewed", "Human-reviewed labels (accuracy)"),
+        ("proposed", "Proposed labels, NOT human-reviewed (agreement only)"),
+    ):
+        part = summary[state]
+        if not part["cases"]:
+            continue
+        print(f"{title}: {part['cases']} case(s)")
+        for name, entry in part["fields"].items():
+            line = f"  {name:34} {entry['agree']}/{entry['cases']} cases match"
+            if "tp" in entry:
+                line += f"  (matched {entry['tp']}, extra {entry['fp']}, missed {entry['fn']})"
+            print(line)
+        print(f"  quotes not found in the posting: {part['quotes_not_found']}; claims without "
+              f"evidence: {part['claims_without_evidence']}")  # fmt: skip
+    if summary["missing_results"]:
+        print(f"No result yet for: {', '.join(summary['missing_results'])}")
+    tokens = [(c.prompt_tokens, c.output_tokens) for c in comparisons if c.prompt_tokens]
+    if tokens:
+        print(f"Usage per listing: {sum(t[0] for t in tokens) / len(tokens):.0f} input and "
+              f"{sum(t[1] for t in tokens) / len(tokens):.0f} output tokens on average "
+              f"({len(tokens)} listing(s))")  # fmt: skip
+    if args.cases:
+        for c in comparisons:
+            if c.result_id is None:
+                continue
+            print(f"{c.case.case_id} ({c.case.review}, posting {c.case.posting_id}):")
+            for name, (label, model) in c.mismatches.items():
+                print(f"  {name}: label {_fmt(label)} / model {_fmt(model)}")
+
+
+def _fmt(value) -> str:
+    if isinstance(value, (set, frozenset)):
+        return "{" + ", ".join(sorted(map(_fmt, value))) + "}"
+    if isinstance(value, tuple):
+        return "(" + ", ".join(map(_fmt, value)) + ")"
+    return str(value)
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -657,6 +984,11 @@ def _refingerprint(settings: Settings, args) -> int:
         f"Evaluated {result.versions} version(s) under normalization rules {result.rules} "
         f"({result.computed} newly computed). No versions were created or changed."
     )
+    if result.omitted:
+        print(
+            f"{result.omitted} version(s) were skipped: their long description was not stored, "
+            "so they are compared by fingerprint only."
+        )
     if result.rule_effects:
         print(
             f"{len(result.rule_effects)} version(s) have a different comparison form under "
@@ -735,7 +1067,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-states", action="store_true", help="include assumed-inactive and closed jobs"
     )
     jobs.add_argument("--board", metavar="TOKEN")
-    jobs.add_argument("--early-career", action="store_true")
+    jobs.add_argument(
+        "--early-career",
+        action="store_true",
+        help="the screening rules' early-career flag (implies --all-levels)",
+    )
+    jobs.add_argument("--internships", action="store_true", help="internships instead")
+    jobs.add_argument("--all-levels", action="store_true", help="every level, not only freshers")
     jobs.add_argument("--review", action="store_true", help="only jobs flagged for review")
     jobs.add_argument("--limit", type=int, default=25)
 
@@ -758,6 +1096,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--available", action="store_true", help="every scan whose raw response is still stored"
     )
 
+    ext = commands.add_parser("extract", help="AI requirement extraction queue and results")
+    ext_cmds = ext.add_subparsers(dest="extract_command", required=True)
+    ext_cmds.add_parser("status", help="queue, today's usage, pause, and results")
+    ext_run = ext_cmds.add_parser("run", help="send queued listings to the model, within limits")
+    ext_run.add_argument("--limit", type=int, metavar="N", help="handle at most N jobs")
+    ext_show = ext_cmds.add_parser("show", help="the current extraction of one listing")
+    ext_show.add_argument("posting", type=int)
+    ext_show.add_argument("--evidence", action="store_true", help="list every quote")
+    ext_re = ext_cmds.add_parser(
+        "reprocess", help="queue current content under the active configuration (explicit)"
+    )
+    ext_re.add_argument("--reason", required=True)
+    ext_re.add_argument("--limit", type=int, metavar="N", help="queue at most N listings")
+    ext_re.add_argument("--retained-only", action="store_true")
+    ext_cmds.add_parser(
+        "renormalize", help="apply the current skill/location clean-up to stored answers"
+    )
+    ext_dis = ext_cmds.add_parser(
+        "disagreements", help="listings where the AI and the screening rules disagree"
+    )
+    ext_dis.add_argument("--limit", type=int, default=30)
+
+    ev = commands.add_parser("eval", help="evaluate extraction against labelled cases")
+    ev_cmds = ev.add_subparsers(dest="eval_command", required=True)
+    ev_prep = ev_cmds.add_parser("prepare", help="write case files for a selection (JSON)")
+    ev_prep.add_argument("--selection", required=True, type=Path)
+    for name, text in (("run", "extract the cases of one split"),
+                       ("report", "compare stored results with the labels")):  # fmt: skip
+        cmd = ev_cmds.add_parser(name, help=text)
+        cmd.add_argument("--split", required=True, choices=["practice", "holdout"])
+        cmd.add_argument("--final", action="store_true", help="required for the holdout")
+        if name == "report":
+            cmd.add_argument("--cases", action="store_true", help="list every mismatch")
+
+    listing = commands.add_parser("listing", help="one listing as a detail page would show it")
+    listing.add_argument("posting", type=int)
+    listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
     history = commands.add_parser("history", help="content history of one posting")
     history.add_argument("posting", nargs="?", type=int, help="posting id")
     history.add_argument("--board", metavar="TOKEN")
@@ -829,6 +1204,9 @@ HANDLERS = {
     "check-pages": _check_pages,
     "availability": _availability,
     "duplicates": _duplicates,
+    "listing": _listing,
+    "extract": _extract,
+    "eval": _eval,
 }
 
 

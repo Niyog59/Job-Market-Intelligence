@@ -341,7 +341,7 @@ def test_cli_review_commands(cli_env, capsys):
     acme = Board(cli_env)
     acme.scan([1, 2, 3])
     acme.scan([1, 2])
-    assert cli.main(["jobs"]) == cli.EXIT_OK
+    assert cli.main(["jobs", "--all-levels"]) == cli.EXIT_OK
     assert "WARNING: possibly unavailable" in capsys.readouterr().out
     assert cli.main(["availability", "show", str(acme.posting_id(3))]) == cli.EXIT_OK
     assert "missing from qualifying scan 1 of 3" in capsys.readouterr().out
@@ -355,7 +355,7 @@ def test_cli_review_commands(cli_env, capsys):
     assert "released" in capsys.readouterr().out
     close = ["availability", "close", str(acme.posting_id(1)), "--reason", "r"]
     assert cli.main([*close, "--evidence-url", "https://x.example", "--evidence-text", "x"]) == 0
-    assert cli.main(["jobs"]) == cli.EXIT_OK
+    assert cli.main(["jobs", "--all-levels"]) == cli.EXIT_OK
     assert "assumed inactive or closed; use --all-states" in capsys.readouterr().out
 
 

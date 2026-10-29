@@ -26,6 +26,14 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 - Availability verification: postings move between observed, possibly unavailable,
   assumed inactive, and closed only on trustworthy evidence, with board holds that stop a
   suspicious mass disappearance from hiding jobs. Hidden jobs are never deleted.
+- Requirement extraction with Gemini (free tier): a persistent queue sends one request per
+  new or changed listing, Python validates the JSON answer and checks every quoted piece
+  of evidence against the posting, and results are stored with their model and rule
+  versions. Collection never waits for it. Rule-based screening still decides which jobs
+  are retained; disagreements with the AI are listed for review.
+- Content history for every listing, retained or not, and a display-safe listing form
+  (sanitized description, original links, freshness, availability) for the job list and
+  detail pages to come.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -42,6 +50,9 @@ Not yet in place:
   email is sent.
 - **A web interface.** Status is available through `jobmarket status` and the
   `board_status` database view.
+- **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
+  It has been compared with labels on 30 listings, but those labels are drafts that a
+  person has not reviewed yet, so the comparison shows agreement, not accuracy.
 
 ## Requirements
 
@@ -100,6 +111,12 @@ Optional settings:
 | `JOBMARKET_CONCURRENCY`      | `1`                             | boards of one provider fetched at the same time (1 to 4) |
 | `JOBMARKET_HOLD_ALL_MISSING` | `true`                          | hold a board when every reference job is missing |
 | `JOBMARKET_HOLD_MIN_SHARE`, `JOBMARKET_HOLD_MIN_MISSING` | `0.5`, `10`        | hold a board when at least this share and this many reference jobs are missing |
+| `GEMINI_API_KEY`             | unset                           | Gemini API key for requirement extraction; secret, never committed or printed |
+| `JOBMARKET_AI_MODEL`, `JOBMARKET_AI_THINKING` | `gemini-3.5-flash-lite`, `minimal` | extraction model and thinking level |
+| `JOBMARKET_AI_RPM`, `JOBMARKET_AI_DAILY_LIMIT` | unset (required to run extraction) | the account's free-tier requests per minute and per day for that model, as shown in Google AI Studio |
+| `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
+| `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
+| `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -115,7 +132,7 @@ Optional settings:
 | `jobmarket collect [--board [SOURCE:]TOKEN ...] [--scheduled]` | Scan enabled Greenhouse and Lever boards now |
 | `jobmarket retry-due` | Run only the retries that are due now |
 | `jobmarket status [--all]` | Per-board last result, last complete scan, retained jobs, incidents |
-| `jobmarket jobs [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs (observed or possibly unavailable), newest discoveries first |
+| `jobmarket jobs [--internships \| --all-levels] [--all-states] [--board TOKEN] [--early-career] [--review] [--limit N]` | Active retained jobs, newest discoveries first: by default only fresher-friendly ones (see "Early career") |
 | `jobmarket availability show POSTING_ID` | A posting's availability state and every transition with its reason and evidence |
 | `jobmarket availability close POSTING_ID --reason R --evidence-url URL --evidence-text T` | Mark a posting closed on official evidence |
 | `jobmarket availability holds [--all]` | Board holds against mass disappearances |
@@ -127,6 +144,14 @@ Optional settings:
 | `jobmarket cleanup-raw [--dry-run]` | Delete raw responses older than four days |
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
+| `jobmarket extract status` | Extraction queue, today's requests and tokens, pause, safety stop, results |
+| `jobmarket extract run [--limit N]` | Send queued listings to the model, one at a time, within the configured limits |
+| `jobmarket extract show POSTING_ID [--evidence]` | The current extraction of a listing, with warnings and quotes |
+| `jobmarket extract reprocess --reason R [--limit N] [--retained-only]` | Explicitly queue current content under the active configuration |
+| `jobmarket extract renormalize` | Re-apply skill and location clean-up to stored answers (no model calls) |
+| `jobmarket extract disagreements [--limit N]` | Listings where the AI and the screening rules disagree |
+| `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
+| `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
 | `jobmarket sources check-mapping [--all] [--source S] [--board TOKEN]` | Look for each board on its employer's official careers page; store the evidence |
@@ -154,7 +179,7 @@ jobmarket collect / retry-due                           v
          complete | partial (usable, but something is missing or wrong) | failed
     -> for each valid job: source_postings (identity, first discovered, last observed)
        and posting_screenings (relevance, Texas eligibility, seniority, sponsorship)
-    -> retained jobs: posting_observations (one per scan, pointing at its page) and
+    -> every valid job: posting_observations (one per scan, pointing at its page) and
        posting_versions (a new row only for a meaningful change; see "Posting history")
     -> collection_incidents: retry state; notifications: alert/recovery outbox
 ```
@@ -317,6 +342,133 @@ A dismissed flag is not raised again, and a dissolved group is not recreated by 
 The Module 3 flags (same title and description, no location check) are kept with status
 `superseded`; the current rule reopens any pair it also matches.
 
+Duplicate matching covers postings that are or have been retained (the Module 6 scope),
+even though every listing now has content history.
+
+## Requirement extraction
+
+A language model (Gemini, through the official `google-genai` SDK) reads each listing and
+returns its requirements as JSON. Python decides what is sent, checks every answer, tidies
+names, stores everything with its versions, and controls retries and quota. Availability,
+duplicates, and retention stay rule-based.
+
+**What is extracted** (one request per listing version, all fields together): role
+categories (several may apply; titles are kept as published), seniority, employment type;
+skills as required, preferred, mentioned, or ambiguous, with AND/OR/"at least N"
+relationships kept as such ("Python or Java" keeps both names and its wording); overall and
+skill-specific experience with ranges, education, and education/experience alternatives;
+explicit graduation windows; sponsorship (supported, not supported, not stated, ambiguous),
+kept apart from work authorization, citizenship, and clearance; and locations (original
+text plus city, state, country), work arrangement, explicit remote restrictions, and
+on-site frequency. "Not stated" is never turned into "no", "remote" never means
+worldwide, and no location or coordinate is invented.
+
+**Early career.** Each answer also says whether the job is open to someone with no or very
+little experience: `yes` for new-grad, recent-graduate, rotational, and early-career
+programs, entry-level roles, "no experience needed", or at most one year of experience;
+`internship`; `no`; or `unclear`, with the reasons and quotes. Python warns when `yes`
+comes with a required experience of more than one year. `jobmarket jobs` lists only the
+`yes` jobs by default (`--internships` for internships, `--all-levels` for everything);
+every job is still collected, screened, and kept, and jobs not yet extracted are counted
+rather than hidden silently.
+
+**Skills** are named technologies only (languages, frameworks, tools, platforms, databases,
+cloud services, products), not methods, concepts, soft skills, or certifications.
+
+**Input and safety.** The model receives one document per version: title, location fields,
+Lever workplace and commitment fields, and the description as display-safe text (headings
+and lists kept). The posting is wrapped in `<posting>` tags and the instructions say its
+contents are data, never instructions. Descriptions over 20,000 characters and empty ones
+are skipped (`too_long`, `no_description`) and stay listed.
+
+**Checks.** The API enforces the JSON schema; Python checks it again (types, allowed
+values, required fields, bounds). A malformed answer is retried and never stored. Each
+quote is then searched for in the exact document sent (case, spacing, and typographic
+differences ignored), and its character offsets are stored. A quote that is not found, a
+claim without a quote, a relationship naming an unlisted skill, or an inconsistent year
+range is a warning: the answer is kept and marked `valid_with_warnings`. These checks show
+an answer is well formed and quoted from the posting, not that it is correct.
+
+**Clean-up.** Skill names are merged only through an exact alias table (`Postgres` becomes
+`PostgreSQL`; `Java` and `JavaScript` stay apart; unknown names are kept as written).
+States become two-letter codes, common country names one spelling, and Texas cities are
+placed in the DFW or Houston area with the screening city lists.
+
+**Queue.** `jobmarket collect` queues new content (it never calls the model);
+`jobmarket extract run` processes the queue in priority order: new or edited retained
+listings, retained backlog, new or edited other listings, other backlog. Requests are sent
+one at a time, spaced to `JOBMARKET_AI_RPM` (and `JOBMARKET_AI_TPM` if set). A failed
+request is retried three times after 10, 30, and 90 seconds, or longer if Google says so;
+a job that still fails is retried in the next run, five runs at most, then waits for
+`extract reprocess`. A daily-quota error pauses extraction until midnight Pacific time.
+Runs stop at 90% of `JOBMARKET_AI_DAILY_LIMIT`. An interrupted run is recovered by the next
+one. Collection is unaffected by any of this.
+
+**Caching and versions.** Results are keyed by the posting version and the configuration
+(model, thinking level, prompt version, schema version). Unchanged content is never sent
+again; identical text in another version reuses the stored answer without a request; a
+result is never attached to newer content (the `current_extractions` view joins on the
+current version only), and older results are kept. A new model, prompt, or schema applies
+to new content only: `extract reprocess` queues older content explicitly. Python clean-up
+changes are applied with `extract renormalize`, without model calls.
+
+**Free tier only.** Nothing enables billing. The code cannot tell whether a Google project
+is billed, so the free tier is confirmed in Google AI Studio; limits are configured from
+the same page. `extract status` reports requests and tokens per Pacific day and what they
+would cost at paid rates, for planning only. Free-tier requests may be used by Google to
+improve its products; job descriptions are public listings.
+
+Tables: `extraction_inputs` (the exact text sent), `extraction_jobs` (queue),
+`extraction_runs`, `extraction_attempts` (every request, its outcome and token usage),
+`extraction_results` (answer, normalized form, warnings, evidence offsets, versions),
+`extraction_pauses`. Views: `current_extractions`, `extraction_usage_daily`,
+`screening_disagreements`.
+
+### Evaluation
+
+Extraction quality is measured against labelled cases, not assumed. A case pins one
+posting version; its file (under `data/eval/cases/`, outside Git because it contains copied
+posting text) holds the exact document the model receives and a TOML block of labels for a
+chosen set of fields: role categories, seniority, employment type, required and preferred
+skills, skill relationships, overall minimum years, degree-or-experience alternatives,
+sponsorship, work authorization, citizenship, clearance, graduation, work arrangement,
+locations, and remote restrictions.
+
+Each case says who stands behind its labels: `proposed` (drafted without seeing a model
+answer, not checked by a person) or `human_reviewed`. Reports keep the two apart; only
+human-reviewed cases are reported as accuracy. Cases are split into `practice`, used while
+adjusting the instructions, and `holdout`, kept unseen until a final run (`--final`).
+
+```bash
+jobmarket eval prepare --selection selection.json   # write case files (existing ones kept)
+jobmarket eval run --split practice                 # extract through the normal queue
+jobmarket eval report --split practice --cases      # per-field agreement and every mismatch
+jobmarket eval run --split holdout --final          # once, after tuning
+```
+
+Reports count, per field, the cases that match, and for lists the matched, extra, and
+missed items (skills are compared after alias clean-up), plus quotes not found and average
+tokens per listing. Matching labels shows agreement with those labels on those fields; it
+is not a general accuracy claim.
+
+## Listing data for display
+
+`jobmarket.listings.listing_detail()` returns what a detail page needs for one listing: the
+original title and locations, the source's posting page and separate application page,
+availability state, first discovery, source publication and creation dates, when the
+current content was first seen, the board's last trusted check, the description, and the
+extraction status with a display-ready summary (`summary_lines()`) when there is one.
+
+Descriptions are untrusted employer HTML and are never rendered as collected.
+`safe_description_html()` rebuilds them from an allowlist: headings, paragraphs, line
+breaks, lists, bold, italics, block quotes, and absolute `https` links (opened in a new tab
+with `rel="nofollow noopener noreferrer"`). Every other attribute and link type is dropped;
+scripts, styles, images, frames, and forms are removed with their content; text is escaped.
+The text is what the source API supplied, which can differ from the employer's page, so
+each description carries a note on where it came from. A description that was too long to
+store is reported as `omitted_too_long`, and an empty one as `empty`, never as complete.
+`jobmarket listing POSTING_ID` prints the same data in a terminal.
+
 ### Failures, retries, and alerts
 
 - Each board's scan is `complete`, `partial`, or `failed`. One board's failure never
@@ -357,8 +509,9 @@ source's job id, enforced by a unique constraint; titles are never identifiers.
 source's own `first_published` and `updated_at` are kept per observation as evidence,
 not treated as a posting date.
 
-**Observations.** Every scan of a tracked job (one that is or was ever retained) adds one
-observation. Observations are unique per (board scan, posting), so processing the same
+**Observations.** Every scan of a valid job, retained or not, adds one observation (until
+2026-10-27 only retained jobs were tracked; earlier excluded jobs get content history from
+the next scan that lists them). Observations are unique per (board scan, posting), so processing the same
 saved response again adds nothing.
 
 **Meaningful changes.** `jobmarket.normalize` builds a comparison form of each content:
@@ -368,6 +521,13 @@ typographic quote/dash variants, and timestamps are ignored; case, numbers, and 
 are kept. A new version is written only when the comparison form differs from the
 chronologically neighbouring observation. Unchanged content reuses the existing version,
 and returning to earlier content (A, B, A) is a new version, so the sequence is kept.
+
+**Long descriptions.** A description longer than 20,000 characters (the longest collected
+so far is about 15,800) is not stored: the version keeps its fingerprints, title,
+location, links, and `description_length`, with `description_omitted = 'too_long'`. Edits
+are still detected by fingerprint, including after a rule change (the new content is
+compared under the rules the old content was recorded with). Readers get the posting link
+instead of the text.
 Each version keeps its original source content (`content_html`, offices, metadata, and
 so on), its exact source fingerprint, and the rules version that detected it; its
 comparison form under each rules version is in `posting_version_comparisons`.
@@ -463,7 +623,9 @@ raw_responses    ─< posting_observations
 | `board_holds`          | board-level hold opened by a mass disappearance, with its review and release |
 | `posting_page_checks`  | sampled check of a posting's job or application page |
 
-Views: `board_status` (one row per board for status displays), `retained_jobs`
+Views: `board_status` (one row per board for status displays), `listings` (every listing
+with stored content, retained or not, with links, freshness, and availability),
+`retained_jobs`
 (retained postings with their current content and availability), `active_jobs` (the
 default feed: observed or possibly unavailable), `posting_version_stages` (content stages
 in collection order with change windows), and `posting_history_problems` (integrity
@@ -513,6 +675,10 @@ database a failure instead (CI does this).
 
 `python tests/history_scenarios.py` replays the history scenarios with printed SQL
 evidence (it also runs as part of `pytest`).
+
+Extraction tests never call Gemini: a scripted fake model returns prepared answers and
+errors (malformed JSON, schema violations, per-minute and daily quota errors, server and
+network failures), so CI needs no API key.
 
 Database tests create a temporary schema, work only inside it, and drop it afterwards;
 they do not modify existing tables in the configured database. The role needs permission

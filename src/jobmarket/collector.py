@@ -20,13 +20,14 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import httpx
 import psycopg
 from psycopg.types.json import Jsonb
 
-from jobmarket import availability, duplicates, incidents
+from jobmarket import availability, duplicates, extraction, incidents
 from jobmarket.clock import Clock, system_clock
 from jobmarket.connectors import (
     USER_AGENT,
@@ -129,6 +130,8 @@ class RunReport:
     abandoned_scans_recovered: int = 0
     duplicate_flags_added: int = 0
     duplicate_groups_created: int = 0
+    extraction_queued: int = 0
+    extraction_queue_error: str | None = None
 
 
 class Collector:
@@ -286,7 +289,18 @@ class Collector:
                 "UPDATE collection_runs SET status = %s, finished_at = %s WHERE run_id = %s",
                 (status, finished, run_id),
             )
+        self._queue_extraction(report, finished)
         return report
+
+    def _queue_extraction(self, report: RunReport, now: datetime) -> None:
+        """Queue new content for requirement extraction. Only database rows are written; no
+        model is called during collection, and a problem here never fails the collection."""
+        try:
+            config = extraction.ExtractionConfig.from_env()
+            with self.conn.transaction():
+                report.extraction_queued = extraction.enqueue_new(self.conn, config, now)
+        except Exception as exc:  # noqa: BLE001 - collection must succeed without extraction
+            report.extraction_queue_error = f"{type(exc).__name__}: {exc}"[:300]
 
     def _fetch_all(self, targets: list[BoardTarget]) -> Iterator[tuple[BoardTarget, BoardFetch]]:
         """Fetch every target, in parallel lanes per source system, and yield the results in
@@ -515,6 +529,13 @@ def summarize(report: RunReport) -> list[str]:
         )
     if report.duplicate_flags_added:
         lines.append(f"Possible duplicates flagged (not merged): {report.duplicate_flags_added}")
+    if report.extraction_queued:
+        lines.append(
+            f"Queued {report.extraction_queued} listing(s) for requirement extraction "
+            "(run `jobmarket extract run`; collection never calls the model)."
+        )
+    if report.extraction_queue_error:
+        lines.append(f"Extraction queue not updated: {report.extraction_queue_error}")
     if report.notifications:
         lines.append(
             f"Queued {len(report.notifications)} notification(s) in the outbox "

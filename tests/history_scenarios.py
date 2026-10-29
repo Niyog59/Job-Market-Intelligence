@@ -110,7 +110,7 @@ def run(conn, raw_root):
     analyst = gh_job(2, title="Data Analyst", location="Houston, TX")
     accountant = gh_job(3, title="Staff Accountant")
 
-    heading("1. First collection: three jobs, two relevant")
+    heading("1. First collection: three jobs, two relevant (all three get content history)")
     ev.expect(
         "(new, changed, unchanged, cosmetic)",
         counts_line(collect(data_job, analyst, accountant)),
@@ -121,7 +121,7 @@ def run(conn, raw_root):
     ev.expect(
         "(new, changed, unchanged, cosmetic)",
         counts_line(collect(data_job, analyst, accountant)),
-        (0, 0, 2, 0),
+        (0, 0, 3, 0),
     )
 
     heading("3. Cosmetic HTML/whitespace edit and a new source updated_at")
@@ -129,21 +129,21 @@ def run(conn, raw_root):
     ev.expect(
         "(new, changed, unchanged, cosmetic)",
         counts_line(collect(cosmetic, analyst, accountant)),
-        (0, 0, 2, 1),
+        (0, 0, 3, 1),
     )
 
     heading("4. Meaningful change: the description is reworded")
     ev.expect(
         "(new, changed, unchanged, cosmetic)",
         counts_line(collect(gh_job(1, content=REWORDED), analyst, accountant)),
-        (0, 1, 1, 0),
+        (0, 1, 2, 0),
     )
 
     heading("5. The wording is reverted (A -> B -> A)")
     ev.expect(
         "(new, changed, unchanged, cosmetic)",
         counts_line(collect(data_job, analyst, accountant)),
-        (0, 1, 1, 0),
+        (0, 1, 2, 0),
     )
 
     heading("6. Out of order: a response saved, not processed, and replayed after a newer scan")
@@ -168,7 +168,7 @@ def run(conn, raw_root):
     ev.expect(
         "new version kept as history (changed, historical)",
         (replayed.counts.changed, replayed.counts.historical),
-        (1, 2),
+        (1, 3),  # every listing has content history, the excluded accountant too
     )
     ev.expect(
         "current title after the older replay",

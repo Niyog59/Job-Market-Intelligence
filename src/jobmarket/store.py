@@ -11,13 +11,17 @@ with board_scan_id breaking exact ties. Processing time is recorded separately a
 decides what is current, so an older saved response processed later adds history without
 replacing newer state.
 
-Observations and versions. Postings that are, or have ever been, retained get one
+Observations and versions. Every valid posting, retained or not, gets one
 posting_observations row per board scan; the UNIQUE (board_scan_id, posting_id) key makes
 reprocessing the same response add nothing. A new posting_versions row is written only when
 the content differs meaningfully (jobmarket.normalize) from its chronological neighbours: the
 newest observation before it and, for an older response processed late, the oldest one
 after it. Identical source content never counts as a change, whatever the rules say, so a
 change to the normalization rules cannot masquerade as an employer edit.
+
+Long descriptions. A description longer than MAX_STORED_DESCRIPTION_CHARS is not stored
+(description_omitted = 'too_long'): the version keeps its fingerprints, title, location, and
+links, so edits are still detected, but not the text or HTML.
 """
 
 from collections.abc import Mapping
@@ -34,6 +38,15 @@ from jobmarket.normalize import Comparison, SourceContent, compare_form
 
 RECORDED_BY = ("collection", "replay")
 
+# Descriptions longer than this are not stored; readers get the posting link (decision
+# 2026-10-27). The longest description collected so far is about 15,800 characters.
+MAX_STORED_DESCRIPTION_CHARS = 20_000
+OMITTED_DESCRIPTION = "[description not stored: longer than the storage limit]"
+
+
+class ContentOmitted(Exception):
+    """A version's description was not stored, so it cannot be re-normalized."""
+
 
 @dataclass
 class StoreCounts:
@@ -48,6 +61,7 @@ class StoreCounts:
     cosmetic_only: int = 0  # unchanged, though the exact source content differed
     already_recorded: int = 0  # this response was processed before; nothing added
     historical: int = 0  # older than the posting's current observation; kept as history
+    omitted_too_long: int = 0  # new versions whose description was too long to store
     touched_postings: list[int] = field(default_factory=list)
 
 
@@ -61,6 +75,7 @@ class _Neighbour:
     normalization_version: str | None
     comparison_fingerprint: str | None
     version_content_hash: str
+    description_omitted: str | None
 
 
 def store_scan_results(
@@ -214,9 +229,6 @@ def _store_job(
     retained, snapshot = _screen(
         conn, posting_id, job, source_fingerprint, key, processed_at, counts
     )
-    if not retained and current_key is None:
-        return  # never retained: identity and screening only
-
     if conn.execute(
         "SELECT 1 FROM posting_observations WHERE board_scan_id = %s AND posting_id = %s",
         (board_scan_id, posting_id),
@@ -245,7 +257,7 @@ def _store_job(
         first = before is None and after is None
         version_id = _insert_version(
             conn, posting_id, job, source_fingerprint, comparison, snapshot, observed_at,
-            processed_at, "first_seen" if first else "content_change",
+            processed_at, "first_seen" if first else "content_change", counts,
         )  # fmt: skip
         counts.new_versions += 1
         if not first:
@@ -386,7 +398,7 @@ def _neighbour(
     row = conn.execute(
         "SELECT o.observation_id, o.version_id, o.observed_at, o.board_scan_id, "
         "o.source_fingerprint, o.normalization_version, o.comparison_fingerprint, "
-        "v.content_hash FROM posting_observations o "
+        "v.content_hash, v.description_omitted FROM posting_observations o "
         "JOIN posting_versions v ON v.version_id = o.version_id "
         f"WHERE o.posting_id = %s AND (o.observed_at, o.board_scan_id) {comparison} (%s, %s) "
         f"ORDER BY o.observed_at {direction}, o.board_scan_id {direction} LIMIT 1",
@@ -407,7 +419,7 @@ def _same_content(
         return True  # identical source content: nothing changed, whatever the rules say
     if neighbour.normalization_version == comparison.normalization_version:
         return neighbour.comparison_fingerprint == comparison.fingerprint
-    if (
+    if neighbour.description_omitted is None and (
         neighbour.source_fingerprint == neighbour.version_content_hash
         or neighbour.normalization_version is None
     ):
@@ -417,7 +429,8 @@ def _same_content(
         rules = comparison.normalization_version
         stored = version_comparison(conn, neighbour.version_id, rules, now)
         return stored.fingerprint == comparison.fingerprint
-    # Only a cosmetic variant of the neighbour's content is stored. Judge under the rules the
+    # Only a cosmetic variant of the neighbour's content is stored, or none at all (an omitted
+    # long description). Judge under the rules the
     # neighbour was recorded with, so a difference the old rules ignored, and the new rules
     # would see, is not reported as a change the employer made now.
     return (
@@ -436,17 +449,23 @@ def _insert_version(
     observed_at: datetime,
     processed_at: datetime,
     detection: str,
+    counts: StoreCounts,
 ) -> int:
+    length = len(job.description_text or "")
+    omitted = "too_long" if length > MAX_STORED_DESCRIPTION_CHARS else None
+    if omitted:
+        counts.omitted_too_long += 1
     version_id = conn.execute(
         """
         INSERT INTO posting_versions (
             posting_id, version_no, content_hash, title, location_text, description_text,
             first_seen_at, absolute_url, content_html, departments, offices,
             requisition_id, internal_job_id, source_metadata, screening,
-            normalization_version, detection, recorded_at, apply_url, source_fields)
+            normalization_version, detection, recorded_at, apply_url, source_fields,
+            description_length, description_omitted)
         VALUES (%s, (SELECT coalesce(max(version_no), 0) + 1 FROM posting_versions
                      WHERE posting_id = %s),
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING version_id
         """,
         (
@@ -455,10 +474,10 @@ def _insert_version(
             source_fingerprint,
             job.title,
             job.location_name,
-            job.description_text,
+            None if omitted else job.description_text,
             observed_at,
             job.absolute_url,
-            job.content_html,
+            None if omitted else job.content_html,
             Jsonb(job.departments),
             Jsonb(job.offices),
             job.requisition_id,
@@ -470,8 +489,16 @@ def _insert_version(
             processed_at,
             job.apply_url,
             Jsonb(job.source_fields) if job.source_fields is not None else None,
+            length,
+            omitted,
         ),
     ).fetchone()[0]
+    if omitted:
+        # The fingerprint covers the full text; the stored comparison form does not keep it.
+        normalized = {**comparison.normalized, "description": OMITTED_DESCRIPTION}
+        comparison = Comparison(
+            comparison.normalization_version, normalized, comparison.fingerprint
+        )
     _save_comparison(conn, version_id, comparison, processed_at)
     return version_id
 
@@ -494,12 +521,15 @@ def _save_comparison(
 
 
 def version_source_content(conn: psycopg.Connection, version_id: int) -> SourceContent:
-    """The original content stored for a version, as normalization rules consume it."""
-    title, location, html, offices, departments, metadata, text = conn.execute(
+    """The original content stored for a version, as normalization rules consume it.
+    Raises ContentOmitted for a version whose long description was not stored."""
+    title, location, html, offices, departments, metadata, text, omitted = conn.execute(
         "SELECT title, location_text, content_html, offices, departments, source_metadata, "
-        "description_text FROM posting_versions WHERE version_id = %s",
+        "description_text, description_omitted FROM posting_versions WHERE version_id = %s",
         (version_id,),
     ).fetchone()
+    if omitted:
+        raise ContentOmitted(f"version {version_id}: description not stored ({omitted})")
     return SourceContent(
         title=title,
         location=location,
@@ -533,6 +563,7 @@ class RefingerprintResult:
     rules: str
     versions: int
     computed: int
+    omitted: int  # versions without stored text, which cannot be evaluated under new rules
     # Versions whose comparison form under the current rules differs from the form under
     # the rules they were recorded with. Same original content, so this is a rule effect.
     rule_effects: list[tuple[int, str]]
@@ -548,9 +579,12 @@ def refingerprint_versions(
         "SELECT v.version_id, v.normalization_version, "
         "EXISTS (SELECT 1 FROM posting_version_comparisons c "
         "        WHERE c.version_id = v.version_id AND c.normalization_version = %s) "
-        "FROM posting_versions v ORDER BY v.version_id",
+        "FROM posting_versions v WHERE v.description_omitted IS NULL ORDER BY v.version_id",
         (rules,),
     ).fetchall()
+    omitted = conn.execute(
+        "SELECT count(*) FROM posting_versions WHERE description_omitted IS NOT NULL"
+    ).fetchone()[0]
     computed, effects = 0, []
     for version_id, recorded_rules, present in rows:
         with conn.transaction():
@@ -560,4 +594,4 @@ def refingerprint_versions(
                 earlier = version_comparison(conn, version_id, recorded_rules, now)
                 if earlier.fingerprint != current.fingerprint:
                     effects.append((version_id, recorded_rules))
-    return RefingerprintResult(rules, len(rows), computed, effects)
+    return RefingerprintResult(rules, len(rows), computed, omitted, effects)

@@ -37,7 +37,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from jobmarket import normalize
-from jobmarket.store import version_comparison
+from jobmarket.store import ContentOmitted, version_comparison
 
 RULE_VERSION = "2026-10-27.1"
 
@@ -117,7 +117,9 @@ class Record:
 
 
 def load_records(conn: psycopg.Connection, now: datetime) -> list[Record]:
-    """Every posting with content history (the ones duplicates matter for)."""
+    """Postings that are or have been retained. Every listing has content history since
+    2026-10-27; duplicate matching keeps its Module 6 scope (postings with a version recorded
+    while retained) until that scope is decided separately."""
     rows = conn.execute(
         """
         SELECT p.posting_id, b.employer_id, e.name, b.board_key, b.source_system,
@@ -129,14 +131,20 @@ def load_records(conn: psycopg.Connection, now: datetime) -> list[Record]:
         JOIN employers e ON e.employer_id = b.employer_id
         JOIN posting_versions v ON v.version_id = p.current_version_id
         JOIN posting_observations co ON co.observation_id = p.current_observation_id
+        WHERE EXISTS (SELECT 1 FROM posting_versions rv
+                      WHERE rv.posting_id = p.posting_id
+                        AND (rv.screening ->> 'retained')::boolean)
         ORDER BY p.posting_id
         """
     ).fetchall()
     records = []
     for (pid, emp_id, emp, board, src, sid, vid, title, loc, offices, req, url, pub,
          first) in rows:  # fmt: skip
-        comparison = version_comparison(conn, vid, normalize.CURRENT_NORMALIZATION, now)
-        description = comparison.normalized.get("description") or None
+        try:
+            comparison = version_comparison(conn, vid, normalize.CURRENT_NORMALIZATION, now)
+            description = comparison.normalized.get("description") or None
+        except ContentOmitted:
+            description = None  # no stored text: never matched on description
         norm_url = normalize_url(url)
         records.append(
             Record(

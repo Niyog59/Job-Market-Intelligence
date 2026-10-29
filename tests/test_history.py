@@ -144,9 +144,10 @@ def test_same_saved_input_processed_twice_adds_no_facts(h):
 
     assert h.facts() == before
     assert before["rejected_records"] == 1
-    assert (first.new_postings, first.new_versions, first.new_observations) == (2, 1, 1)
+    # Both valid jobs get content history; the excluded accountant role too.
+    assert (first.new_postings, first.new_versions, first.new_observations) == (2, 2, 2)
     assert (again.new_postings, again.new_versions, again.new_observations) == (0, 0, 0)
-    assert again.already_recorded == 1
+    assert again.already_recorded == 2
     h.assert_consistent()
 
 
@@ -317,7 +318,14 @@ def test_older_input_does_not_regress_screening_of_excluded_jobs(h):
     h.collect(T0 + HOUR, [gh_job(2, title="Senior Staff Accountant")])
     h.process(late, recorded_by="replay")
     assert h.scalar("SELECT title FROM posting_screenings") == "Senior Staff Accountant"
-    assert h.scalar("SELECT count(*) FROM posting_versions") == 0
+    # Excluded jobs keep content history too; the older response is history, not current.
+    assert (
+        h.scalar(
+            "SELECT v.title FROM source_postings p JOIN posting_versions v "
+            "ON v.version_id = p.current_version_id"
+        )
+        == "Senior Staff Accountant"
+    )
 
 
 def test_older_input_recomputes_absence_evidence(h):
