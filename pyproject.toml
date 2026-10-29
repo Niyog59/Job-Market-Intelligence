@@ -20,6 +20,12 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# dbt models in analytics/ (jobmarket analytics build). Pinned: 1.11 needs no build-time
+# downloads; upgraded deliberately.
+analytics = [
+    "dbt-core==1.11.16",
+    "dbt-postgres==1.11.0",
+]
 
 [project.scripts]
 jobmarket = "jobmarket.cli:main"

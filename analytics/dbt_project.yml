@@ -1,0 +1,37 @@
+# SQL models over the collected data. Python collects and Gemini interprets; dbt only reads
+# the ingestion schema (var source_schema) and writes its own analytics_* schemas.
+name: job_market_analytics
+version: "1.0.0"
+config-version: 2
+profile: job_market
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+log-path: "logs"
+clean-targets: ["target", "logs"]
+
+flags:
+  send_anonymous_usage_stats: false
+  use_colors: false
+
+vars:
+  source_schema: public            # where ingestion owns its tables
+  schema_prefix: ""                # tests build into throwaway, prefixed schemas
+  reporting_timezone: America/Chicago
+
+on-run-start:
+  - "{{ assert_analytics_schemas_are_separate() }}"
+
+models:
+  job_market_analytics:
+    staging:
+      +schema: analytics_staging
+      +materialized: view
+    intermediate:
+      +schema: analytics_intermediate
+      +materialized: view
+    reporting:
+      +schema: analytics_reporting
+      +materialized: table
