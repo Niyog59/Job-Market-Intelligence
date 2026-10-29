@@ -492,6 +492,66 @@ analytics && dbt docs serve --profiles-dir .`). The same commands are the entry 
 later scheduling. Running dbt directly works too:
 `cd analytics && dbt build --profiles-dir .`.
 
+### Counting rules
+
+- **Grains.** A *source record* is one posting on one board. An *opportunity* is a duplicate
+  group with strong or reviewed evidence counted once, or an ungrouped posting; possible
+  duplicates (flags) stay separate. Reports give both counts.
+- **Discoveries versus initial imports.** A board's first complete collection is its
+  baseline. Postings first seen at or before it (including in an earlier partial scan) are
+  its *initial import*: searchable and in inventory, never counted as hiring. Later first
+  sightings are *discoveries*: first observed by this pipeline, not necessarily newly
+  published (the source's own dates are kept separately). `boards_baselined` and
+  `boards_with_baseline` sit next to every trend so new boards are not read as market
+  growth.
+- **Updates** are meaningful content changes (new versions), including employer-wide
+  template edits. Repeated observations never count.
+- **Availability** keeps the four states apart. A group is observed if any member is,
+  possibly unavailable if any member is, closed only if every member is closed, otherwise
+  assumed inactive; member counts per state are kept.
+- **Extraction coverage.** Postings without an extraction count in every inventory; only
+  metrics that need extracted fields leave them out, and each such metric reports its
+  denominator (`extracted_postings`) and the coverage (`rpt_extraction_coverage`).
+- **Overlap.** Role categories, rule families, and skills can overlap; their totals cannot
+  be summed (`categories_overlap`). "Python or Java" gives each skill an *alternative*
+  mention, never an individual requirement.
+- **Eligibility.** Sponsorship, work authorization, citizenship, and clearance are separate
+  concepts. Each has three shares: of all listed postings, of extracted postings, and of
+  postings that state a policy. `not_stated` and `ambiguous` are never folded into yes or
+  no.
+
+### History and reporting days
+
+Reporting days are America/Chicago calendar days. Each day's rows describe what was known at
+the end of that day (`int_posting_days`), rebuilt from timestamped evidence: the latest
+sighting, the screening stored with that content version, the latest availability event,
+an extraction only if it existed by then, and a duplicate group only if it was active then.
+A later closure, extraction, or grouping never changes an earlier day. Today is provisional
+(`is_complete = false`). `seen_that_day` and `carried_forward` separate postings re-verified
+that day from ones carried from an earlier sighting.
+
+Coverage limits: availability is tracked from the earliest availability event (on the
+current installation 2026-10-27, when tracking started); earlier days are reported as
+`before_availability_tracking`, not reconstructed. Before 2026-10-28 only retained postings
+kept content history, so earlier days know other postings by identity only. Extraction
+answers later re-normalized in Python show their current clean-up
+(`extraction_cleaned_up_later`).
+
+| Model | Grain |
+|---|---|
+| `rpt_daily_activity` | day x population (`all`, `retained`): initial imports, discoveries, updates, transitions, board coverage |
+| `rpt_inventory_daily` | day x population x availability state: source records, opportunities, re-verified vs carried forward |
+| `rpt_inventory_current` | dimension (employer, source, rule family, AI role category, place, work arrangement, early career) x value x population x state |
+| `rpt_skill_demand` | skill x requirement x mention kind (individual / alternative) x population |
+| `rpt_experience_requirements` | measure (early career, overall minimum years, graduation, seniority) x value x population |
+| `rpt_eligibility` | concept x status x population, with three denominators |
+| `rpt_pipeline_health_daily` | day: scans by outcome, holds, AI requests and tokens, extraction coverage |
+| `rpt_board_freshness` | board: latest scan, last complete collection and its age, baseline, hold |
+| `rpt_extraction_coverage` | population: extracted, queued, failed, skipped |
+
+Populations default to `retained` for headline numbers; `all` covers every collected
+listing. Rebuilds are idempotent: the same stored data gives the same rows.
+
 ## Listing data for display
 
 `jobmarket.listings.listing_detail()` returns what a detail page needs for one listing: the
