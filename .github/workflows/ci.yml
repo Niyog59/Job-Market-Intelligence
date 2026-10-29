@@ -77,3 +77,6 @@ jobs:
         run: |
           python tests/history_scenarios.py
           jobmarket check-history
+
+      - name: Analytics models build and pass their tests
+        run: jobmarket analytics build --target owner

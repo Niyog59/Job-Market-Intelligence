@@ -977,6 +977,48 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _analytics(settings: Settings, args) -> int:
+    from jobmarket import analytics
+
+    command = args.analytics_command
+    if command in ("grant", "check-access"):
+        with db.connect(settings, autocommit=True) as conn:
+            try:
+                if command == "grant":
+                    for statement in analytics.grant_read_access(conn):
+                        print(f"  {statement}")
+                    print(f"{analytics.ANALYTICS_ROLE} can now read ingestion tables and "
+                          "create its own analytics schemas.")  # fmt: skip
+                    return EXIT_OK
+                checks = analytics.read_only_check(conn)
+            except analytics.AnalyticsUnavailable as exc:
+                print(str(exc), file=sys.stderr)
+                return EXIT_CONFIG_ERROR
+        for name, allowed in checks.items():
+            print(f"  {name:28} {'yes' if allowed else 'no'}")
+        writes = [k for k, v in checks.items() if v and k != "SELECT"]
+        if writes or not checks["SELECT"]:
+            print("Not read-only as intended.", file=sys.stderr)
+            return EXIT_FAILURE
+        print("Read-only on ingestion tables, as intended.")
+        return EXIT_OK
+    dbt_args = {"build": ["build"], "test": ["test"], "docs": ["docs", "generate"]}[command]
+    if command == "build" and args.select:
+        dbt_args += ["--select", args.select]
+    target = getattr(args, "target", "analytics")
+    try:
+        outcome = analytics.run_dbt(dbt_args, target=target)
+    except analytics.AnalyticsUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    for failure in outcome.failures:
+        print(f"  {failure}", file=sys.stderr)
+    if command == "docs" and outcome.success:
+        print(f"Documentation written to {analytics.PROJECT_DIR / 'target'} "
+              "(open with: cd analytics && dbt docs serve --profiles-dir .)")  # fmt: skip
+    return EXIT_OK if outcome.success else EXIT_FAILURE
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -1130,6 +1172,22 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "report":
             cmd.add_argument("--cases", action="store_true", help="list every mismatch")
 
+    an = commands.add_parser("analytics", help="dbt analytics models (analytics/)")
+    an_cmds = an.add_subparsers(dest="analytics_command", required=True)
+    an_build = an_cmds.add_parser("build", help="rebuild and test every analytics model")
+    an_build.add_argument("--select", metavar="SELECTOR", help="dbt selector, e.g. reporting")
+    an_cmds.add_parser("test", help="run the analytics data tests only")
+    an_cmds.add_parser("docs", help="generate dbt documentation and the dependency graph")
+    an_cmds.add_parser("grant", help="give the analytics login read-only access (owner)")
+    an_cmds.add_parser("check-access", help="show what the analytics login may do")
+    for cmd in (an_build,):
+        cmd.add_argument(
+            "--target",
+            default="analytics",
+            choices=["analytics", "owner"],
+            help="database login (owner is for tests and CI)",
+        )
+
     listing = commands.add_parser("listing", help="one listing as a detail page would show it")
     listing.add_argument("posting", type=int)
     listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
@@ -1207,6 +1265,7 @@ HANDLERS = {
     "listing": _listing,
     "extract": _extract,
     "eval": _eval,
+    "analytics": _analytics,
 }
 
 

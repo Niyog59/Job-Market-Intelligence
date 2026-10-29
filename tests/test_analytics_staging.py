@@ -57,3 +57,23 @@ def test_building_into_the_ingestion_schema_is_refused(a):
         quiet=True,
     )
     assert not outcome.success
+
+
+def test_the_analytics_login_can_read_but_not_write_ingestion(schema_conn, isolated_schema):
+    from jobmarket.analytics import ANALYTICS_ROLE, grant_read_access, read_only_check
+
+    can_create = schema_conn.execute(
+        "SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user"
+    ).fetchone()[0]
+    exists = schema_conn.execute(
+        "SELECT 1 FROM pg_roles WHERE rolname = %s", (ANALYTICS_ROLE,)
+    ).fetchone()
+    if not exists and not can_create:
+        pytest.skip("this login cannot create roles (CI creates the analytics login)")
+    if not exists:
+        schema_conn.execute(f"CREATE ROLE {ANALYTICS_ROLE} LOGIN")
+    apply_migrations(schema_conn)
+    grant_read_access(schema_conn, isolated_schema)
+    checks = read_only_check(schema_conn, isolated_schema)
+    assert checks["SELECT"] is True
+    assert not any(v for k, v in checks.items() if k != "SELECT"), checks

@@ -117,6 +117,7 @@ Optional settings:
 | `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
+| `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -151,6 +152,8 @@ Optional settings:
 | `jobmarket extract renormalize` | Re-apply skill and location clean-up to stored answers (no model calls) |
 | `jobmarket extract disagreements [--limit N]` | Listings where the AI and the screening rules disagree |
 | `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
+| `jobmarket analytics build [--select S]` / `test` / `docs` | Build and test the dbt analytics models; generate their documentation |
+| `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
@@ -450,6 +453,44 @@ Reports count, per field, the cases that match, and for lists the matched, extra
 missed items (skills are compared after alias clean-up), plus quotes not found and average
 tokens per listing. Matching labels shows agreement with those labels on those fields; it
 is not a general accuracy claim.
+
+## Analytics (dbt)
+
+SQL models in `analytics/` (dbt Core with the PostgreSQL adapter) turn the stored history
+into reporting tables for the future website and Tableau. Python collects, Gemini
+interprets, and dbt only transforms what is already stored: it never calls a source or the
+model, and it never writes ingestion tables.
+
+**Layers and schemas.**
+
+| Schema | Built as | Holds |
+|---|---|---|
+| `analytics_staging` | views | one model per ingestion table: consistent names and types, no new meaning |
+| `analytics_intermediate` | views and tables | shared rules (cohorts, grouping, as-of history) |
+| `analytics_reporting` | tables | the reporting models |
+
+Every model documents its grain (what one row is) in its `.yml` file.
+
+**Rebuild safety.** A build drops and recreates only tables and views in the three
+analytics schemas. The project refuses to build if an analytics schema would be the
+ingestion schema, and on a normal install it runs as a separate login,
+`jobmarket_analytics`, that can only read ingestion tables.
+
+**Setup (once).**
+
+1. Install the extra: `pip install -e ".[analytics]"`.
+2. As a PostgreSQL superuser, create the login:
+   `CREATE ROLE jobmarket_analytics LOGIN PASSWORD '...';`
+3. Put the password in `.env` as `ANALYTICS_DB_PASSWORD` (optional `ANALYTICS_DB_USER`).
+4. As the database owner: `jobmarket analytics grant`, then
+   `jobmarket analytics check-access` (every write right must say "no").
+
+**Build.** `jobmarket analytics build` runs `dbt build` (models and all data tests);
+`--select reporting` limits it. `jobmarket analytics test` runs only the tests, and
+`jobmarket analytics docs` generates dbt documentation with the dependency graph (`cd
+analytics && dbt docs serve --profiles-dir .`). The same commands are the entry point for
+later scheduling. Running dbt directly works too:
+`cd analytics && dbt build --profiles-dir .`.
 
 ## Listing data for display
 
