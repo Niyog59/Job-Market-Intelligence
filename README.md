@@ -568,6 +568,48 @@ the ingestion schema (migration 0011); `srv_postings.search_vector` calls it, so
 through the view use the index. Selecting that column for every listing computes every
 vector, so search queries name the columns they need.
 
+## Job search
+
+`jobmarket.search` answers job searches from the serving views (see Analytics). It never
+calls a source, the model, or dbt, and it reads availability as the availability rules
+stored it; it never changes or re-derives it.
+
+- **State in the URL.** Every search is a set of URL parameters (`q`, `view`,
+  `population`, `level`, `role`, `employer`, `place`, `arrangement`, `experience`,
+  `skill`, `skill_mode`, `sponsorship`, `employment`, `unknown`, `sort`, `page`), so
+  result pages can be shared and restored. Values are checked against the allowed choices
+  (unknown values are dropped and reported) and reach SQL only as bound parameters.
+- **Defaults.** Retained jobs (`population=all` adds every collected listing), active
+  listings, early career only (`level=any` shows every level), unknown information
+  included, newest discovery first, 25 results per page.
+- **Text** matches the title and description (stemmed full-text search) or the employer
+  name.
+- **AND/OR.** Choices within one filter are alternatives (any of them); different filters
+  must all hold. Skills can be switched to "all of these" (`skill_mode=all`). A skill
+  matches when it is asked for as required or preferred, including as one of a set
+  ("Python or Java"); passing mentions do not count.
+- **Unknown information.** For each structured filter a listing is a match, unknown (no
+  extraction yet, or the listing does not state it clearly), or a contradiction (it states
+  something else). Unknown listings are included unless `unknown=exclude`, each with the
+  reasons ("Sponsorship: not stated", "Role: structured details pending"); contradictions
+  never are, whatever the setting.
+- **Filters on extracted fields.** Early career uses the extraction's early-career answer.
+  Experience bands use the smallest required overall minimum (0-1 means under 2 years,
+  2-4 under 5, 5+ the rest). Location uses the extraction's place: Dallas-Fort Worth,
+  Houston, remote open to Texas, remote with an unclear limit, or elsewhere.
+- **Duplicates.** A strong or reviewed duplicate group is one result, shown by its most
+  recently observed listing, and matches when any of its listings does. Its availability
+  rolls up as in the analytics. Possible duplicates stay separate results.
+- **Views.** Active results are observed and possibly unavailable listings; assumed
+  inactive and closed listings are in the archived view. Counts and pages count
+  opportunities, so a group never takes two places.
+- **Dates.** Discovery (first seen by this pipeline, with initial imports labeled), the
+  source's own date (Greenhouse publication, Lever creation; sorted last when missing),
+  content updates, and last sighting are kept apart. An update never moves a job up the
+  newest-discovered order.
+- **Freshness.** A listing whose board has had no complete collection for more than 36
+  hours is flagged as possibly out of date.
+
 ## Listing data for display
 
 `jobmarket.listings.listing_detail()` returns what a detail page needs for one listing: the
