@@ -457,7 +457,7 @@ is not a general accuracy claim.
 ## Analytics (dbt)
 
 SQL models in `analytics/` (dbt Core with the PostgreSQL adapter) turn the stored history
-into reporting tables for the future website and Tableau. Python collects, Gemini
+into reporting tables for Tableau and live views for the job-search website. Python collects, Gemini
 interprets, and dbt only transforms what is already stored: it never calls a source or the
 model, and it never writes ingestion tables.
 
@@ -468,10 +468,11 @@ model, and it never writes ingestion tables.
 | `analytics_staging` | views | one model per ingestion table: consistent names and types, no new meaning |
 | `analytics_intermediate` | views and tables | shared rules (cohorts, grouping, as-of history) |
 | `analytics_reporting` | tables | the reporting models |
+| `analytics_serving` | views | live, search-ready listings and board freshness for the website |
 
 Every model documents its grain (what one row is) in its `.yml` file.
 
-**Rebuild safety.** A build drops and recreates only tables and views in the three
+**Rebuild safety.** A build drops and recreates only tables and views in the four
 analytics schemas. The project refuses to build if an analytics schema would be the
 ingestion schema, and on a normal install it runs as a separate login,
 `jobmarket_analytics`, that can only read ingestion tables.
@@ -551,6 +552,21 @@ answers later re-normalized in Python show their current clean-up
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.
+
+### Serving views (job search)
+
+`analytics_serving` holds views, not tables, so they always show the current collection and
+extraction without a rebuild; a build is needed only after the model definitions change.
+
+| Model | Grain |
+|---|---|
+| `srv_postings` | listing with stored content: current version, links, availability state (as stored by the availability rules), cohort, duplicate group, the current version's extraction (role categories, early career, place, arrangement, sponsorship, employment type, smallest required overall minimum years, skills asked for as required or preferred), Lever's structured salary range, and board freshness |
+| `srv_boards` | board: last complete collection, last scan counted by the availability rules, active hold |
+
+Text search uses `posting_search_vector(title, description_text)`, an indexed function in
+the ingestion schema (migration 0011); `srv_postings.search_vector` calls it, so searches
+through the view use the index. Selecting that column for every listing computes every
+vector, so search queries name the columns they need.
 
 ## Listing data for display
 

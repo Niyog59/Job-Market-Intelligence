@@ -2,7 +2,8 @@
     recreate their own tables and views, so they must never share a schema with raw data. -#}
 {% macro assert_analytics_schemas_are_separate() %}
     {%- set source = var('source_schema') | lower -%}
-    {%- for name in ['analytics_staging', 'analytics_intermediate', 'analytics_reporting'] -%}
+    {%- for name in ['analytics_staging', 'analytics_intermediate', 'analytics_reporting',
+                     'analytics_serving'] -%}
         {%- if (var('schema_prefix') ~ name) | lower == source -%}
             {{ exceptions.raise_compiler_error(
                 "analytics schema " ~ var('schema_prefix') ~ name ~

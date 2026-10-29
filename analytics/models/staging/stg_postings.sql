@@ -8,6 +8,7 @@ select
     first_discovered_at,
     last_observed_at,
     current_version_id,
+    current_observation_id,
     availability_state as current_availability_state,
     qualifying_absences as current_qualifying_absences
 from {{ source('ingestion', 'source_postings') }}

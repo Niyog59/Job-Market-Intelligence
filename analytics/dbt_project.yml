@@ -35,3 +35,7 @@ models:
     reporting:
       +schema: analytics_reporting
       +materialized: table
+    # Live views for the job-search website: always current without a rebuild.
+    serving:
+      +schema: analytics_serving
+      +materialized: view

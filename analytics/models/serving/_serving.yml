@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: srv_boards
+    description: "Grain: one row per board. Freshness for the website: last complete collection, last scan counted by the availability rules, active hold."
+    columns:
+      - name: board_id
+        data_tests: [unique, not_null]
+
+  - name: srv_postings
+    description: "Grain: one row per listing with stored content (current version). A live view for the job-search website: availability is the ingestion's current state; AI fields are from the current version's extraction only."
+    columns:
+      - name: posting_id
+        data_tests: [unique, not_null]
+      - name: opportunity_key
+        data_tests: [not_null]
+      - name: cohort
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: ['initial_import', 'discovered']}}
+      - name: extraction_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['extracted', 'pending', 'running', 'succeeded', 'failed', 'gave_up',
+                         'skipped', 'superseded', 'not_queued']
