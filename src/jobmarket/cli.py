@@ -977,6 +977,36 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _web(settings: Settings, args) -> int:
+    try:
+        from jobmarket.web import create_app
+        from jobmarket.web.config import load_web_config
+    except ImportError:
+        print('The website needs Flask: pip install -e ".[web]"', file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    from jobmarket.search import ServingUnavailable, site_status
+
+    config = load_web_config()
+    # Fail before serving if the read-only login or the serving views are not ready.
+    try:
+        with db.connect(config.settings) as conn:
+            conn.read_only = True
+            site_status(conn, config.clock(), config.serving_schema)
+    except ServingUnavailable as exc:
+        print(f"Cannot start the website: {exc}.", file=sys.stderr)
+        return EXIT_FAILURE
+    except psycopg.Error as exc:
+        print(f"Cannot start the website as {config.settings.db_user}: {exc}".rstrip(),
+              file=sys.stderr)  # fmt: skip
+        print("Check ANALYTICS_DB_PASSWORD in .env and run `jobmarket analytics build`.",
+              file=sys.stderr)  # fmt: skip
+        return EXIT_FAILURE
+    print(f"Job search on http://{args.host}:{args.port}/ (Ctrl+C stops it). This is "
+          "Flask's local development server, for use on this computer.")  # fmt: skip
+    create_app(config).run(host=args.host, port=args.port, debug=False, use_reloader=False)
+    return EXIT_OK
+
+
 def _analytics(settings: Settings, args) -> int:
     from jobmarket import analytics
 
@@ -1190,6 +1220,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="database login (owner is for tests and CI)",
         )
 
+    web = commands.add_parser("web", help="run the job-search website on this computer")
+    web.add_argument(
+        "--host", default="127.0.0.1", help="address to listen on (default: local only)"
+    )
+    web.add_argument("--port", type=int, default=8000)
+
     listing = commands.add_parser("listing", help="one listing as a detail page would show it")
     listing.add_argument("posting", type=int)
     listing.add_argument("--html", action="store_true", help="print the display-safe HTML")
@@ -1268,6 +1304,7 @@ HANDLERS = {
     "extract": _extract,
     "eval": _eval,
     "analytics": _analytics,
+    "web": _web,
 }
 
 

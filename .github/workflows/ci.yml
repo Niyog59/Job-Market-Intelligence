@@ -48,7 +48,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install
-        run: pip install -e ".[dev,analytics]"
+        run: pip install -e ".[dev,analytics,web]"
 
       - name: Lint
         run: |

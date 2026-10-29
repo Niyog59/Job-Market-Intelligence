@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% set l = page.listing %}
+{% set s = page.serving %}
+{% set ex = l.extraction %}
+{% set back_qs = back.query_string() %}
+{% block title %}{{ l.title }} at {{ l.employer }}{% endblock %}
+{% block body_class %}detail-page{% endblock %}
+
+{% macro state_pill(state) -%}
+  <span class="pill {{ {'observed': 'good', 'possibly_unavailable': 'warn', 'assumed_inactive': 'muted', 'closed': 'bad'}[state] }}">
+    <span class="dot" aria-hidden="true"></span>{{ fmt.STATE_LABELS[state] }}
+  </span>
+{%- endmacro %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job search</p>
+    <h1>{{ l.employer }} · {{ l.title }}</h1>
+  </div>
+  <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+</header>
+
+<div class="detail">
+  <aside class="overview" aria-labelledby="overview-title">
+    <h2 id="overview-title">Job overview</h2>
+    {{ state_pill(l.availability_state) }}
+    <dl class="facts">
+      <div><dt>Location</dt><dd>{{ l.locations|join("; ") if l.locations else "Not listed" }}</dd></div>
+      <div><dt>Work arrangement</dt><dd>
+        {% if ex.normalized %}
+          {% set wa = ex.normalized.work_arrangement %}
+          {{ fmt.ARRANGEMENT_LABELS.get(wa.value, fmt.words(wa.value)) }}{% if wa.onsite_days_per_week is not none %} · {{ "%g"|format(wa.onsite_days_per_week) }} days on site{% endif %}
+        {% else %}<span class="muted">Structured details pending</span>{% endif %}
+      </dd></div>
+      <div><dt>Salary</dt><dd>
+        {% set pay = fmt.salary(s.salary_range) %}
+        {% if pay %}{{ pay }} <span class="muted">(range supplied by {{ fmt.SOURCE_LABELS[l.source_system] }})</span>
+        {% else %}<span class="muted">Not supplied by the source. The description may mention pay.</span>{% endif %}
+      </dd></div>
+      <div><dt>Employment</dt><dd>
+        {% if ex.normalized %}{{ fmt.EMPLOYMENT_LABELS.get(ex.normalized.employment_type.value, fmt.words(ex.normalized.employment_type.value)) }}
+        {% else %}<span class="muted">Structured details pending</span>{% endif %}
+      </dd></div>
+    </dl>
+
+    {% set apply = l.apply_url or l.posting_url %}
+    {% if l.availability_state == "closed" %}
+      <p class="banner bad">This posting was confirmed closed{% if page.closure %} on {{ fmt.day(page.closure.occurred_at) }}{% endif %}. Applications are probably not accepted.</p>
+      {% if l.posting_url %}<a class="link" href="{{ l.posting_url }}" target="_blank" rel="noopener noreferrer">Original listing (may no longer work) &#8599;</a>{% endif %}
+    {% elif apply %}
+      {% if l.availability_state == "assumed_inactive" %}
+      <p class="banner muted">This listing is probably no longer open. Check the company site before applying.</p>
+      <a class="button secondary wide" href="{{ apply }}" target="_blank" rel="noopener noreferrer">Check on company site &#8599;</a>
+      {% else %}
+      <a class="button wide" href="{{ apply }}" target="_blank" rel="noopener noreferrer">Apply on company site &#8599;</a>
+      {% endif %}
+      {% if l.apply_url and l.posting_url %}<a class="link" href="{{ l.posting_url }}" target="_blank" rel="noopener noreferrer">View original listing &#8599;</a>{% endif %}
+    {% else %}
+      <p class="muted">No valid application link was stored for this listing.</p>
+    {% endif %}
+    <p class="hint">Applications happen on the employer's site; this site never submits anything.</p>
+
+    <dl class="facts dates">
+      <div><dt>Discovered</dt><dd>{{ fmt.when(l.first_discovered_at) }}{% if s.cohort == "initial_import" %}<br><span class="muted">Initial import: found in the first complete collection of this board, so it may have been posted earlier.</span>{% endif %}</dd></div>
+      {% if l.source_published_at %}<div><dt>Published (Greenhouse)</dt><dd>{{ fmt.day(l.source_published_at) }}</dd></div>
+      {% elif l.source_created_at %}<div><dt>Created ({{ fmt.SOURCE_LABELS[l.source_system] }})</dt><dd>{{ fmt.day(l.source_created_at) }}</dd></div>
+      {% else %}<div><dt>Source date</dt><dd class="muted">Not supplied</dd></div>{% endif %}
+      {% if l.version_no > 1 %}<div><dt>Description updated</dt><dd>{{ fmt.when(l.content_seen_at) }}</dd></div>{% endif %}
+      <div><dt>Last seen</dt><dd>{{ fmt.when(l.last_observed_at) }}</dd></div>
+    </dl>
+  </aside>
+
+  <main id="main" class="detail-main">
+    <div class="tabs" role="tablist" aria-label="Job sections">
+      <a class="tab" role="tab" id="tab-requirements" href="#requirements" aria-controls="requirements" aria-selected="true">Requirements</a>
+      <a class="tab" role="tab" id="tab-description" href="#description" aria-controls="description" aria-selected="false">Job description</a>
+    </div>
+
+    <section id="requirements" class="panel" role="tabpanel" aria-labelledby="tab-requirements">
+      {% set source = fmt.SOURCE_LABELS[l.source_system] %}
+      {% if l.availability_state == "observed" %}
+      <div class="banner good status-banner"><span class="dot" aria-hidden="true"></span><div>
+        <strong>Source listing observed</strong>
+        <p>{{ source }} · Last seen {{ fmt.when(l.last_observed_at) }} · Last complete check of this board: {{ fmt.when(s.board_last_complete_at) }}</p></div></div>
+      {% elif l.availability_state == "possibly_unavailable" %}
+      <div class="banner warn status-banner"><span class="dot" aria-hidden="true"></span><div>
+        <strong>Possibly unavailable</strong>
+        <p>Missing from {{ l.qualifying_absences }} of the 3 qualifying scans needed before it is assumed inactive. It may still be open. Last seen {{ fmt.when(l.last_observed_at) }} ({{ source }}).</p></div></div>
+      {% elif l.availability_state == "assumed_inactive" %}
+      <div class="banner muted status-banner"><span class="dot" aria-hidden="true"></span><div>
+        <strong>Assumed inactive</strong>
+        <p>Missing from 3 qualifying scans{% if page.closure %} (since {{ fmt.when(page.closure.occurred_at) }}){% endif %}. Last seen {{ fmt.when(l.last_observed_at) }} ({{ source }}).</p></div></div>
+      {% else %}
+      <div class="banner bad status-banner"><span class="dot" aria-hidden="true"></span><div>
+        <strong>Closed</strong>
+        <p>{% if page.closure %}{{ page.closure.reason }}, recorded {{ fmt.when(page.closure.occurred_at) }}.{% if page.closure.evidence and page.closure.evidence.text %} Evidence: "{{ page.closure.evidence.text }}"{% endif %}{% else %}Closed on official evidence.{% endif %}</p></div></div>
+      {% endif %}
+      {% if not s.board_last_complete_at or (now - s.board_last_complete_at) > S.STALE_AFTER %}
+      <p class="banner warn">This board's last complete collection was {{ fmt.age(s.board_last_complete_at, now) }}. The status above may be out of date.</p>
+      {% endif %}
+      {% if s.board_on_hold %}
+      <p class="banner warn">Absence counting is paused for this board since {{ fmt.when(s.board_hold_opened_at) }}, because many listings disappeared at once.</p>
+      {% endif %}
+
+      <h2 class="section-title">Job requirements</h2>
+      <p class="subtitle">Read the source evidence behind each requirement.</p>
+
+      {% if page.requirements %}
+      <div class="req-table">
+        {% for r in page.requirements %}
+        <div class="req-row">
+          <div class="req-label">{{ r.label }}</div>
+          <div class="req-value">
+            <span class="{{ '' if r.stated else 'muted' }}">{{ r.value }}</span>
+            {% if r.note %}<p class="req-note">{{ r.note }}</p>{% endif %}
+          </div>
+          <div class="req-action">
+            {% if r.quotes %}
+            <button class="button small" type="button" aria-expanded="true" aria-controls="ev-{{ loop.index }}" data-evidence>View source evidence</button>
+            {% endif %}
+          </div>
+          {% if r.quotes %}
+          <div class="evidence" id="ev-{{ loop.index }}">
+            {% for q in r.quotes %}
+            <blockquote>{{ q.text }}{% if not q.found %} <span class="tag warn">not found in the description text</span>{% endif %}</blockquote>
+            {% endfor %}
+            <p class="hint">Quoted from version {{ l.version_no }} of the description (first seen {{ fmt.day(l.content_seen_at) }}), the text in the Job description tab.</p>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <p class="hint">Extracted by AI from the current description; every quote was checked against that text. The structure can still be wrong, so the description is the reference.</p>
+      {% elif ex.status in ("failed", "gave_up") %}
+      <p class="notice">Structured details unavailable: extraction failed for this version of the listing. The full description is in the Job description tab.</p>
+      {% elif ex.status == "skipped" %}
+      <p class="notice">Structured details unavailable: {{ "the description is too long to send" if ex.skip_reason == "too_long" else "the listing has no description" }}. Read the listing on the company site.</p>
+      {% else %}
+      <p class="notice">Structured details pending: the AI has not read this version of the listing yet. Extraction runs only when <code>jobmarket extract run</code> is started. The full description is in the Job description tab.</p>
+      {% endif %}
+
+      {% if page.members|length > 1 %}
+      <h2 class="section-title small">Postings of this job ({{ page.members|length }})</h2>
+      <p class="subtitle">The employer posted this job more than once (same requisition or application link). Each copy keeps its own text and status.</p>
+      <ul class="members">
+        {% for m in page.members %}
+        <li>
+          {% if m.posting_id == l.posting_id %}<strong>{{ m.title }}</strong> <span class="tag">shown</span>
+          {% else %}<a href="{{ url_for('detail', posting_id=m.posting_id) }}{{ '?from=' ~ (back_qs|urlencode) if back_qs }}">{{ m.title }}</a>{% endif %}
+          <span class="muted">· {{ m.location_text or "Location not listed" }} · {{ fmt.STATE_LABELS[m.availability_state] }} · last seen {{ fmt.relative_day(m.last_observed_at, now) }} · {{ fmt.SOURCE_LABELS[m.source_system] }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if page.possible_duplicates %}
+      <h2 class="section-title small">Possible duplicates</h2>
+      <p class="subtitle">Similar listings flagged for review. They are not merged.</p>
+      <ul class="members">
+        {% for d in page.possible_duplicates %}
+        <li><a href="{{ url_for('detail', posting_id=d.posting_id) }}">{{ d.title }}</a> <span class="muted">· {{ d.employer }} · {{ d.location_text or "Location not listed" }} · {{ fmt.FLAG_REASONS.get(d.reason, fmt.words(d.reason)) }}</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <p class="footer-note">Discovered {{ fmt.relative_day(l.first_discovered_at, now) }} · Original description available in the Job description tab</p>
+    </section>
+
+    <section id="description" class="panel" role="tabpanel" aria-labelledby="tab-description">
+      <h2 class="section-title">Job description</h2>
+      <p class="subtitle">{{ l.description.source_note }}{% if l.posting_url %} <a href="{{ l.posting_url }}" target="_blank" rel="noopener noreferrer">Original listing &#8599;</a>{% endif %}</p>
+      {% if l.description.status == "available" %}
+      <div class="description">{{ l.description.safe_html|safe }}</div>
+      {% elif l.description.status == "omitted_too_long" %}
+      <p class="notice">This description ({{ "{:,}".format(l.description.length) }} characters) was too long to store. Read it on the company site.</p>
+      {% else %}
+      <p class="notice">The source supplied no description text for this listing.</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <aside class="browse" aria-labelledby="browse-title">
+    <h2 id="browse-title">Browse jobs</h2>
+    <form method="get" action="{{ url_for('results') }}" role="search">
+      {% for key, value in back.query_pairs(q='', page=1) %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+      <label class="visually-hidden" for="browse-q">Search jobs</label>
+      <input id="browse-q" class="search-input" name="q" type="search" placeholder="Search jobs..." value="{{ back.q }}">
+    </form>
+    <ul class="browse-list">
+      {% for row in browse.rows %}
+      <li{% if row.posting_id == l.posting_id or row.opportunity_key == s.opportunity_key %} class="current" aria-current="page"{% endif %}>
+        <a href="{{ url_for('detail', posting_id=row.posting_id) }}{{ '?from=' ~ (back_qs|urlencode) if back_qs }}">
+          <strong>{{ row.title }}</strong><span>{{ row.employer }}</span>
+        </a>
+      </li>
+      {% else %}
+      <li class="muted">No other results in this search.</li>
+      {% endfor %}
+    </ul>
+    {% if browse.pages > 1 %}<p class="hint">Page {{ browse.page }} of {{ browse.pages }} of your results.</p>{% endif %}
+  </aside>
+</div>
+{% endblock %}

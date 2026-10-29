@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job search</p>
+    <h1>{{ title }}</h1>
+  </div>
+  <a class="button" href="{{ url_for('results') }}">Back to results</a>
+</header>
+<main id="main" class="page narrow">
+  <p class="notice">{{ message }}</p>
+</main>
+{% endblock %}
