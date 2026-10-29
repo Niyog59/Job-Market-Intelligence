@@ -1,9 +1,10 @@
 """Run the dbt analytics project (analytics/) and set up its read-only database login.
 
-dbt reads the ingestion schema and builds three schemas of its own: analytics_staging
-(views over ingestion tables), analytics_intermediate (shared rules), and
-analytics_reporting (tables for the website and Tableau). A rebuild drops and recreates only
-those schemas' tables and views; ingestion tables are never written. On a normal install the
+dbt reads the ingestion schema and builds four schemas of its own: analytics_staging
+(views over ingestion tables), analytics_intermediate (shared rules), analytics_reporting
+(tables for Tableau and summaries), and analytics_serving (live views for the job-search
+website). A rebuild drops and recreates only those schemas' tables and views; ingestion
+tables are never written. On a normal install the
 build runs as the jobmarket_analytics login, which can only read ingestion tables.
 """
 

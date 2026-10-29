@@ -32,8 +32,11 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   versions. Collection never waits for it. Rule-based screening still decides which jobs
   are retained; disagreements with the AI are listed for review.
 - Content history for every listing, retained or not, and a display-safe listing form
-  (sanitized description, original links, freshness, availability) for the job list and
-  detail pages to come.
+  (sanitized description, original links, freshness, availability).
+- A local job-search website (`jobmarket web`): search with filters and shareable URLs,
+  duplicate groups shown once, archived jobs kept separate, and a detail page with the
+  extracted requirements, their source quotes, and the full description. It reads the
+  database through a read-only login and never calls a source or the model.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -48,8 +51,8 @@ Not yet in place:
 - **Alert email delivery.** Alerts and recovery notices are written to the
   `notifications` outbox. An SMTP sender exists but no provider is configured, so no
   email is sent.
-- **A web interface.** Status is available through `jobmarket status` and the
-  `board_status` database view.
+- **Hosting.** The website runs only on this computer, on Flask's development server
+  (bound to 127.0.0.1). It has no accounts, bookmarks, or application tracking.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -117,7 +120,7 @@ Optional settings:
 | `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
-| `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with |
+| `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with and the website reads through |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -154,6 +157,7 @@ Optional settings:
 | `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
 | `jobmarket analytics build [--select S]` / `test` / `docs` | Build and test the dbt analytics models; generate their documentation |
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
+| `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
 | `jobmarket check-history` | Run the history integrity checks (exit `1` if any fail) |
@@ -457,7 +461,7 @@ is not a general accuracy claim.
 ## Analytics (dbt)
 
 SQL models in `analytics/` (dbt Core with the PostgreSQL adapter) turn the stored history
-into reporting tables for the future website and Tableau. Python collects, Gemini
+into reporting tables for Tableau and live views for the job-search website. Python collects, Gemini
 interprets, and dbt only transforms what is already stored: it never calls a source or the
 model, and it never writes ingestion tables.
 
@@ -468,10 +472,11 @@ model, and it never writes ingestion tables.
 | `analytics_staging` | views | one model per ingestion table: consistent names and types, no new meaning |
 | `analytics_intermediate` | views and tables | shared rules (cohorts, grouping, as-of history) |
 | `analytics_reporting` | tables | the reporting models |
+| `analytics_serving` | views | live, search-ready listings and board freshness for the website |
 
 Every model documents its grain (what one row is) in its `.yml` file.
 
-**Rebuild safety.** A build drops and recreates only tables and views in the three
+**Rebuild safety.** A build drops and recreates only tables and views in the four
 analytics schemas. The project refuses to build if an analytics schema would be the
 ingestion schema, and on a normal install it runs as a separate login,
 `jobmarket_analytics`, that can only read ingestion tables.
@@ -551,6 +556,120 @@ answers later re-normalized in Python show their current clean-up
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.
+
+### Serving views (job search)
+
+`analytics_serving` holds views, not tables, so they always show the current collection and
+extraction without a rebuild; a build is needed only after the model definitions change.
+
+| Model | Grain |
+|---|---|
+| `srv_postings` | listing with stored content: current version, links, availability state (as stored by the availability rules), cohort, duplicate group, the current version's extraction (role categories, early career, place, arrangement, sponsorship, employment type, smallest required overall minimum years, skills asked for as required or preferred), Lever's structured salary range, and board freshness |
+| `srv_boards` | board: last complete collection, last scan counted by the availability rules, active hold |
+
+Text search uses `posting_search_vector(title, description_text)`, an indexed function in
+the ingestion schema (migration 0011); `srv_postings.search_vector` calls it, so searches
+through the view use the index. Selecting that column for every listing computes every
+vector, so search queries name the columns they need.
+
+## Job search
+
+`jobmarket.search` answers job searches from the serving views (see Analytics). It never
+calls a source, the model, or dbt, and it reads availability as the availability rules
+stored it; it never changes or re-derives it.
+
+- **State in the URL.** Every search is a set of URL parameters (`q`, `view`,
+  `population`, `level`, `role`, `employer`, `place`, `arrangement`, `experience`,
+  `skill`, `skill_mode`, `sponsorship`, `employment`, `unknown`, `sort`, `page`), so
+  result pages can be shared and restored. Values are checked against the allowed choices
+  (unknown values are dropped and reported) and reach SQL only as bound parameters.
+- **Defaults.** Retained jobs (`population=all` adds every collected listing), active
+  listings, early career only (`level=any` shows every level), unknown information
+  included, newest discovery first, 25 results per page.
+- **Text** matches the title and description (stemmed full-text search) or the employer
+  name.
+- **AND/OR.** Choices within one filter are alternatives (any of them); different filters
+  must all hold. Skills can be switched to "all of these" (`skill_mode=all`). A skill
+  matches when it is asked for as required or preferred, including as one of a set
+  ("Python or Java"); passing mentions do not count.
+- **Unknown information.** For each structured filter a listing is a match, unknown (no
+  extraction yet, or the listing does not state it clearly), or a contradiction (it states
+  something else). Unknown listings are included unless `unknown=exclude`, each with the
+  reasons ("Sponsorship: not stated", "Role: structured details pending"); contradictions
+  never are, whatever the setting.
+- **Filters on extracted fields.** Early career uses the extraction's early-career answer.
+  Experience bands use the smallest required overall minimum (0-1 means under 2 years,
+  2-4 under 5, 5+ the rest). Location uses the extraction's place: Dallas-Fort Worth,
+  Houston, remote open to Texas, remote with an unclear limit, or elsewhere.
+- **Duplicates.** A strong or reviewed duplicate group is one result, shown by its most
+  recently observed listing, and matches when any of its listings does. Its availability
+  rolls up as in the analytics. Possible duplicates stay separate results.
+- **Views.** Active results are observed and possibly unavailable listings; assumed
+  inactive and closed listings are in the archived view. Counts and pages count
+  opportunities, so a group never takes two places.
+- **Dates.** Discovery (first seen by this pipeline, with initial imports labeled), the
+  source's own date (Greenhouse publication, Lever creation; sorted last when missing),
+  content updates, and last sighting are kept apart. An update never moves a job up the
+  newest-discovered order.
+- **Freshness.** A listing whose board has had no complete collection for more than 36
+  hours is flagged as possibly out of date.
+
+## Job-search website
+
+A server-rendered Flask site over the search above (`src/jobmarket/web/`): Jinja templates,
+one stylesheet, and a small script for tabs, evidence, and scroll restoration. Every page
+also works without the script. Flask was chosen because the project had no web stack and
+the pages need no client-side framework.
+
+**Run it.**
+
+1. `pip install -e ".[web]"` (Flask).
+2. The read-only analytics login must exist and its password be in `.env`
+   (`ANALYTICS_DB_PASSWORD`; see Analytics, Setup).
+3. `jobmarket analytics build` once, to create the serving views.
+4. `jobmarket web`, then open http://127.0.0.1:8000/. The command checks the login and the
+   views before starting and says what is missing.
+
+The site shows whatever was last collected and extracted: run `jobmarket collect` and
+`jobmarket extract run` to refresh it. Nothing runs on a schedule.
+
+**Routes.**
+
+| Route | Page |
+|---|---|
+| `/` | search results; all search state is in the query string (see Job search) |
+| `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
+
+Invalid or unknown job links give a 404 page; missing serving views or an unreachable
+database give a 503 page that says what to run.
+
+**Pages.** Results list compact rows (title, employer, location, arrangement, employment
+type, a salary range when the source supplies one), with discovery (initial imports
+labeled), the source's own date, description updates, and last sighting shown apart.
+Possibly unavailable, stale, and held-board listings carry a warning. The detail page shows
+the availability as stored, the last sighting and the board's last complete check, an
+"Apply on company site" link only while the listing is active (closed listings say so;
+assumed-inactive ones link with a warning), and the extracted requirements as labeled rows:
+required and preferred skills with their own relationships ("Python or Java: any one of
+these is enough"), experience, education, graduation, career level, sponsorship, work
+authorization, citizenship, clearance, location, and employment type. "View source
+evidence" opens the quotes the answer was checked against; they come from the same
+description version the Job description tab shows. Without an extraction, the page says the
+structured details are pending or unavailable rather than "not stated". Back to results
+restores the search, the page, and the scroll position. Below 820 px the layout becomes one
+column.
+
+**Security.** Pages run as the read-only login in read-only sessions. Descriptions are
+rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
+only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
+strict Content-Security-Policy (scripts, styles, and fonts from the site only), `nosniff`,
+`no-referrer`, and frame denial. Roboto is served locally (SIL Open Font License,
+`web/static/fonts/OFL.txt`).
+
+**Limitations.** Flask's development server for local use only; salary only from Lever's
+structured range (never parsed from text); requirements are AI extractions checked for
+evidence but not for accuracy (the evaluation labels are not reviewed yet); listings first
+seen before content was stored for every listing, and not seen since, have no page.
 
 ## Listing data for display
 
@@ -765,17 +884,22 @@ transaction (such as `CREATE INDEX CONCURRENTLY`).
 ## Tests
 
 ```bash
+pip install -e ".[dev,analytics,web]"
 ruff check .
 ruff format --check .
 pytest
 ```
 
-Tests marked `db` need a reachable database configured through the `DB_*` variables.
+Analytics and website tests are skipped when dbt or Flask is not installed. Tests marked `db` need a reachable database configured through the `DB_*` variables.
 Without one they are skipped locally. Set `JOBMARKET_REQUIRE_DB=1` to make a missing
 database a failure instead (CI does this).
 
 `python tests/history_scenarios.py` replays the history scenarios with printed SQL
 evidence (it also runs as part of `pytest`).
+
+Search and website tests run a synthetic job history (clearly test data, `tests/search_world.py`)
+through the real collector, availability rules, duplicate rules, and extraction queue, build
+the serving views, and render pages through Flask's test client.
 
 Extraction tests never call Gemini: a scripted fake model returns prepared answers and
 errors (malformed JSON, schema violations, per-minute and daily quota errors, server and
@@ -791,5 +915,6 @@ to create schemas in that database (the database owner has it).
 PostgreSQL 17 service container, installs the package, runs `ruff` and `pytest` with
 `JOBMARKET_REQUIRE_DB=1`, runs `jobmarket check-db`, applies the migrations twice to
 confirm the second run changes nothing, loads the board registry, runs the history
-scenarios, and runs the history integrity checks. Collection tests use a scripted HTTP
+scenarios, runs the history integrity checks, and builds the analytics models with their
+data tests. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.

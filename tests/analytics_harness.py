@@ -1,8 +1,8 @@
 """Build the dbt analytics project over a throwaway ingestion schema.
 
 The ingestion tables live in the test's isolated schema; dbt builds into
-<schema>_analytics_staging, <schema>_analytics_intermediate, and <schema>_analytics_reporting,
-which are dropped afterwards. dbt connects with the DB_* login (target "owner").
+<schema>_analytics_staging, _intermediate, _reporting, and _serving, which are dropped
+afterwards. dbt connects with the DB_* login (target "owner").
 """
 
 import pytest
@@ -12,7 +12,12 @@ from jobmarket.analytics import run_dbt
 
 pytest.importorskip("dbt.cli.main", reason="dbt is not installed (pip install -e '.[analytics]')")
 
-LAYERS = ("analytics_staging", "analytics_intermediate", "analytics_reporting")
+LAYERS = (
+    "analytics_staging",
+    "analytics_intermediate",
+    "analytics_reporting",
+    "analytics_serving",
+)
 
 
 class Analytics:

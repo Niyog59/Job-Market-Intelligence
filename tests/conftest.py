@@ -16,6 +16,7 @@ import httpx
 import psycopg
 import pytest
 from gh_fakes import FakeClock, ScriptedTransport, board, registry
+from search_world import world  # noqa: F401  (fixture shared by the search and web tests)
 
 from jobmarket import db
 from jobmarket.collector import Collector

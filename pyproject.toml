@@ -26,6 +26,10 @@ analytics = [
     "dbt-core==1.11.16",
     "dbt-postgres==1.11.0",
 ]
+# The job-search website (jobmarket web).
+web = [
+    "flask>=3.1,<4",
+]
 
 [project.scripts]
 jobmarket = "jobmarket.cli:main"
@@ -34,7 +38,13 @@ jobmarket = "jobmarket.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-jobmarket = ["migrations/*.sql"]
+jobmarket = [
+    "migrations/*.sql",
+    "web/templates/*.html",
+    "web/static/*.css",
+    "web/static/*.js",
+    "web/static/fonts/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% set p = result.params %}
+{% block title %}{{ "Archived jobs" if p.view == "archived" else "Job search" }}{% endblock %}
+{% block body_class %}results-page{% endblock %}
+
+{% macro checks(name, choices, selected) -%}
+  {%- for key, value in choices.items() %}
+  <label class="check">
+    <input type="checkbox" name="{{ name }}" value="{{ key }}" {{ "checked" if key in selected }}>
+    <span>{{ value }}</span>
+  </label>
+  {%- endfor %}
+{%- endmacro %}
+
+{% macro radios(name, choices, current) -%}
+  {%- for key, label in choices.items() %}
+  <label class="check">
+    <input type="radio" name="{{ name }}" value="{{ key }}" {{ "checked" if key == current }}>
+    <span>{{ label }}</span>
+  </label>
+  {%- endfor %}
+{%- endmacro %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job Market Intelligence</p>
+    <h1>{{ "Archived jobs" if p.view == "archived" else "Job search" }}</h1>
+  </div>
+</header>
+
+<form id="search" class="page" method="get" action="{{ url_for('results') }}" role="search">
+  <div class="searchbar">
+    <label class="visually-hidden" for="q">Search jobs by title, company, or description</label>
+    <input id="q" name="q" type="search" value="{{ p.q }}"
+           placeholder="Search title, company, or description">
+    <button class="button" type="submit">Search</button>
+  </div>
+
+  <p class="freshness">
+    Last complete collection: {{ fmt.when(status.last_complete_collection) }}
+    ({{ fmt.age(status.last_complete_collection, now) }}) · {{ status.boards }} boards
+    · {{ "{:,}".format(status.pending_extraction) }} of {{ "{:,}".format(status.listings) }}
+    active listings still waiting for structured details.
+    Collection runs only when started by hand.
+  </p>
+  {% if status.stale_boards %}
+  <p class="banner warn" role="status">
+    {{ status.stale_boards }} board{{ "s" if status.stale_boards != 1 }} had no complete
+    collection in the last 36 hours. Their availability may be out of date.
+  </p>
+  {% endif %}
+  {% if status.held_boards %}
+  <p class="banner warn" role="status">
+    {{ status.held_boards }} board{{ "s are" if status.held_boards != 1 else " is" }} on hold
+    after many listings disappeared at once; absences there are not being counted.
+  </p>
+  {% endif %}
+  {% for problem in result.problems %}
+  <p class="banner warn" role="status">{{ problem }}</p>
+  {% endfor %}
+
+  <div class="layout">
+    <details class="filters" id="filters" open>
+      <summary>Filters</summary>
+      <input type="hidden" name="view" value="{{ p.view }}">
+
+      <fieldset>
+        <legend>Jobs</legend>
+        {{ radios("population", {"kept": "Kept jobs", "all": "All collected listings"}, p.population) }}
+        <p class="hint">Kept jobs passed the screening rules (target role, and in DFW, Houston, or remote open to Texas).</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Career level</legend>
+        {{ radios("level", S.LEVEL_CHOICES, p.level) }}
+      </fieldset>
+
+      <fieldset>
+        <legend>Role</legend>
+        {{ checks("role", S.ROLE_CHOICES, p.roles) }}
+      </fieldset>
+
+      <fieldset>
+        <legend>Location</legend>
+        {%- for key, value in S.PLACE_CHOICES.items() %}
+        <label class="check">
+          <input type="checkbox" name="place" value="{{ key }}" {{ "checked" if key in p.places }}>
+          <span>{{ value[0] }}</span>
+        </label>
+        {%- endfor %}
+      </fieldset>
+
+      <fieldset>
+        <legend>Work arrangement</legend>
+        {{ checks("arrangement", S.ARRANGEMENT_CHOICES, p.arrangements) }}
+      </fieldset>
+
+      <fieldset>
+        <legend>Experience required</legend>
+        {%- for key, value in S.EXPERIENCE_CHOICES.items() %}
+        <label class="check">
+          <input type="checkbox" name="experience" value="{{ key }}" {{ "checked" if key in p.experience }}>
+          <span>{{ value[0] }}</span>
+        </label>
+        {%- endfor %}
+        <p class="hint">By the smallest required overall minimum.</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Skills</legend>
+        {%- for skill in p.skills %}
+        <label class="check">
+          <input type="checkbox" name="skill" value="{{ skill }}" checked>
+          <span>{{ skill }}</span>
+        </label>
+        {%- endfor %}
+        <label class="visually-hidden" for="skill-add">Add a skill</label>
+        <input id="skill-add" name="skill" list="skill-list" placeholder="Add a skill, e.g. SQL">
+        <datalist id="skill-list">
+          {%- for skill in popular %}<option value="{{ skill }}">{% endfor %}
+        </datalist>
+        <div class="inline">
+          {{ radios("skill_mode", {"any": "Any of these", "all": "All of these"}, p.skill_mode) }}
+        </div>
+        <p class="hint">Counts skills asked for as required or preferred, including one of a choice such as "Python or Java".</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Visa sponsorship</legend>
+        {{ radios("sponsorship", S.SPONSORSHIP_CHOICES, p.sponsorship) }}
+      </fieldset>
+
+      <fieldset>
+        <legend>Employment type</legend>
+        {{ checks("employment", S.EMPLOYMENT_CHOICES, p.employment) }}
+      </fieldset>
+
+      <fieldset>
+        <legend>Employer</legend>
+        <div class="scroll-list">
+        {%- for id, name in choices.employers.items() %}
+        <label class="check">
+          <input type="checkbox" name="employer" value="{{ id }}" {{ "checked" if id in p.employers }}>
+          <span>{{ name }}</span>
+        </label>
+        {%- endfor %}
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Unknown information</legend>
+        <label class="check">
+          <input type="checkbox" name="unknown" value="include" {{ "checked" if p.include_unknown }}>
+          <span>Include jobs with unknown information</span>
+        </label>
+        <input type="hidden" name="unknown" value="exclude">
+        <p class="hint">Jobs whose details are pending or not stated are shown with the reason. Jobs that state something different are never shown.</p>
+      </fieldset>
+
+      <p class="hint">Choices within one group: any of them. Different groups: all must match.</p>
+      <div class="filter-actions">
+        <button class="button" type="submit">Apply filters</button>
+        <a class="link" href="{{ url_for('results', view=p.view) if p.view != 'active' else url_for('results') }}">Reset</a>
+      </div>
+    </details>
+
+    <main id="main" class="results" aria-live="polite">
+      <div class="result-bar">
+        <p class="count">
+          {% if result.total %}
+          <strong>{{ "{:,}".format(result.total) }}</strong> {{ "job" if result.total == 1 else "jobs" }}
+          · showing {{ result.first }}&ndash;{{ result.last }}
+          {% else %}
+          <strong>No jobs</strong> match these filters
+          {% endif %}
+        </p>
+        <nav class="views" aria-label="Active or archived">
+          {% if p.view == "active" %}
+          <span aria-current="page">Active</span>
+          <a href="?{{ p.query_string(view='archived', page=1) }}">Archived ({{ result.other_view_total }})</a>
+          {% else %}
+          <a href="?{{ p.query_string(view='active', page=1) }}">Active ({{ result.other_view_total }})</a>
+          <span aria-current="page">Archived</span>
+          {% endif %}
+        </nav>
+        <label class="sort">
+          <span>Sort</span>
+          <select name="sort" data-autosubmit>
+            {% for key, label in S.SORT_CHOICES.items() %}
+            <option value="{{ key }}" {{ "selected" if key == p.sort }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <span class="loading" data-loading hidden>Searching&hellip;</span>
+      </div>
+
+      {% if p.view == "archived" %}
+      <p class="banner muted">Archived jobs are assumed inactive (missing from three qualifying scans) or closed on official evidence. They stay readable here.</p>
+      {% endif %}
+
+      {% if not result.rows %}
+      <div class="empty">
+        <p>No {{ "archived" if p.view == "archived" else "active" }} jobs match.</p>
+        <ul>
+          {% if p.level != "any" %}<li><a href="?{{ p.query_string(level='any', page=1) }}">Show every career level</a></li>{% endif %}
+          {% if not p.include_unknown %}<li><a href="?{{ p.query_string(include_unknown=true, page=1) }}">Include jobs with unknown information</a></li>{% endif %}
+          {% if p.population == "kept" %}<li><a href="?{{ p.query_string(population='all', page=1) }}">Search all collected listings</a></li>{% endif %}
+          {% if result.other_view_total %}<li><a href="?{{ p.query_string(view='archived' if p.view == 'active' else 'active', page=1) }}">See {{ result.other_view_total }} {{ "archived" if p.view == "active" else "active" }} match{{ "es" if result.other_view_total != 1 }}</a></li>{% endif %}
+        </ul>
+      </div>
+      {% else %}
+      <ol class="rows">
+        {% for row in result.rows %}
+        {% set href = url_for('detail', posting_id=row.posting_id) ~ '?from=' ~ (p.query_string()|urlencode) %}
+        <li class="row">
+          <div class="row-main">
+            <h2 class="row-title"><a href="{{ href }}" data-detail-link>{{ row.title }}</a></h2>
+            <p class="row-sub">
+              {{ row.employer }}
+              · {{ row.locations[0] if row.locations else (row.location_text or "Location not listed") }}{% if row.locations|length > 1 %} + {{ row.locations|length - 1 }} more{% endif %}
+              {% set wa = fmt.ARRANGEMENT_LABELS.get(row.work_arrangement) if row.work_arrangement not in (none, "not_stated", "ambiguous") else none %}{% if wa and wa|lower != (row.location_text or "")|lower %} · {{ wa }}{% endif %}
+              {% if row.employment_type and row.employment_type not in ("not_stated", "ambiguous") %} · {{ fmt.EMPLOYMENT_LABELS.get(row.employment_type) }}{% endif %}
+              {% set pay = fmt.salary(row.salary_range) %}{% if pay %} · {{ pay }}{% endif %}
+            </p>
+            <p class="row-meta">
+              Discovered {{ fmt.relative_day(row.discovered_at, now) }}{% if row.cohort == "initial_import" %} <span class="tag" title="Found in the first complete collection of this board, so it may have been posted earlier">initial import</span>{% endif %}
+              {% if row.source_date %} · {{ fmt.DATE_KIND_LABELS[row.source_date_kind] }} {{ fmt.day(row.source_date) }} ({{ fmt.SOURCE_LABELS[row.source_system] }}){% else %} · No source date{% endif %}
+              {% if row.content_updated_at %} · Description updated {{ fmt.day(row.content_updated_at) }}{% endif %}
+              · Last seen {{ fmt.relative_day(row.last_seen_at, now) }}
+              {% if row.records > 1 %} · <span class="tag">{{ row.records }} postings of one job</span>{% endif %}
+              {% if row.early_career == "yes" %} · <span class="tag">early career</span>{% elif row.early_career == "internship" %} · <span class="tag">internship</span>{% endif %}
+            </p>
+            {% if row.skill_notes %}<p class="row-meta">{{ row.skill_notes|join("; ") }}</p>{% endif %}
+            {% if row.unknown_reasons %}
+            <p class="row-unknown">Included with unknown information: {{ row.unknown_reasons|join("; ") }}</p>
+            {% endif %}
+          </div>
+          <div class="row-status">
+            {% if row.group_state == "possibly_unavailable" %}
+            <span class="status warn">Possibly unavailable</span>
+            {% elif row.group_state == "assumed_inactive" %}
+            <span class="status muted">Assumed inactive</span>
+            {% elif row.group_state == "closed" %}
+            <span class="status bad">Closed</span>
+            {% endif %}
+            {% if row.stale %}<span class="status warn" title="No complete collection of this board in 36 hours">May be out of date</span>{% endif %}
+            {% if row.board_on_hold %}<span class="status warn">Board on hold</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+
+      {% if result.pages > 1 %}
+      <nav class="pager" aria-label="Pages">
+        {% if result.page > 1 %}<a href="?{{ p.query_string(page=result.page - 1) }}" rel="prev">Previous</a>{% endif %}
+        {% for n in range(1, result.pages + 1) %}
+          {% if n == 1 or n == result.pages or (n - result.page)|abs <= 2 %}
+            {% if n == result.page %}<span aria-current="page">{{ n }}</span>{% else %}<a href="?{{ p.query_string(page=n) }}">{{ n }}</a>{% endif %}
+          {% elif (n - result.page)|abs == 3 %}<span class="gap">&hellip;</span>{% endif %}
+        {% endfor %}
+        {% if result.page < result.pages %}<a href="?{{ p.query_string(page=result.page + 1) }}" rel="next">Next</a>{% endif %}
+      </nav>
+      {% endif %}
+    </main>
+  </div>
+</form>
+{% endblock %}
