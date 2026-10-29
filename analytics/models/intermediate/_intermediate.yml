@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: int_reporting_days
+    description: "Grain: one row per reporting day (America/Chicago calendar day) from the first collection to today. is_complete is false for today (provisional)."
+    columns:
+      - name: report_day
+        data_tests: [unique, not_null]
+
+  - name: int_tracking_boundaries
+    description: "Grain: exactly one row. When availability tracking, extraction, and collection history start; days before a boundary are not reconstructed."
+
+  - name: int_board_baselines
+    description: "Grain: one row per board. baseline_collected_at is the board's first complete collection (null until it has one)."
+    columns:
+      - name: board_id
+        data_tests: [unique, not_null]
+
+  - name: int_posting_cohorts
+    description: "Grain: one row per posting. cohort is initial_import (first seen at or before its board's first complete collection, or while the board has none) or discovered (first observed by the pipeline later)."
+    columns:
+      - name: posting_id
+        data_tests: [unique, not_null]
+      - name: cohort
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: ['initial_import', 'discovered']}}
+
+  - name: int_posting_days
+    description: "Grain: one row per posting per reporting day from its first discovery. Every column is what was known at that day's as_of instant."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['posting_id', 'report_day']}}
+    columns:
+      - name: availability_state
+        description: "Null before availability tracking started (not reconstructed)."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed']
+
+  - name: int_opportunity_days
+    description: "Grain: one row per opportunity per reporting day. An opportunity is a strong or reviewed duplicate group counted once, or an ungrouped posting."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['opportunity_key', 'report_day']}}
+    columns:
+      - name: availability_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed',
+                         'not_tracked']
+
+  - name: int_current_postings
+    description: "Grain: one row per posting known today. AI fields are null when the current content has no extraction yet."
+    columns:
+      - name: posting_id
+        data_tests: [unique, not_null]
+
+  - name: int_skill_mentions
+    description: "Grain: one row per current posting per skill per requirement level. mention_kind is individual or alternative (one of a set, as in 'Python or Java')."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['posting_id', 'skill', 'requirement']}}
+    columns:
+      - name: mention_kind
+        data_tests:
+          - accepted_values: {arguments: {values: ['individual', 'alternative']}}

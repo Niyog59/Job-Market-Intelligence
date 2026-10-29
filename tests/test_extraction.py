@@ -314,8 +314,10 @@ def test_cli_status_show_and_run_without_limits(cli_x, monkeypatch, capsys):
     cli_x.collect(T0, [gh_job(1)])
     cli_x.run(ScriptedModel(reply()))
     posting = cli_x.scalar("SELECT posting_id FROM source_postings")
+    # Set to empty rather than removed: the CLI loads .env, which never overrides a variable
+    # that exists, so a developer's real limits and key are not picked up.
     for name in (extraction.RPM_ENV, extraction.DAILY_ENV, extraction.TPM_ENV):
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
     assert cli.main(["extract", "status"]) == cli.EXIT_OK
     assert cli.main(["extract", "show", str(posting), "--evidence"]) == cli.EXIT_OK

@@ -1,0 +1,75 @@
+version: 2
+
+models:
+  - name: rpt_daily_activity
+    description: "Grain: one row per reporting day per population ('all', 'retained'). Initial imports, discoveries (first observed by the pipeline after the board's baseline), updates (content changes), availability transitions, and board coverage. Today is provisional (is_complete = false)."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['report_day', 'population']}}
+    columns:
+      - name: population
+        data_tests:
+          - accepted_values: {arguments: {values: ['all', 'retained']}}
+
+  - name: rpt_inventory_daily
+    description: "Grain: one row per reporting day per population per availability state, as known at the end of that day. source_records counts postings; opportunities counts duplicate groups once."
+    data_tests:
+      - unique_combination:
+          arguments: {columns: ['report_day', 'population', 'availability_state']}
+    columns:
+      - name: availability_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed',
+                         'not_tracked']
+      - name: coverage
+        data_tests:
+          - accepted_values:
+              arguments: {values: ['tracked', 'before_availability_tracking']}
+
+  - name: rpt_inventory_current
+    description: "Grain: one row per dimension per value per population per availability state, for postings known today. Role categories and rule families overlap (categories_overlap) and cannot be summed."
+    data_tests:
+      - unique_combination:
+          arguments: {columns: ['dimension', 'value', 'population', 'availability_state']}
+    columns:
+      - name: dimension
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['employer', 'source_system', 'rule_family', 'role_category', 'place',
+                         'work_arrangement', 'early_career']
+
+  - name: rpt_skill_demand
+    description: "Grain: one row per skill per requirement level per mention kind per population, over listed postings with an extraction. mention_kind 'alternative' is one of a set of choices, not an individual requirement. Rows do not sum to a posting total."
+    data_tests:
+      - unique_combination:
+          arguments: {columns: ['skill', 'requirement', 'mention_kind', 'population']}
+
+  - name: rpt_experience_requirements
+    description: "Grain: one row per measure per value per population, over listed postings."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['measure', 'value', 'population']}}
+
+  - name: rpt_eligibility
+    description: "Grain: one row per concept (sponsorship, work_authorization, citizenship, clearance) per status per population, over listed postings, with three denominators (listed, extracted, stating a policy)."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['concept', 'status', 'population']}}
+
+  - name: rpt_pipeline_health_daily
+    description: "Grain: one row per reporting day: scans by outcome, boards scanned and on hold, AI requests and recorded token usage, and extraction coverage of listed retained postings."
+    columns:
+      - name: report_day
+        data_tests: [unique, not_null]
+
+  - name: rpt_board_freshness
+    description: "Grain: one row per board: latest scan, latest complete collection and its age, baseline, and hold."
+    columns:
+      - name: board_id
+        data_tests: [unique, not_null]
+
+  - name: rpt_extraction_coverage
+    description: "Grain: one row per population: listed postings, how many are extracted, and where the rest are in the queue."
+    columns:
+      - name: population
+        data_tests: [unique, not_null]

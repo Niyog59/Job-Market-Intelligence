@@ -48,7 +48,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,analytics]"
 
       - name: Lint
         run: |
@@ -77,3 +77,6 @@ jobs:
         run: |
           python tests/history_scenarios.py
           jobmarket check-history
+
+      - name: Analytics models build and pass their tests
+        run: jobmarket analytics build --target owner

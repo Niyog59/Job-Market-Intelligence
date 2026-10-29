@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: ingestion
+    description: Tables owned and written by the Python collector and the extraction queue. dbt only reads them.
+    schema: "{{ var('source_schema') }}"
+    tables:
+      - name: employers
+      - name: source_boards
+      - name: collection_runs
+      - name: board_scans
+      - name: raw_responses
+        description: Metadata of saved responses only (the response bytes are files outside the database).
+      - name: source_postings
+      - name: posting_versions
+      - name: posting_observations
+      - name: posting_screenings
+        description: Current screening only; screening at each content version is in posting_versions.screening.
+      - name: posting_availability_events
+      - name: absence_checks
+      - name: board_holds
+      - name: duplicate_groups
+      - name: duplicate_group_members
+      - name: posting_duplicate_flags
+      - name: extraction_jobs
+      - name: extraction_attempts
+      - name: extraction_results
+      - name: extraction_settings

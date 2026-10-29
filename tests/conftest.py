@@ -101,3 +101,14 @@ def env(schema_conn, tmp_path):
             return self.one(sql, params)[0]
 
     return Env()
+
+
+@pytest.fixture(autouse=True)
+def no_live_gemini(monkeypatch):
+    """Tests never call Gemini: creating a real client fails the test at once."""
+    from jobmarket import gemini
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("tests must not create a live Gemini client; use a scripted model")
+
+    monkeypatch.setattr(gemini.GeminiClient, "__init__", refuse)

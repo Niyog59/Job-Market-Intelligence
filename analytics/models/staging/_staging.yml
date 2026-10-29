@@ -1,0 +1,165 @@
+version: 2
+
+models:
+  - name: stg_employers
+    description: "Grain: one row per employer."
+    columns:
+      - name: employer_id
+        data_tests: [unique, not_null]
+
+  - name: stg_boards
+    description: "Grain: one row per job board (employer x source system x board token)."
+    columns:
+      - name: board_id
+        data_tests: [unique, not_null]
+      - name: employer_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_employers'), field: employer_id}}
+      - name: source_system
+        data_tests:
+          - accepted_values: {arguments: {values: ['greenhouse', 'lever']}}
+
+  - name: stg_collection_runs
+    description: "Grain: one row per collection run."
+    columns:
+      - name: run_id
+        data_tests: [unique, not_null]
+
+  - name: stg_board_scans
+    description: "Grain: one row per board scan (one board read once in one run)."
+    columns:
+      - name: board_scan_id
+        data_tests: [unique, not_null]
+      - name: board_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_boards'), field: board_id}}
+      - name: scan_status
+        data_tests:
+          - accepted_values: {arguments: {values: ['running', 'complete', 'partial', 'failed']}}
+
+  - name: stg_postings
+    description: "Grain: one row per source posting (one job on one board). Not a count of openings: duplicates across boards are separate rows."
+    columns:
+      - name: posting_id
+        data_tests: [unique, not_null]
+      - name: board_id
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_boards'), field: board_id}}
+      - name: first_discovered_at
+        data_tests: [not_null]
+      - name: current_availability_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed']
+
+  - name: stg_posting_versions
+    description: "Grain: one row per meaningful content version. Version 1 is first sight; later versions are updates."
+    columns:
+      - name: version_id
+        data_tests: [unique, not_null]
+      - name: posting_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_postings'), field: posting_id}}
+      - name: detection
+        data_tests:
+          - accepted_values: {arguments: {values: ['first_seen', 'content_change']}}
+
+  - name: stg_posting_observations
+    description: "Grain: one row per sighting of a posting in a board scan."
+    columns:
+      - name: observation_id
+        data_tests: [unique, not_null]
+      - name: version_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_posting_versions'), field: version_id}}
+
+  - name: stg_screenings
+    description: "Grain: one row per posting (current screening)."
+    columns:
+      - name: posting_id
+        data_tests:
+          - unique
+          - not_null
+          - relationships: {arguments: {to: ref('stg_postings'), field: posting_id}}
+
+  - name: stg_availability_events
+    description: "Grain: one row per availability state change (or counted absence) of a posting."
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: posting_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_postings'), field: posting_id}}
+      - name: to_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed']
+      - name: event_kind
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['tracking_started', 'first_observed', 'closed', 'reappeared',
+                         'assumed_inactive', 'possibly_unavailable', 'absence_counted']
+
+  - name: stg_absence_checks
+    description: "Grain: one row per judged board scan."
+    columns:
+      - name: board_scan_id
+        data_tests: [unique, not_null]
+
+  - name: stg_board_holds
+    description: "Grain: one row per mass-disappearance hold."
+    columns:
+      - name: hold_id
+        data_tests: [unique, not_null]
+
+  - name: stg_duplicate_groups
+    description: "Grain: one row per duplicate group (strong or reviewed evidence)."
+    columns:
+      - name: group_id
+        data_tests: [unique, not_null]
+      - name: group_confidence
+        data_tests:
+          - accepted_values: {arguments: {values: ['strong', 'reviewed']}}
+
+  - name: stg_duplicate_group_members
+    description: "Grain: one row per posting in a duplicate group."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['group_id', 'posting_id']}}
+    columns:
+      - name: group_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_duplicate_groups'), field: group_id}}
+
+  - name: stg_duplicate_flags
+    description: "Grain: one row per possible-duplicate pair flagged for review."
+    columns:
+      - name: flag_id
+        data_tests: [unique, not_null]
+
+  - name: stg_extraction_results
+    description: "Grain: one row per AI extraction of one posting version under one configuration."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['version_id', 'config_key']}}
+    columns:
+      - name: result_id
+        data_tests: [unique, not_null]
+      - name: version_id
+        data_tests:
+          - relationships: {arguments: {to: ref('stg_posting_versions'), field: version_id}}
+
+  - name: stg_extraction_jobs
+    description: "Grain: one row per extraction job."
+    columns:
+      - name: job_id
+        data_tests: [unique, not_null]
+
+  - name: stg_extraction_attempts
+    description: "Grain: one row per request sent to the model."
+    columns:
+      - name: attempt_id
+        data_tests: [unique, not_null]
