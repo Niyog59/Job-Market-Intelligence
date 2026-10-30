@@ -27,6 +27,7 @@
     <p class="eyebrow">Job Market Intelligence</p>
     <h1>{{ "Archived jobs" if p.view == "archived" else "Job search" }}</h1>
   </div>
+  {% include "_owner_nav.html" %}
 </header>
 
 <form id="search" class="page" method="get" action="{{ url_for('results') }}" role="search">

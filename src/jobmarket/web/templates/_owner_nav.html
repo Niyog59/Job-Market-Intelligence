@@ -1,0 +1,11 @@
+<nav class="owner-nav" aria-label="Your account">
+  {% if owner %}
+  <a href="{{ url_for('account') }}">Account</a>
+  <form method="post" action="{{ url_for('sign_out') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+    <button class="link-button" type="submit">Sign out</button>
+  </form>
+  {% else %}
+  <a href="{{ url_for('sign_in', next=request.full_path.rstrip('?')) }}">Sign in</a>
+  {% endif %}
+</nav>

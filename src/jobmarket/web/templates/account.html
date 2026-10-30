@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job search</p>
+    <h1>Account</h1>
+  </div>
+  {% include "_owner_nav.html" %}
+</header>
+<main id="main" class="page narrow">
+  <dl class="facts">
+    <div><dt>Signed in as</dt><dd>{{ owner.username }}</dd></div>
+    <div><dt>Signed in since</dt><dd>{{ fmt.when(owner.created_at) }}</dd></div>
+    <div><dt>This sign-in ends</dt><dd>after 2 hours without activity, and at the latest {{ fmt.when(owner.expires_at) }}</dd></div>
+  </dl>
+  <p class="hint">Signing out ends this session on the server and clears this browser's copy of private pages.</p>
+</main>
+{% endblock %}

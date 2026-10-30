@@ -121,6 +121,8 @@ Optional settings:
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
 | `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with and the website reads through |
+| `PRIVATE_DB_USER`, `PRIVATE_DB_PASSWORD` | `jobmarket_private`, empty | the login for private pages; without a password, private pages are off and browsing still works |
+| `WEB_COOKIE_SECURE` | `true` | `false` only for a browser that refuses Secure cookies on http://127.0.0.1 |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -157,6 +159,8 @@ Optional settings:
 | `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
 | `jobmarket analytics build [--select S]` / `test` / `docs` | Build and test the dbt analytics models; generate their documentation |
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
+| `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
+| `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -670,6 +674,58 @@ strict Content-Security-Policy (scripts, styles, and fonts from the site only), 
 structured range (never parsed from text); requirements are AI extractions checked for
 evidence but not for accuracy (the evaluation labels are not reviewed yet); listings first
 seen before content was stored for every listing, and not seen since, have no page.
+
+## Private workspace
+
+Job browsing needs no account. One owner account, created on the command line, signs in to a
+private workspace. There is no registration.
+
+**Where private data lives.** In the database, in its own schema (`private`), never in Git:
+migrations create only the structure, and the repository contains no private records. The
+analytics login (and so dbt, the serving views, and every public page) has no access to that
+schema; the website reaches it through a separate login, `jobmarket_private`, that can use
+the private schema and nothing else.
+
+**Setup (once).**
+
+1. `pip install -e ".[web]"` (Flask and argon2-cffi).
+2. `jobmarket migrate` (creates the private schema).
+3. As a PostgreSQL superuser, create the login:
+   `CREATE ROLE jobmarket_private LOGIN PASSWORD '...';` (or in pgAdmin: Login/Group Roles,
+   Create, name `jobmarket_private`, a password, "Can login"). Put the password in `.env` as
+   `PRIVATE_DB_PASSWORD`.
+4. As the database owner: `jobmarket private grant`, then `jobmarket private check-access`
+   (the private login uses the private schema only; the analytics login cannot reach it).
+5. `jobmarket owner create --username NAME` asks twice for a password at a hidden prompt.
+   No default account or password exists; nothing is printed.
+
+**Recovery.** Someone with owner access to the database runs `jobmarket owner reset-password`:
+it sets a new password, ends every session, and clears a sign-in pause.
+`jobmarket owner status` shows whether the account exists, open sessions, and a pause;
+`jobmarket owner sign-out-all` ends every session.
+
+**Sign-in rules.**
+
+- Passwords: at least 8 characters, hashed with Argon2id (argon2-cffi defaults, RFC 9106
+  low-memory parameters); never stored, logged, or printed.
+- Every 3 wrong passwords in a row pause sign-in for 15 minutes (counted for the whole site,
+  whatever username is typed).
+- Sessions live on the server. The browser cookie (`__Host-jm_session`: Secure, HttpOnly,
+  SameSite=Strict, Path=/) holds only a random token; the database keeps its SHA-256. A new
+  session starts at every sign-in. A session ends after 2 hours without activity, after 7
+  days at the latest, or when signing out (which deletes it on the server and sends
+  `Clear-Site-Data`).
+- Every form post needs the session's CSRF token and, when the browser sends one, this site's
+  `Origin`. The sign-in form carries its own random token.
+- Private pages are checked on the server for every request: without a valid session they
+  redirect to sign in, and their forms are refused.
+- Pages for a signed-in owner are sent with `Cache-Control: no-store` and `Vary: Cookie`.
+
+**Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
+separately, into the ignored `data/backups/`:
+`pg_dump -n private -Fc -f data/backups/private_YYYYMMDD.dump` (as the owner login). Backups
+contain personal data: keep them out of Git and off shared drives. After restoring or moving
+the database, run `jobmarket migrate` and `jobmarket private grant` again.
 
 ## Listing data for display
 

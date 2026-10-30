@@ -18,7 +18,10 @@
     <p class="eyebrow">Job search</p>
     <h1>{{ l.employer }} · {{ l.title }}</h1>
   </div>
-  <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+  <div class="toolbar-actions">
+    {% include "_owner_nav.html" %}
+    <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+  </div>
 </header>
 
 <div class="detail">

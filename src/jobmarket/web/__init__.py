@@ -1,9 +1,11 @@
 """The job-search website: search results and job detail pages, server-rendered with Flask
-templates and a small script for tabs, evidence, and scroll restoration.
+templates and a small script for tabs, evidence, and scroll restoration, plus the owner's
+private pages after signing in (jobmarket.web.auth).
 
-Pages only read: every request opens a read-only session as the read-only analytics login
-and closes it afterwards. Browsing never calls a source, the model, or dbt. The site is
-meant to run locally (`jobmarket web`, bound to 127.0.0.1).
+Public pages only read: they use the read-only analytics login in read-only sessions.
+Private pages use the private login, which can reach only the private schema. Browsing never
+calls a source, the model, or dbt. The site is meant to run locally (`jobmarket web`, bound
+to 127.0.0.1).
 """
 
 from urllib.parse import parse_qsl
@@ -13,6 +15,7 @@ from flask import Flask, abort, g, render_template, request
 from werkzeug.datastructures import MultiDict
 
 from jobmarket import db, search
+from jobmarket.web import auth
 from jobmarket.web import format as fmt
 from jobmarket.web.config import WebConfig, load_web_config
 from jobmarket.web.pages import job_page
@@ -39,13 +42,23 @@ def create_app(config: WebConfig | None = None) -> Flask:
             g.conn = c
         return g.conn
 
-    app.extensions["jobmarket_db"] = conn  # the request's read-only connection (tests use it)
+    def private_conn() -> psycopg.Connection:
+        if "private_conn" not in g:
+            g.private_conn = db.connect(
+                config.private_settings, autocommit=True, application_name="jobmarket-private"
+            )
+        return g.private_conn
+
+    # The request's connections (tests use them).
+    app.extensions["jobmarket_db"] = conn
+    app.extensions["jobmarket_private_db"] = private_conn
 
     @app.teardown_appcontext
     def close(_exc):
-        c = g.pop("conn", None)
-        if c is not None:
-            c.close()
+        for key in ("conn", "private_conn"):
+            c = g.pop(key, None)
+            if c is not None:
+                c.close()
 
     @app.after_request
     def headers(response):
@@ -72,6 +85,9 @@ def create_app(config: WebConfig | None = None) -> Flask:
     @app.before_request
     def stamp():
         g.now = config.clock()
+
+    # After stamp(): the session check needs the time.
+    auth.register(app, config, private_conn)
 
     @app.get("/")
     def results():

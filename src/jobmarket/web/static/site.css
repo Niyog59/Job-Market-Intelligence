@@ -233,3 +233,18 @@ legend + * { clear: both; }
   .req-action { padding: 0 14px 12px; }
   .tab { font-size: 15px; min-height: 48px; }
 }
+
+/* Account navigation and forms */
+.toolbar-actions { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.owner-nav { display: flex; align-items: center; gap: 16px; }
+.inline-form { display: inline; margin: 0; }
+.link-button { background: none; border: 0; padding: 0; font: inherit; color: var(--blue); cursor: pointer; text-decoration: underline; }
+.link-button:hover { color: var(--blue-dark); }
+.form { display: grid; gap: 14px; max-width: 420px; margin-top: 12px; }
+.field { display: grid; gap: 4px; }
+.field > span { font-weight: 500; }
+.field input, .field select, .field textarea {
+  font: inherit; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px;
+  min-height: 40px; background: #fff; color: var(--text);
+}
+.field-error { color: var(--bad); font-size: 13px; }
