@@ -180,3 +180,34 @@ def test_browser_style_posts_with_this_origin_are_accepted(site):
     assert client.post("/signin", data=form, headers={"Origin": "null"}).status_code == 403
     ok = client.post("/signin", data=form, headers={"Origin": "http://localhost"})
     assert ok.status_code == 302
+
+
+def test_the_account_page_changes_the_password(site):
+    client = site.make().test_client()
+    sign_in(client)
+    other = site.make().test_client()
+    sign_in(other)
+    token = csrf(client)
+    form = {
+        "csrf_token": token,
+        "current_password": PASSWORD,
+        "new_password": "another fictional pass",
+        "repeat_password": "different",
+    }
+    assert client.post("/account/password", data=form).status_code == 400
+    assert (
+        client.post("/account/password", data={**form, "csrf_token": "forged"}).status_code == 403
+    )
+    wrong = client.post(
+        "/account/password",
+        data={**form, "current_password": "nope", "repeat_password": "another fictional pass"},
+    )
+    assert wrong.status_code == 400 and "current password is not correct" in wrong.get_data(
+        as_text=True
+    )
+    done = client.post("/account/password", data={**form, "repeat_password":
+                                                   "another fictional pass"})  # fmt: skip
+    assert done.status_code == 302 and "changed=1" in done.location
+    assert client.get("/account").status_code == 200  # this browser stays signed in
+    assert other.get("/account").status_code == 302  # the other one is signed out
+    assert sign_in(site.make().test_client(), password="another fictional pass").status_code == 302

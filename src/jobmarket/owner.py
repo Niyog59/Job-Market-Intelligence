@@ -187,6 +187,50 @@ def sign_in(
     return start_session(conn, schema, now)
 
 
+class WrongPassword(OwnerError):
+    pass
+
+
+def change_password(
+    conn: psycopg.Connection,
+    schema: str,
+    current: str,
+    new: str,
+    now: datetime,
+    remote_addr: str | None = None,
+) -> tuple[str, Session]:
+    """Change the password of a signed-in owner who proves the current one. A wrong current
+    password counts toward the sign-in pause. On success every session ends and a new one
+    starts for this browser. Raises SignInPaused, WrongPassword, or OwnerError."""
+    until = paused_until(conn, schema, now)
+    if until is not None:
+        raise SignInPaused(until)
+    stored = conn.execute(
+        sql.SQL("SELECT password_hash FROM {} WHERE account_id = 1").format(_t(schema, "accounts"))
+    ).fetchone()
+    try:
+        ok = stored is not None and len(current) <= MAX_PASSWORD_LENGTH and _HASHER.verify(
+            stored[0], current)  # fmt: skip
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        ok = False
+    if not ok:
+        _record_attempt(conn, schema, now, False, remote_addr)
+        raise WrongPassword("the current password is not correct")
+    check_password_rules(new)
+    if new == current:
+        raise OwnerError("the new password must differ from the current one")
+    with conn.transaction():
+        conn.execute(
+            sql.SQL(
+                "UPDATE {} SET password_hash = %s, password_changed_at = %s WHERE account_id = 1"
+            ).format(_t(schema, "accounts")),
+            (_HASHER.hash(new), now),
+        )
+        end_all_sessions(conn, schema)
+        _record_attempt(conn, schema, now, True, remote_addr)
+        return start_session(conn, schema, now)
+
+
 def start_session(conn: psycopg.Connection, schema: str, now: datetime) -> tuple[str, Session]:
     """A brand-new session (a new token on every sign-in, so an old one cannot be reused)."""
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)

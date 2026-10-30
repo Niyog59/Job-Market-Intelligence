@@ -135,3 +135,26 @@ def test_status_never_includes_secrets(private):
     info = owner.owner_status(private.conn, private.name, NOW)
     assert info["username"] == "owner" and info["open_sessions"] == 1
     assert PASSWORD not in repr(info) and "argon2" not in repr(info)
+
+
+def test_changing_the_password_needs_the_current_one_and_ends_other_sessions(private):
+    owner.create_owner(private.conn, private.name, "owner", PASSWORD, NOW)
+    other, _ = owner.sign_in(private.conn, private.name, "owner", PASSWORD, NOW)
+    with pytest.raises(owner.WrongPassword):
+        owner.change_password(private.conn, private.name, "not it", "a fresh fictional pass", NOW)
+    with pytest.raises(owner.OwnerError, match="at least 8"):
+        owner.change_password(private.conn, private.name, PASSWORD, "short", NOW)
+    token, _ = owner.change_password(private.conn, private.name, PASSWORD,
+                                     "a fresh fictional pass", NOW)  # fmt: skip
+    assert owner.load_session(private.conn, private.name, other, NOW) is None
+    assert owner.load_session(private.conn, private.name, token, NOW) is not None
+    assert owner.sign_in(private.conn, private.name, "owner", "a fresh fictional pass", NOW)
+
+
+def test_wrong_current_passwords_count_toward_the_pause(private):
+    owner.create_owner(private.conn, private.name, "owner", PASSWORD, NOW)
+    for _ in range(3):
+        with pytest.raises(owner.WrongPassword):
+            owner.change_password(private.conn, private.name, "guess", "new fictional pass", NOW)
+    with pytest.raises(owner.SignInPaused):
+        owner.change_password(private.conn, private.name, PASSWORD, "new fictional pass", NOW)

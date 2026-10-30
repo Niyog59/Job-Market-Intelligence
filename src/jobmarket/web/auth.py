@@ -172,4 +172,37 @@ def register(app, config, private_conn):
     @require_owner
     def account():
         g.private_page = True
-        return render_template("account.html")
+        return render_template("account.html", error=None,
+                               changed=request.args.get("changed") == "1")  # fmt: skip
+
+    @app.post("/account/password")
+    @require_owner
+    def change_password():
+        g.private_page = True
+        new = request.form.get("new_password", "")
+        error = None
+        if new != request.form.get("repeat_password", ""):
+            error = "The two new passwords differ. Nothing was changed."
+        else:
+            try:
+                token, session = owner.change_password(
+                    private_conn(),
+                    config.private_schema,
+                    request.form.get("current_password", ""),
+                    new,
+                    g.now,
+                    request.remote_addr,
+                )
+            except owner.SignInPaused as paused:
+                minutes = max(1, math.ceil((paused.until - g.now).total_seconds() / 60))
+                error = (
+                    f"Too many wrong passwords. Try again in {minutes} "
+                    f"minute{'s' * (minutes != 1)}."
+                )
+            except owner.OwnerError as exc:
+                error = f"Not changed: {exc}."
+            else:
+                response = redirect(url_for("account", changed=1))
+                set_cookie(response, name, token, expires=session.expires_at)
+                return response
+        return render_template("account.html", error=error, changed=False), 400

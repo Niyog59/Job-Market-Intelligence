@@ -15,5 +15,21 @@
     <div><dt>This sign-in ends</dt><dd>after 2 hours without activity, and at the latest {{ fmt.when(owner.expires_at) }}</dd></div>
   </dl>
   <p class="hint">Signing out ends this session on the server and clears this browser's copy of private pages.</p>
+
+  <h2 class="section-title small">Change password</h2>
+  {% if changed %}<p class="banner good" role="status">Password changed. Every other browser was signed out; this one stays signed in.</p>{% endif %}
+  {% if error %}<p class="banner bad" role="alert">{{ error }}</p>{% endif %}
+  <form class="form" method="post" action="{{ url_for('change_password') }}">
+    <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+    <input type="text" name="username" value="{{ owner.username }}" autocomplete="username" hidden>
+    <label class="field"><span>Current password</span>
+      <input type="password" name="current_password" autocomplete="current-password" required></label>
+    <label class="field"><span>New password (at least 8 characters)</span>
+      <input type="password" name="new_password" autocomplete="new-password" minlength="8" required></label>
+    <label class="field"><span>Repeat the new password</span>
+      <input type="password" name="repeat_password" autocomplete="new-password" minlength="8" required></label>
+    <button class="button" type="submit">Change password</button>
+  </form>
+  <p class="hint">Forgot it? Someone with access to this computer's database can set a new one with <code>jobmarket owner reset-password</code>.</p>
 </main>
 {% endblock %}

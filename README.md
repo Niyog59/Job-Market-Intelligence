@@ -699,6 +699,10 @@ the private schema and nothing else.
 5. `jobmarket owner create --username NAME` asks twice for a password at a hidden prompt.
    No default account or password exists; nothing is printed.
 
+**Changing the password.** Signed in, the Account page changes it after checking the current
+password (wrong tries count toward the sign-in pause). Every other session ends; this browser
+gets a new session.
+
 **Recovery.** Someone with owner access to the database runs `jobmarket owner reset-password`:
 it sets a new password, ends every session, and clears a sign-in pause.
 `jobmarket owner status` shows whether the account exists, open sessions, and a pause;
