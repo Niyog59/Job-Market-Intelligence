@@ -326,16 +326,20 @@ class Extraction:
     summary: list[str] | None = None
     normalized: dict | None = None
     skip_reason: str | None = None
+    derived: dict | None = None  # Python-derived fields (place, role categories, ...)
 
 
 def _extraction(conn: psycopg.Connection, posting_id: int) -> Extraction:
     row = conn.execute(
-        "SELECT result_id, validation_status, config_key, normalized FROM current_extractions "
+        "SELECT result_id, validation_status, config_key, normalized, derived "
+        "FROM current_extractions "
         "WHERE posting_id = %s",
         (posting_id,),
     ).fetchone()
     if row:
-        return Extraction("extracted", row[0], row[1], row[2], summary_lines(row[3]), row[3])
+        return Extraction(
+            "extracted", row[0], row[1], row[2], summary_lines(row[3]), row[3], derived=row[4]
+        )
     job = conn.execute(
         "SELECT j.status, j.skip_reason, j.config_key FROM extraction_jobs j "
         "JOIN source_postings p ON p.current_version_id = j.version_id "
