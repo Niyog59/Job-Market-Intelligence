@@ -190,4 +190,5 @@ def world(db_settings, tmp_path_factory):
     analytics.drop(db_settings)
     conn.close()
     admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    admin.execute(f'DROP SCHEMA IF EXISTS "{schema}_private" CASCADE')
     admin.close()

@@ -55,6 +55,7 @@ def isolated_schema(db_settings: Settings) -> Iterator[str]:
     finally:
         with db.connect(db_settings, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}_private" CASCADE')
 
 
 @pytest.fixture

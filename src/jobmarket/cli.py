@@ -977,6 +977,32 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _private(settings: Settings, args) -> int:
+    from jobmarket import private_db
+
+    with db.connect(settings, autocommit=True) as conn:
+        if args.private_command == "grant":
+            try:
+                for statement in private_db.grant_private_access(conn):
+                    print(f"  {statement}")
+            except private_db.PrivateLoginMissing as exc:
+                print(f"Not done: {exc}.", file=sys.stderr)
+                return EXIT_FAILURE
+            print(f"{private_db.PRIVATE_ROLE} can now use the private schema, and only it.")
+            return EXIT_OK
+        report = private_db.access_report(conn)
+    ok = True
+    for check, value in report.items():
+        expected = private_db.EXPECTED[check]
+        if value is None:
+            state, good = "login does not exist", False
+        else:
+            state, good = ("yes" if value else "no"), value == expected
+        ok = ok and good
+        print(f"  {check}: {state}{'' if good else '  <-- not as expected'}")
+    return EXIT_OK if ok else EXIT_FAILURE
+
+
 def _web(settings: Settings, args) -> int:
     try:
         from jobmarket.web import create_app
@@ -1220,6 +1246,11 @@ def build_parser() -> argparse.ArgumentParser:
             help="database login (owner is for tests and CI)",
         )
 
+    priv = commands.add_parser("private", help="the private login's database access")
+    priv_cmds = priv.add_subparsers(dest="private_command", required=True)
+    priv_cmds.add_parser("grant", help="let jobmarket_private use the private schema only")
+    priv_cmds.add_parser("check-access", help="verify which logins can reach private data")
+
     web = commands.add_parser("web", help="run the job-search website on this computer")
     web.add_argument(
         "--host", default="127.0.0.1", help="address to listen on (default: local only)"
@@ -1305,6 +1336,7 @@ HANDLERS = {
     "eval": _eval,
     "analytics": _analytics,
     "web": _web,
+    "private": _private,
 }
 
 
