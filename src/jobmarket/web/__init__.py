@@ -125,7 +125,7 @@ def create_app(config: WebConfig | None = None) -> Flask:
         # The search the reader came from (only a query string; the path is always "/").
         back = MultiDict(parse_qsl(request.args.get("from", ""), keep_blank_values=False))
         browse, _ = results_for(back)
-        mine = (private_pages.private_job_context(config, conn, private_conn, posting_id)
+        mine = (private_pages.private_job_context(config, conn, private_conn, posting_id, page)
                 if g.get("owner") else None)  # fmt: skip
         return render_template("detail.html", page=page, browse=browse, back=browse.params,
                                mine=mine)  # fmt: skip

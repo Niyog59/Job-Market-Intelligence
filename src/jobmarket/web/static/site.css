@@ -280,3 +280,11 @@ legend + * { clear: both; }
 .sub-heading { font-size: 16px; margin: 18px 0 6px; }
 .private-panel textarea { font: inherit; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
 .private-panel details summary { cursor: pointer; color: var(--blue); font-size: 13px; }
+.tabs { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.status.good { background: var(--good-bg); color: var(--good); }
+.compare-summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 14px; }
+.req-value .status { margin-right: 8px; }
+.statements { padding-left: 0; list-style: none; }
+.statements li { padding: 8px 12px; border-left: 3px solid var(--line); margin: 8px 0; }
+.statements li.highlight { border-left-color: #e37400; background: var(--warn-bg); }
+.statements blockquote { margin: 6px 0 0; color: var(--muted); }

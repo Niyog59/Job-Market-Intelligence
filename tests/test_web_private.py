@@ -187,3 +187,21 @@ def test_new_since_last_visit_uses_a_fixed_cutoff(site):
     assert "New since your last visit" in page
     site.clock.now = START + timedelta(minutes=40)  # still the same visit: same cutoff
     assert "<strong>1</strong> job" in text(client.get("/?level=any&new=1&page=1"))
+
+
+def test_the_comparison_is_private_and_follows_the_profile(site):
+    client = signed_in(site)
+    j2 = site.ids[2]  # Python or Java (required); a Houston job
+    before = text(client.get(f"/jobs/{j2}"))
+    assert "Your comparison" in before and "Save your profile to see a comparison" in before
+    post(client, "/profile", **PROFILE)  # lists Python; prefers DFW
+    page = text(client.get(f"/jobs/{j2}"))
+    assert "Compared with your profile version 1 and the AI answer for description version" in page
+    assert "Python satisfies" in page and "one of them is enough" in page
+    assert "Outside your preferences (Dallas-Fort Worth)" in page
+    post(client, "/profile", **dict(PROFILE, **{"place": "houston"}))
+    assert "Within your preferred locations (Houston)" in text(client.get(f"/jobs/{j2}"))
+    pending = text(client.get(f"/jobs/{site.ids[3]}"))
+    assert "No comparison: the AI has not read this version of the listing yet" in pending
+    public = text(site.app.test_client().get(f"/jobs/{j2}"))
+    assert "Your comparison" not in public and "Python satisfies" not in public

@@ -82,6 +82,7 @@
     <div class="tabs" role="tablist" aria-label="Job sections">
       <a class="tab" role="tab" id="tab-requirements" href="#requirements" aria-controls="requirements" aria-selected="true">Requirements</a>
       <a class="tab" role="tab" id="tab-description" href="#description" aria-controls="description" aria-selected="false">Job description</a>
+      {% if mine %}<a class="tab" role="tab" id="tab-comparison" href="#comparison" aria-controls="comparison" aria-selected="false">Your comparison</a>{% endif %}
     </div>
 
     <section id="requirements" class="panel" role="tabpanel" aria-labelledby="tab-requirements">
@@ -185,6 +186,7 @@
       <p class="notice">The source supplied no description text for this listing.</p>
       {% endif %}
     </section>
+    {% if mine %}{% include "_comparison.html" %}{% endif %}
   </main>
 
   <aside class="browse" aria-labelledby="browse-title">

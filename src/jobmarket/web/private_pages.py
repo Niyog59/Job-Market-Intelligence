@@ -11,6 +11,7 @@ from flask import abort, g, redirect, render_template, request, url_for
 from psycopg import sql
 
 from jobmarket import search, workspace
+from jobmarket.web import compare
 from jobmarket.web.auth import require_owner
 
 EXTRA_ROWS = {"skills": 3, "experiences": 2, "education": 1}
@@ -204,13 +205,19 @@ def _padded(rows: dict[str, list[dict[str, str]]], extra: str | None = None) -> 
     return out
 
 
-def private_job_context(config, conn, private_conn, posting_id: int) -> dict:
-    """The owner's data shown on a job page: saved state, application, and history."""
+def private_job_context(config, conn, private_conn, posting_id: int, page=None) -> dict:
+    """The owner's data shown on a job page: saved state, application, history, and the
+    comparison with the current profile (computed now, never stored)."""
     members = search.group_members(conn(), posting_id, config.serving_schema)
     schema, account_id = config.private_schema, g.owner.account_id
     saved = workspace.saved_among(private_conn(), schema, account_id, members)
     application = workspace.application_among(private_conn(), schema, account_id, members)
+    comparison = None
+    if page is not None:
+        profile = workspace.load_profile(private_conn(), schema, account_id)
+        comparison = compare.compare(page.listing, profile, page.evidence, g.now)
     return {
+        "comparison": comparison,
         "members": members,
         "saved": saved,
         "application": application,

@@ -37,6 +37,10 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   duplicate groups shown once, archived jobs kept separate, and a detail page with the
   extracted requirements, their source quotes, and the full description. It reads the
   database through a read-only login and never calls a source or the model.
+- A private workspace for one owner account: an editable profile, saved jobs, application
+  tracking with history, "new since last visit", and explainable comparisons of each job's
+  requirements with the profile (Matched, Gap, or Needs review, with quotes; no score).
+  Private data lives in its own schema, reachable only through a separate login.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -52,7 +56,7 @@ Not yet in place:
   `notifications` outbox. An SMTP sender exists but no provider is configured, so no
   email is sent.
 - **Hosting.** The website runs only on this computer, on Flask's development server
-  (bound to 127.0.0.1). It has no accounts, bookmarks, or application tracking.
+  (bound to 127.0.0.1), with one owner account and no registration.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -753,6 +757,31 @@ your last visit" (opportunities that arrived with a newly added board are marked
 initial import" instead), and the "Only jobs new since your last visit" filter (`new=1`) shows
 just those. Discovery time is used, never description updates. The first visit has no cutoff:
 it is a baseline, and nothing is marked new.
+
+**Comparisons** ("Your comparison" tab on a job page, owner only). The listing's stored AI
+answer for its current description version is checked against the latest saved profile; no
+model call is made, nothing is stored, and there is no score. Each check is Matched, Gap, or
+Needs review, with an explanation and the listing's quotes, and the page names the profile
+version and description version used.
+
+- A skill missing from the profile is "not listed in your profile", never a gap. "Python or
+  Java" is met by either; "at least two of" counts listed skills; required and preferred
+  skills are separate sections.
+- Gaps are kept for explicit, comparable mismatches: listed employment below a stated
+  minimum of years, a listed education level below a stated level, graduation months outside
+  a stated window, and stated preferences ("outside your preferences"). Everything missing,
+  ambiguous, or not comparable is Needs review.
+- Required years count employment only, with overlapping months counted once. Internships do
+  not count but turn a shortfall into Needs review; projects never count. Experience with a
+  specific skill or domain needs review.
+- An expected degree needs review against a required degree. Certificates, bootcamps, and
+  "other" credentials are not ranked. Alternative paths ("a degree or equivalent experience")
+  are met when any path is met and otherwise need review.
+- Sponsorship, work authorization, citizenship, and clearance appear only as statements from
+  the listing (highlighted if the profile asks for it). Nothing about the owner's eligibility
+  is stored or inferred, and a listing that says nothing is neither a yes nor a no.
+- Without a current extraction (pending, failed, or skipped), or before the profile is saved,
+  there is no comparison.
 
 **Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
 separately, into the ignored `data/backups/`:
