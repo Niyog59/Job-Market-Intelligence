@@ -40,6 +40,7 @@ def safe_next(target: str | None) -> str:
 
 
 def same_origin() -> bool:
+    """False when the browser names another origin (or an opaque "null" one) for a post."""
     origin = request.headers.get("Origin")
     if origin is None:
         return True  # some browsers omit it on same-origin form posts; the token still applies

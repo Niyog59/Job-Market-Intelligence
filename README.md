@@ -667,7 +667,7 @@ column.
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
 strict Content-Security-Policy (scripts, styles, and fonts from the site only), `nosniff`,
-`no-referrer`, and frame denial. Roboto is served locally (SIL Open Font License,
+a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
 `web/static/fonts/OFL.txt`).
 
 **Limitations.** Flask's development server for local use only; salary only from Lever's

@@ -64,7 +64,10 @@ def create_app(config: WebConfig | None = None) -> Flask:
     def headers(response):
         response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # same-origin: the site's own form posts carry their Origin (with no-referrer, browsers
+        # send "Origin: null" and the CSRF origin check would refuse them); other sites still
+        # receive no referrer, and external links also carry rel="noreferrer".
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
         return response
 

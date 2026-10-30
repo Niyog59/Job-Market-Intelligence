@@ -168,3 +168,15 @@ def test_browsing_works_without_private_setup(site):
     assert client.get("/").status_code == 200
     assert "PRIVATE_DB_PASSWORD is missing" in client.get("/signin").get_data(as_text=True)
     assert "Sign in" in client.get("/").get_data(as_text=True)
+
+
+def test_browser_style_posts_with_this_origin_are_accepted(site):
+    # Real browsers send Origin on form posts; the page's referrer policy keeps it real.
+    client = site.make().test_client()
+    assert client.get("/signin").headers["Referrer-Policy"] == "same-origin"
+    page = client.get("/signin").get_data(as_text=True)
+    token = re.search(r'name="signin_token" value="([^"]+)"', page).group(1)
+    form = {"signin_token": token, "username": "owner", "password": PASSWORD}
+    assert client.post("/signin", data=form, headers={"Origin": "null"}).status_code == 403
+    ok = client.post("/signin", data=form, headers={"Origin": "http://localhost"})
+    assert ok.status_code == 302
