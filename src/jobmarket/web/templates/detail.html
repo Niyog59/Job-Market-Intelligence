@@ -18,7 +18,10 @@
     <p class="eyebrow">Job search</p>
     <h1>{{ l.employer }} · {{ l.title }}</h1>
   </div>
-  <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+  <div class="toolbar-actions">
+    {% include "_owner_nav.html" %}
+    <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+  </div>
 </header>
 
 <div class="detail">
@@ -61,6 +64,9 @@
     {% endif %}
     <p class="hint">Applications happen on the employer's site; this site never submits anything.</p>
 
+    {% if mine %}{% include "_job_private.html" %}{% else %}
+    <p class="hint"><a href="{{ url_for('sign_in', next=request.full_path.rstrip('?')) }}">Sign in</a> to save this job or track your application.</p>
+    {% endif %}
     <dl class="facts dates">
       <div><dt>Discovered</dt><dd>{{ fmt.when(l.first_discovered_at) }}{% if s.cohort == "initial_import" %}<br><span class="muted">Initial import: found in the first complete collection of this board, so it may have been posted earlier.</span>{% endif %}</dd></div>
       {% if l.source_published_at %}<div><dt>Published (Greenhouse)</dt><dd>{{ fmt.day(l.source_published_at) }}</dd></div>
@@ -72,9 +78,11 @@
   </aside>
 
   <main id="main" class="detail-main">
+    {% include "_notice.html" %}
     <div class="tabs" role="tablist" aria-label="Job sections">
       <a class="tab" role="tab" id="tab-requirements" href="#requirements" aria-controls="requirements" aria-selected="true">Requirements</a>
       <a class="tab" role="tab" id="tab-description" href="#description" aria-controls="description" aria-selected="false">Job description</a>
+      {% if mine %}<a class="tab" role="tab" id="tab-comparison" href="#comparison" aria-controls="comparison" aria-selected="false">Your comparison</a>{% endif %}
     </div>
 
     <section id="requirements" class="panel" role="tabpanel" aria-labelledby="tab-requirements">
@@ -178,6 +186,7 @@
       <p class="notice">The source supplied no description text for this listing.</p>
       {% endif %}
     </section>
+    {% if mine %}{% include "_comparison.html" %}{% endif %}
   </main>
 
   <aside class="browse" aria-labelledby="browse-title">

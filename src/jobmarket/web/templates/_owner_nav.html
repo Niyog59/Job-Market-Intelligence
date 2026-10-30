@@ -1,0 +1,13 @@
+<nav class="owner-nav" aria-label="Your account">
+  {% if owner %}
+  <a href="{{ url_for('profile') }}"{% if request.endpoint == 'profile' %} aria-current="page"{% endif %}>Profile</a>
+  <a href="{{ url_for('saved_jobs') }}"{% if request.endpoint == 'saved_jobs' %} aria-current="page"{% endif %}>Saved jobs</a>
+  <a href="{{ url_for('applications') }}"{% if request.endpoint == 'applications' %} aria-current="page"{% endif %}>Applications</a>
+  <form method="post" action="{{ url_for('sign_out') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+    <button class="link-button" type="submit">Sign out</button>
+  </form>
+  {% else %}
+  <a href="{{ url_for('sign_in', next=request.full_path.rstrip('?')) }}">Sign in</a>
+  {% endif %}
+</nav>

@@ -1,0 +1,50 @@
+{# The owner's private comparison of this job with their profile (signed-in owner only). #}
+{% set c = mine.comparison %}
+<section id="comparison" class="panel" role="tabpanel" aria-labelledby="tab-comparison">
+  <h2 class="section-title">Your comparison</h2>
+  <p class="subtitle">Your saved profile against this listing's stored requirements. Plain checks, no score.</p>
+  {% if not c.available %}
+    <p class="notice">{{ c.reason }}{% if "Save your profile" in c.reason %} <a href="{{ url_for('profile') }}">Open your profile</a>.{% endif %}</p>
+  {% else %}
+    <p class="hint">Compared with your profile version {{ c.profile_version }} and the AI answer for description version {{ c.description_version }} (the text in the Job description tab). Edit your profile and the comparison updates; the listing is not re-read.</p>
+    <p class="compare-summary">
+      <span class="status good">{{ c.count("matched") }} matched</span>
+      <span class="status bad">{{ c.count("gap") }} gap{{ "s" if c.count("gap") != 1 }}</span>
+      <span class="status warn">{{ c.count("needs_review") }} need{{ "s" if c.count("needs_review") == 1 }} review</span>
+    </p>
+    <div class="req-table">
+      {% for x in c.checks %}
+      <div class="req-row">
+        <div class="req-label">{{ x.section }}</div>
+        <div class="req-value">
+          <span class="status {{ {'matched': 'good', 'gap': 'bad', 'needs_review': 'warn'}[x.result] }}">{{ {'matched': 'Matched', 'gap': 'Gap', 'needs_review': 'Needs review'}[x.result] }}</span>
+          {{ x.requirement }}
+          <p class="req-note">{{ x.explanation }}</p>
+        </div>
+        <div class="req-action">
+          {% if x.quotes %}<button class="button small" type="button" aria-expanded="true" aria-controls="cmp-{{ loop.index }}" data-evidence>View source evidence</button>{% endif %}
+        </div>
+        {% if x.quotes %}
+        <div class="evidence" id="cmp-{{ loop.index }}">
+          {% for q in x.quotes %}<blockquote>{{ q.text }}{% if not q.found %} <span class="tag warn">not found in the description text</span>{% endif %}</blockquote>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="notice">The listing states no requirements this comparison can check.</p>
+      {% endfor %}
+    </div>
+    <h3 class="sub-heading">Eligibility statements in the listing</h3>
+    {% if c.statements %}
+    <ul class="statements">
+      {% for st in c.statements %}
+      <li class="{{ 'highlight' if st.highlighted }}"><strong>{{ st.label }}:</strong> {{ st.value }}
+        {% for q in st.quotes %}<blockquote>{{ q.text }}</blockquote>{% endfor %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">The listing states nothing about sponsorship, work authorization, citizenship, or clearance. That is not a yes or a no.</p>
+    {% endif %}
+    <p class="hint">These are what the listing says. Nothing about your own eligibility is stored or inferred.</p>
+  {% endif %}
+</section>

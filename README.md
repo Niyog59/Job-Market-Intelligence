@@ -37,6 +37,10 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   duplicate groups shown once, archived jobs kept separate, and a detail page with the
   extracted requirements, their source quotes, and the full description. It reads the
   database through a read-only login and never calls a source or the model.
+- A private workspace for one owner account: an editable profile, saved jobs, application
+  tracking with history, "new since last visit", and explainable comparisons of each job's
+  requirements with the profile (Matched, Gap, or Needs review, with quotes; no score).
+  Private data lives in its own schema, reachable only through a separate login.
 - Duplicate handling: records are grouped only on strong evidence (employer requisition
   ID, identical job-specific application URL); weaker similarity is flagged for review.
   Every source record keeps its own history and availability.
@@ -52,7 +56,7 @@ Not yet in place:
   `notifications` outbox. An SMTP sender exists but no provider is configured, so no
   email is sent.
 - **Hosting.** The website runs only on this computer, on Flask's development server
-  (bound to 127.0.0.1). It has no accounts, bookmarks, or application tracking.
+  (bound to 127.0.0.1), with one owner account and no registration.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -121,6 +125,8 @@ Optional settings:
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
 | `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with and the website reads through |
+| `PRIVATE_DB_USER`, `PRIVATE_DB_PASSWORD` | `jobmarket_private`, empty | the login for private pages; without a password, private pages are off and browsing still works |
+| `WEB_COOKIE_SECURE` | `true` | `false` only for a browser that refuses Secure cookies on http://127.0.0.1 |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
 
 `.env` is ignored by Git. Never commit real credentials.
@@ -157,6 +163,8 @@ Optional settings:
 | `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
 | `jobmarket analytics build [--select S]` / `test` / `docs` | Build and test the dbt analytics models; generate their documentation |
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
+| `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
+| `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -663,13 +671,123 @@ column.
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
 strict Content-Security-Policy (scripts, styles, and fonts from the site only), `nosniff`,
-`no-referrer`, and frame denial. Roboto is served locally (SIL Open Font License,
+a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
 `web/static/fonts/OFL.txt`).
 
 **Limitations.** Flask's development server for local use only; salary only from Lever's
 structured range (never parsed from text); requirements are AI extractions checked for
 evidence but not for accuracy (the evaluation labels are not reviewed yet); listings first
 seen before content was stored for every listing, and not seen since, have no page.
+
+## Private workspace
+
+Job browsing needs no account. One owner account, created on the command line, signs in to a
+private workspace. There is no registration.
+
+**Where private data lives.** In the database, in its own schema (`private`), never in Git:
+migrations create only the structure, and the repository contains no private records. The
+analytics login (and so dbt, the serving views, and every public page) has no access to that
+schema; the website reaches it through a separate login, `jobmarket_private`, that can use
+the private schema and nothing else.
+
+**Setup (once).**
+
+1. `pip install -e ".[web]"` (Flask and argon2-cffi).
+2. `jobmarket migrate` (creates the private schema).
+3. As a PostgreSQL superuser, create the login:
+   `CREATE ROLE jobmarket_private LOGIN PASSWORD '...';` (or in pgAdmin: Login/Group Roles,
+   Create, name `jobmarket_private`, a password, "Can login"). Put the password in `.env` as
+   `PRIVATE_DB_PASSWORD`.
+4. As the database owner: `jobmarket private grant`, then `jobmarket private check-access`
+   (the private login uses the private schema only; the analytics login cannot reach it).
+5. `jobmarket owner create --username NAME` asks twice for a password at a hidden prompt.
+   No default account or password exists; nothing is printed.
+
+**Changing the password.** Signed in, the Account page changes it after checking the current
+password (wrong tries count toward the sign-in pause). Every other session ends; this browser
+gets a new session.
+
+**Recovery.** Someone with owner access to the database runs `jobmarket owner reset-password`:
+it sets a new password, ends every session, and clears a sign-in pause.
+`jobmarket owner status` shows whether the account exists, open sessions, and a pause;
+`jobmarket owner sign-out-all` ends every session.
+
+**Sign-in rules.**
+
+- Passwords: at least 8 characters, hashed with Argon2id (argon2-cffi defaults, RFC 9106
+  low-memory parameters); never stored, logged, or printed.
+- Every 3 wrong passwords in a row pause sign-in for 15 minutes (counted for the whole site,
+  whatever username is typed).
+- Sessions live on the server. The browser cookie (`__Host-jm_session`: Secure, HttpOnly,
+  SameSite=Strict, Path=/) holds only a random token; the database keeps its SHA-256. A new
+  session starts at every sign-in. A session ends after 2 hours without activity, after 7
+  days at the latest, or when signing out (which deletes it on the server and sends
+  `Clear-Site-Data`).
+- Every form post needs the session's CSRF token and, when the browser sends one, this site's
+  `Origin`. The sign-in form carries its own random token.
+- Private pages are checked on the server for every request: without a valid session they
+  redirect to sign in, and their forms are refused.
+- Pages for a signed-in owner are sent with `Cache-Control: no-store` and `Vary: Cookie`.
+
+**Profile.** An editable form (`/profile`): skills (each with an optional note or https
+link), employment, internships, and projects as separate experience types, education with
+completed or expected graduation month, and preferred role families, locations, work
+arrangements, and employment types. Optional switches highlight sponsorship statements or
+other eligibility restrictions on job pages. Nothing is prefilled, imported from a resume, or
+inferred; every save needs an explicit confirmation, invalid values are reported next to the
+field with everything typed kept, and each save increases the profile version.
+
+**Saved jobs** (`/saved`). Saving is idempotent. A confident duplicate group counts as one job:
+saving another posting of the group reuses the saved entry. Saved jobs stay listed with their
+current status when the listing closes; removing one keeps its note (saving again restores
+it). Entries point at source postings, so groups that merge or split later change nothing
+stored; two entries that end up in one group are both kept and labeled.
+
+**Applications** (`/applications`, and "Your application" on a job page). Statuses: Not
+applied, Applied, Interviewing, Offer, Rejected, Withdrawn, each with a date (not in the
+future) and an optional note. Any status may follow any other. "Correct this entry" adds a
+correction that names the entry it replaces; the original stays in the history, marked
+corrected. Opening "Apply on company site" changes nothing, and a closed listing never
+changes a status.
+
+**New since last visit.** A visit starts at each sign-in, or after more than an hour without
+activity. Its cutoff is the previous visit's last activity and stays fixed for the whole visit,
+however much you browse or page. Jobs first discovered after the cutoff are marked "New since
+your last visit" (opportunities that arrived with a newly added board are marked "New board:
+initial import" instead), and the "Only jobs new since your last visit" filter (`new=1`) shows
+just those. Discovery time is used, never description updates. The first visit has no cutoff:
+it is a baseline, and nothing is marked new.
+
+**Comparisons** ("Your comparison" tab on a job page, owner only). The listing's stored AI
+answer for its current description version is checked against the latest saved profile; no
+model call is made, nothing is stored, and there is no score. Each check is Matched, Gap, or
+Needs review, with an explanation and the listing's quotes, and the page names the profile
+version and description version used.
+
+- A skill missing from the profile is "not listed in your profile", never a gap. "Python or
+  Java" is met by either; "at least two of" counts listed skills; required and preferred
+  skills are separate sections.
+- Gaps are kept for explicit, comparable mismatches: listed employment below a stated
+  minimum of years, a listed education level below a stated level, graduation months outside
+  a stated window, and stated preferences ("outside your preferences"). Everything missing,
+  ambiguous, or not comparable is Needs review.
+- Required years count employment only, with overlapping months counted once. Internships do
+  not count but turn a shortfall into Needs review; projects never count. Experience with a
+  specific skill or domain needs review.
+- An expected degree needs review against a required degree. Certificates, bootcamps, and
+  "other" credentials are not ranked. Alternative paths ("a degree or equivalent experience")
+  are met when any path is met and otherwise need review.
+- Sponsorship, work authorization, citizenship, and clearance appear only as statements from
+  the listing (highlighted if the profile asks for it). Nothing about the owner's eligibility
+  is stored or inferred, and a listing that says nothing is neither a yes nor a no.
+- Without a current extraction (pending, failed, or skipped), or before the profile is saved,
+  there is no comparison.
+
+**Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
+separately, into the ignored `data/backups/`:
+`pg_dump -n private -Fc -f data/backups/private_YYYYMMDD.dump` (as the owner login). Backups
+contain personal data: keep them out of Git and off shared drives. After restoring or moving
+the database, run `jobmarket migrate` and `jobmarket private grant` again.
 
 ## Listing data for display
 

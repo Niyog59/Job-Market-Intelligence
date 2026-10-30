@@ -298,6 +298,7 @@ def main() -> int:
     finally:
         with db.connect(settings, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}_private" CASCADE')
     print(f"\n{'All expectations met.' if not failures else 'FAILED:'}")
     for failure in failures:
         print(f"  {failure}")

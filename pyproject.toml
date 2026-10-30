@@ -26,8 +26,9 @@ analytics = [
     "dbt-core==1.11.16",
     "dbt-postgres==1.11.0",
 ]
-# The job-search website (jobmarket web).
+# The job-search website (jobmarket web) and the owner account (Argon2id password hashing).
 web = [
+    "argon2-cffi>=25.1,<26",
     "flask>=3.1,<4",
 ]
 

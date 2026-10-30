@@ -50,6 +50,7 @@ def test_security_headers(world, db_settings):
     assert response.headers["Content-Security-Policy"] == CONTENT_SECURITY_POLICY
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "same-origin"
 
 
 def test_pages_use_a_read_only_session(world, db_settings):

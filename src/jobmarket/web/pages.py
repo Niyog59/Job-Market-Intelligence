@@ -76,18 +76,20 @@ class JobPage:
     possible_duplicates: list[dict[str, Any]] = field(default_factory=list)
     closure: dict[str, Any] | None = None
     requirements: list[Requirement] = field(default_factory=list)
+    evidence: list[dict] = field(default_factory=list)  # quote checks of the current answer
 
 
-def _quotes(claim: dict | None, found: dict[str, bool]) -> tuple[Quote, ...]:
+def quotes_for(claim: dict | None, found: dict[str, bool]) -> tuple[Quote, ...]:
+    """The quotes behind one claim, each marked found or not in the checked text."""
     if not claim:
         return ()
     return tuple(Quote(q, found.get(q, True)) for q in claim.get("evidence") or [])
 
 
-def _merge(*claims: dict, found: dict[str, bool]) -> tuple[Quote, ...]:
+def merged_quotes(*claims: dict, found: dict[str, bool]) -> tuple[Quote, ...]:
     seen, out = set(), []
     for claim in claims:
-        for quote in _quotes(claim, found):
+        for quote in quotes_for(claim, found):
             if quote.text not in seen:
                 seen.add(quote.text)
                 out.append(quote)
@@ -136,13 +138,13 @@ def _skill_rows(n: dict, found: dict[str, bool]) -> list[Requirement]:
             else:
                 notes.append(f"{g['display_text']}: all of these.")
         rows.append(Requirement(label, "; ".join(parts), " ".join(notes),
-                                _merge(*alone, *groups, found=found)))  # fmt: skip
+                                merged_quotes(*alone, *groups, found=found)))  # fmt: skip
     unclear = [s for s in n["skills"] if s["status"] == "ambiguous"]
     if unclear:
         rows.append(Requirement("Skills, level unclear",
                                 join_natural([s["canonical"] for s in unclear]),
                                 "The listing does not say whether these are required.",
-                                _merge(*unclear, found=found)))  # fmt: skip
+                                merged_quotes(*unclear, found=found)))  # fmt: skip
     return rows
 
 
@@ -158,7 +160,7 @@ def _experience_rows(n: dict, found: dict[str, bool]) -> list[Requirement]:
                 alt = alternatives[group]
                 rows.append(Requirement("Experience or education", alt["display_text"],
                                         "Either path is accepted.",
-                                        _quotes(alt, found)))  # fmt: skip
+                                        quotes_for(alt, found)))  # fmt: skip
             continue
         if "scope" in item:
             subject = f" with {item['subject']}" if item["subject"] else ""
@@ -168,7 +170,7 @@ def _experience_rows(n: dict, found: dict[str, bool]) -> list[Requirement]:
                     label,
                     f"{_years(item)}{subject}",
                     _STATUS_NOTE[item["status"]],
-                    _quotes(item, found),
+                    quotes_for(item, found),
                 )
             )
         else:
@@ -178,7 +180,7 @@ def _experience_rows(n: dict, found: dict[str, bool]) -> list[Requirement]:
                     "Education",
                     f"{words(item['level']).capitalize()}{fields}",
                     _STATUS_NOTE[item["status"]],
-                    _quotes(item, found),
+                    quotes_for(item, found),
                 )
             )
     if not n["experience"]:
@@ -187,17 +189,23 @@ def _experience_rows(n: dict, found: dict[str, bool]) -> list[Requirement]:
     return rows  # fmt: skip
 
 
+def found_quotes(evidence: list[dict] | None) -> dict[str, bool]:
+    """Quote -> whether it was found in the description text when the answer was checked (a
+    quote is unverified if any check of it failed)."""
+    found: dict[str, bool] = {}
+    for item in evidence or []:
+        found[item["quote"]] = found.get(item["quote"], True) and bool(item.get("found"))
+    return found
+
+
 def requirement_rows(n: dict, evidence: list[dict] | None) -> list[Requirement]:
     """Labeled rows for one extraction answer (normalized), in reading order."""
-    found = {}
-    for item in evidence or []:
-        # A quote is shown as unverified if any check of it failed.
-        found[item["quote"]] = found.get(item["quote"], True) and bool(item.get("found"))
+    found = found_quotes(evidence)
     rows = []
     cats = [_ROLE_NAMES.get(c["category"], c["category"]) for c in n["role_categories"]]
     rows.append(Requirement("Role", join_natural(cats) or "Not stated",
                             "A listing can belong to several role families." if len(cats) > 1
-                            else "", _merge(*n["role_categories"], found=found),
+                            else "", merged_quotes(*n["role_categories"], found=found),
                             stated=bool(cats)))  # fmt: skip
     early = n.get("early_career")
     if early:
@@ -208,7 +216,7 @@ def requirement_rows(n: dict, evidence: list[dict] | None) -> list[Requirement]:
                 "Career level",
                 value,
                 f"{note}{f' Basis: {basis}.' if basis else ''}",
-                _quotes(early, found),
+                quotes_for(early, found),
                 early["status"] != "unclear",
             )
         )
@@ -218,19 +226,19 @@ def requirement_rows(n: dict, evidence: list[dict] | None) -> list[Requirement]:
     if g["status"] == "stated":
         rows.append(Requirement("Graduation", f"{g['earliest'] or 'any time'} to "
                                 f"{g['latest'] or 'any time'}", "Graduation window stated.",
-                                _quotes(g, found)))  # fmt: skip
+                                quotes_for(g, found)))  # fmt: skip
     else:
         rows.append(
             Requirement(
                 "Graduation",
                 "Unclear" if g["status"] == "ambiguous" else "Not stated",
                 "",
-                _quotes(g, found),
+                quotes_for(g, found),
                 stated=False,
             )
         )
     value, note = _SPONSORSHIP[n["sponsorship"]["status"]]
-    rows.append(Requirement("Sponsorship", value, note, _quotes(n["sponsorship"], found),
+    rows.append(Requirement("Sponsorship", value, note, quotes_for(n["sponsorship"], found),
                             n["sponsorship"]["status"] != "not_stated"))  # fmt: skip
     others = []
     for key, labels, label in (("work_authorization", _AUTHORIZATION, "Work authorization"),
@@ -244,7 +252,7 @@ def requirement_rows(n: dict, evidence: list[dict] | None) -> list[Requirement]:
                     label,
                     labels[claim["status"]] + level,
                     "Separate from visa sponsorship.",
-                    _quotes(claim, found),
+                    quotes_for(claim, found),
                 )
             )
     rows += others or [Requirement("Authorization, citizenship, clearance", "Not stated",
@@ -264,15 +272,15 @@ def requirement_rows(n: dict, evidence: list[dict] | None) -> list[Requirement]:
         detail = f"On site: {arrangement['onsite_frequency_text']}."
     rows.append(Requirement("Location & work", " · ".join(
         [p for p in (join_natural(places), where) if p]) or "Not stated", detail,
-        _merge(*n["locations"], arrangement, found=found)))  # fmt: skip
+        merged_quotes(*n["locations"], arrangement, found=found)))  # fmt: skip
     if n["remote_restrictions"]:
         limits = [r.get("normalized_value") or r["value"] for r in n["remote_restrictions"]]
         rows.append(Requirement("Location limits", "; ".join(limits),
                                 "Remote work is limited to these places.",
-                                _merge(*n["remote_restrictions"], found=found)))  # fmt: skip
+                                merged_quotes(*n["remote_restrictions"], found=found)))  # fmt: skip
     employment = n["employment_type"]["value"]
     rows.append(Requirement("Employment type", EMPLOYMENT_LABELS.get(employment, words(employment)),
-                            "", _quotes(n["employment_type"], found),
+                            "", quotes_for(n["employment_type"], found),
                             employment not in ("not_stated", "ambiguous")))  # fmt: skip
     return rows
 
@@ -325,5 +333,6 @@ def job_page(conn: psycopg.Connection, posting_id: int, serving_schema: str) -> 
     if extraction.status == "extracted" and extraction.normalized:
         evidence = conn.execute("SELECT evidence FROM extraction_results WHERE result_id = %s",
                                 (extraction.result_id,)).fetchone()  # fmt: skip
-        page.requirements = requirement_rows(extraction.normalized, evidence[0] if evidence else [])
+        page.evidence = (evidence[0] if evidence else None) or []
+        page.requirements = requirement_rows(extraction.normalized, page.evidence)
     return page

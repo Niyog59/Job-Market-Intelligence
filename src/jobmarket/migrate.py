@@ -8,6 +8,12 @@ this with a SHA-256 checksum of each file.
 
 Migration files must not contain transaction control (BEGIN/COMMIT) or statements that
 cannot run inside a transaction, such as CREATE INDEX CONCURRENTLY.
+
+Private tables (the owner's profile, saved jobs, applications, sign-in data) live in a
+separate schema, so logins granted the ingestion schema never see them. Migrations name it
+``__PRIVATE__`` and the ingestion schema ``__INGESTION__`` (for references across the two);
+the runner substitutes the real names when applying. The checksum covers the file as
+written.
 """
 
 import hashlib
@@ -26,6 +32,9 @@ MIGRATION_FILENAME = re.compile(r"(?P<version>[0-9]{4})_[a-z0-9_]+\.sql")
 # Arbitrary application-wide key for pg_advisory_lock, so two runners cannot apply the
 # same migrations concurrently.
 ADVISORY_LOCK_KEY = 4_815_162_342
+
+PRIVATE_PLACEHOLDER = "__PRIVATE__"
+INGESTION_PLACEHOLDER = "__INGESTION__"
 
 CREATE_TRACKING_TABLE = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -138,6 +147,16 @@ def _require_autocommit(conn: psycopg.Connection) -> None:
         raise ValueError("migrations need a connection with autocommit=True")
 
 
+def private_schema_name(schema: str) -> str:
+    """The private schema that belongs with an ingestion schema: "private" for "public",
+    otherwise "<schema>_private" (test schemas)."""
+    return "private" if schema == "public" else f"{schema}_private"
+
+
+def current_private_schema(conn: psycopg.Connection) -> str:
+    return private_schema_name(conn.execute("SELECT current_schema()").fetchone()[0])
+
+
 def apply_migrations(
     conn: psycopg.Connection, migrations: Iterable[Migration] | None = None
 ) -> list[str]:
@@ -153,11 +172,14 @@ def apply_migrations(
     try:
         conn.execute(CREATE_TRACKING_TABLE)
         pending = _pending(migrations, _applied(conn))
+        ingestion = conn.execute("SELECT current_schema()").fetchone()[0]
+        private = private_schema_name(ingestion)
         applied_now: list[str] = []
         for migration in pending:
             try:
                 with conn.transaction():
-                    conn.execute(migration.sql)
+                    text = migration.sql.replace(PRIVATE_PLACEHOLDER, f'"{private}"')
+                    conn.execute(text.replace(INGESTION_PLACEHOLDER, f'"{ingestion}"'))
                     conn.execute(
                         "INSERT INTO schema_migrations (filename, version, checksum) "
                         "VALUES (%s, %s, %s)",

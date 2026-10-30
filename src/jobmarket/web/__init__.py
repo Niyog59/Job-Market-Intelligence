@@ -1,9 +1,11 @@
 """The job-search website: search results and job detail pages, server-rendered with Flask
-templates and a small script for tabs, evidence, and scroll restoration.
+templates and a small script for tabs, evidence, and scroll restoration, plus the owner's
+private pages after signing in (jobmarket.web.auth).
 
-Pages only read: every request opens a read-only session as the read-only analytics login
-and closes it afterwards. Browsing never calls a source, the model, or dbt. The site is
-meant to run locally (`jobmarket web`, bound to 127.0.0.1).
+Public pages only read: they use the read-only analytics login in read-only sessions.
+Private pages use the private login, which can reach only the private schema. Browsing never
+calls a source, the model, or dbt. The site is meant to run locally (`jobmarket web`, bound
+to 127.0.0.1).
 """
 
 from urllib.parse import parse_qsl
@@ -12,7 +14,8 @@ import psycopg
 from flask import Flask, abort, g, render_template, request
 from werkzeug.datastructures import MultiDict
 
-from jobmarket import db, search
+from jobmarket import db, search, workspace
+from jobmarket.web import auth, private_pages
 from jobmarket.web import format as fmt
 from jobmarket.web.config import WebConfig, load_web_config
 from jobmarket.web.pages import job_page
@@ -39,19 +42,32 @@ def create_app(config: WebConfig | None = None) -> Flask:
             g.conn = c
         return g.conn
 
-    app.extensions["jobmarket_db"] = conn  # the request's read-only connection (tests use it)
+    def private_conn() -> psycopg.Connection:
+        if "private_conn" not in g:
+            g.private_conn = db.connect(
+                config.private_settings, autocommit=True, application_name="jobmarket-private"
+            )
+        return g.private_conn
+
+    # The request's connections (tests use them).
+    app.extensions["jobmarket_db"] = conn
+    app.extensions["jobmarket_private_db"] = private_conn
 
     @app.teardown_appcontext
     def close(_exc):
-        c = g.pop("conn", None)
-        if c is not None:
-            c.close()
+        for key in ("conn", "private_conn"):
+            c = g.pop(key, None)
+            if c is not None:
+                c.close()
 
     @app.after_request
     def headers(response):
         response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # same-origin: the site's own form posts carry their Origin (with no-referrer, browsers
+        # send "Origin: null" and the CSRF origin check would refuse them); other sites still
+        # receive no referrer, and external links also carry rel="noreferrer".
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
         return response
 
@@ -67,20 +83,39 @@ def create_app(config: WebConfig | None = None) -> Flask:
     def results_for(args) -> tuple[search.SearchResult, search.Choices]:
         choices = search.load_choices(conn(), config.serving_schema)
         params, problems = search.parse_params(args, choices)
-        return search.search(conn(), params, g.now, problems, config.serving_schema), choices
+        visit = g.get("visit")
+        cutoff = visit.cutoff if visit is not None else None
+        result = search.search(conn(), params, g.now, problems, config.serving_schema,
+                               new_cutoff=cutoff)  # fmt: skip
+        return result, choices
 
     @app.before_request
     def stamp():
         g.now = config.clock()
+
+    # After stamp(): the session check needs the time; visits need the session.
+    auth.register(app, config, private_conn)
+    private_pages.register(app, config, conn, private_conn)
+
+    @app.context_processor
+    def notices():
+        return {
+            "notice": private_pages.notice(),
+            "statuses": workspace.STATUSES,
+            "kinds": workspace.EXPERIENCE_KINDS,
+            "levels": workspace.EDUCATION_LEVELS,
+            "edu_status": workspace.EDUCATION_STATUS,
+        }
 
     @app.get("/")
     def results():
         result, choices = results_for(request.args)
         status = search.site_status(conn(), g.now, config.serving_schema)
         popular = search.popular_skills(conn(), result.params.population, config.serving_schema)
-        return render_template(
-            "results.html", result=result, choices=choices, status=status, popular=popular
-        )
+        marks = (private_pages.row_marks(config, conn, private_conn, result.rows)
+                 if g.get("owner") else {})  # fmt: skip
+        return render_template("results.html", result=result, choices=choices, status=status,
+                               popular=popular, marks=marks, visit=g.get("visit"))  # fmt: skip
 
     @app.get("/jobs/<int:posting_id>")
     def detail(posting_id: int):
@@ -90,7 +125,10 @@ def create_app(config: WebConfig | None = None) -> Flask:
         # The search the reader came from (only a query string; the path is always "/").
         back = MultiDict(parse_qsl(request.args.get("from", ""), keep_blank_values=False))
         browse, _ = results_for(back)
-        return render_template("detail.html", page=page, browse=browse, back=browse.params)
+        mine = (private_pages.private_job_context(config, conn, private_conn, posting_id, page)
+                if g.get("owner") else None)  # fmt: skip
+        return render_template("detail.html", page=page, browse=browse, back=browse.params,
+                               mine=mine)  # fmt: skip
 
     @app.errorhandler(404)
     def not_found(_exc):

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% set heading = "Saved jobs" %}
+{% block title %}Saved jobs{% endblock %}
+{% block body %}
+{% include "_private_header.html" %}
+<main id="main" class="page">
+  {% include "_notice.html" %}
+  {% if not entries %}
+  <div class="empty"><p>No saved jobs yet. Open a job and choose <strong>Save job</strong>.</p></div>
+  {% else %}
+  <p class="count"><strong>{{ entries|length }}</strong> saved · newest first. Saved jobs stay here when a listing closes.</p>
+  <ol class="rows">
+    {% for e in entries %}{% set j = jobs.get(e.posting_id) %}{% set a = apps.get(e.posting_id) %}
+    <li class="row">
+      <div class="row-main">
+        {% if j %}
+        <h2 class="row-title"><a href="{{ url_for('detail', posting_id=e.posting_id) }}">{{ j.title }}</a></h2>
+        <p class="row-sub">{{ j.employer_name }} · {{ j.location_text or "Location not listed" }} · {{ fmt.SOURCE_LABELS[j.source_system] }}</p>
+        <p class="row-meta">Saved {{ fmt.day(e.saved_at) }} · Last seen {{ fmt.relative_day(j.last_observed_at, now) }}{% if a and a.current %} · Status: <strong>{{ statuses[a.current.status] }}</strong>{% endif %}</p>
+        {% if per_job.get(j.opportunity_key, 0) > 1 %}<p class="row-unknown">Another saved posting is now grouped with this one as the same job. Both entries are kept.</p>{% endif %}
+        {% else %}
+        <h2 class="row-title">Posting {{ e.posting_id }}</h2>
+        <p class="row-meta">This listing's content is no longer available.</p>
+        {% endif %}
+        {% if e.note %}<p class="row-meta">Note: {{ e.note }}</p>{% endif %}
+      </div>
+      <div class="row-status">
+        {% if j and j.availability_state != "observed" %}<span class="status {{ {'possibly_unavailable': 'warn', 'assumed_inactive': 'muted', 'closed': 'bad'}[j.availability_state] }}">{{ fmt.STATE_LABELS[j.availability_state] }}</span>{% endif %}
+        <form method="post" action="{{ url_for('unsave', posting_id=e.posting_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+          <input type="hidden" name="return" value="saved">
+          <button class="link-button" type="submit">Remove</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</main>
+{% endblock %}
