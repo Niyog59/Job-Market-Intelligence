@@ -977,6 +977,61 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _read_new_password(prompt=None) -> str | None:
+    """A new password typed twice at a hidden prompt (never echoed, logged, or printed)."""
+    import getpass
+
+    prompt = prompt or getpass.getpass
+    first = prompt("New password: ")
+    if first != prompt("Repeat the password: "):
+        print("The two passwords differ; nothing was changed.", file=sys.stderr)
+        return None
+    return first
+
+
+def _owner(settings: Settings, args, prompt=None) -> int:
+    try:
+        from jobmarket import owner
+    except ImportError:
+        print('Owner accounts need argon2-cffi: pip install -e ".[web]"', file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    from jobmarket.migrate import current_private_schema
+
+    now = system_clock()
+    with db.connect(settings, autocommit=True) as conn:
+        schema = current_private_schema(conn)
+        try:
+            if args.owner_command == "status":
+                info = owner.owner_status(conn, schema, now)
+                if not info["exists"]:
+                    print("No owner account yet. Create it with `jobmarket owner create`.")
+                    return EXIT_OK
+                print(f"Owner account: {info['username']} (created {_when(info['created_at'])}, "
+                      f"password changed {_when(info['password_changed_at'])})")  # fmt: skip
+                print(f"Open sessions: {info['open_sessions']}")
+                if info["paused_until"]:
+                    print(f"Sign-in is paused until {_when(info['paused_until'])} "
+                          "(3 wrong passwords in a row).")  # fmt: skip
+                return EXIT_OK
+            if args.owner_command == "sign-out-all":
+                print(f"Ended {owner.end_all_sessions(conn, schema)} session(s).")
+                return EXIT_OK
+            password = _read_new_password(prompt)
+            if password is None:
+                return EXIT_FAILURE
+            if args.owner_command == "create":
+                owner.create_owner(conn, schema, args.username, password, now)
+                print(f"Created the owner account {args.username}. Sign in at /signin.")
+            else:
+                ended = owner.reset_password(conn, schema, password, now)
+                print(f"Password changed; {ended} session(s) ended and any sign-in pause "
+                      "cleared.")  # fmt: skip
+            return EXIT_OK
+        except owner.OwnerError as exc:
+            print(f"Not done: {exc}.", file=sys.stderr)
+            return EXIT_FAILURE
+
+
 def _private(settings: Settings, args) -> int:
     from jobmarket import private_db
 
@@ -1246,6 +1301,14 @@ def build_parser() -> argparse.ArgumentParser:
             help="database login (owner is for tests and CI)",
         )
 
+    own = commands.add_parser("owner", help="the single owner account of the private workspace")
+    own_cmds = own.add_subparsers(dest="owner_command", required=True)
+    create = own_cmds.add_parser("create", help="create the owner account (asks for a password)")
+    create.add_argument("--username", required=True)
+    own_cmds.add_parser("reset-password", help="recovery: set a new password, end all sessions")
+    own_cmds.add_parser("status", help="whether the account exists, sessions, sign-in pause")
+    own_cmds.add_parser("sign-out-all", help="end every session")
+
     priv = commands.add_parser("private", help="the private login's database access")
     priv_cmds = priv.add_subparsers(dest="private_command", required=True)
     priv_cmds.add_parser("grant", help="let jobmarket_private use the private schema only")
@@ -1336,6 +1399,7 @@ HANDLERS = {
     "eval": _eval,
     "analytics": _analytics,
     "web": _web,
+    "owner": _owner,
     "private": _private,
 }
 
