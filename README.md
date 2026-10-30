@@ -725,6 +725,35 @@ it sets a new password, ends every session, and clears a sign-in pause.
   redirect to sign in, and their forms are refused.
 - Pages for a signed-in owner are sent with `Cache-Control: no-store` and `Vary: Cookie`.
 
+**Profile.** An editable form (`/profile`): skills (each with an optional note or https
+link), employment, internships, and projects as separate experience types, education with
+completed or expected graduation month, and preferred role families, locations, work
+arrangements, and employment types. Optional switches highlight sponsorship statements or
+other eligibility restrictions on job pages. Nothing is prefilled, imported from a resume, or
+inferred; every save needs an explicit confirmation, invalid values are reported next to the
+field with everything typed kept, and each save increases the profile version.
+
+**Saved jobs** (`/saved`). Saving is idempotent. A confident duplicate group counts as one job:
+saving another posting of the group reuses the saved entry. Saved jobs stay listed with their
+current status when the listing closes; removing one keeps its note (saving again restores
+it). Entries point at source postings, so groups that merge or split later change nothing
+stored; two entries that end up in one group are both kept and labeled.
+
+**Applications** (`/applications`, and "Your application" on a job page). Statuses: Not
+applied, Applied, Interviewing, Offer, Rejected, Withdrawn, each with a date (not in the
+future) and an optional note. Any status may follow any other. "Correct this entry" adds a
+correction that names the entry it replaces; the original stays in the history, marked
+corrected. Opening "Apply on company site" changes nothing, and a closed listing never
+changes a status.
+
+**New since last visit.** A visit starts at each sign-in, or after more than an hour without
+activity. Its cutoff is the previous visit's last activity and stays fixed for the whole visit,
+however much you browse or page. Jobs first discovered after the cutoff are marked "New since
+your last visit" (opportunities that arrived with a newly added board are marked "New board:
+initial import" instead), and the "Only jobs new since your last visit" filter (`new=1`) shows
+just those. Discovery time is used, never description updates. The first visit has no cutoff:
+it is a baseline, and nothing is marked new.
+
 **Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
 separately, into the ignored `data/backups/`:
 `pg_dump -n private -Fc -f data/backups/private_YYYYMMDD.dump` (as the owner login). Backups

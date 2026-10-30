@@ -115,6 +115,7 @@ class SearchParams:
     include_unknown: bool = True
     sort: str = "discovered"
     page: int = 1
+    new_only: bool = False  # signed in: only jobs discovered since the previous visit
 
     def query_pairs(self, **changes) -> list[tuple[str, str]]:
         """URL parameters for this state (defaults omitted), with optional changes."""
@@ -134,6 +135,8 @@ class SearchParams:
             pairs.extend((key, str(v)) for v in getattr(p, name))
         if not p.include_unknown:
             pairs.append(("unknown", "exclude"))
+        if p.new_only:
+            pairs.append(("new", "1"))
         if p.page != 1:
             pairs.append(("page", str(p.page)))
         return pairs
@@ -231,6 +234,7 @@ def parse_params(args: Mapping[str, Any], choices: Choices) -> tuple[SearchParam
         include_unknown=unknown == "include",
         sort=_one(args, "sort", SORTS, "discovered", problems),
         page=page,
+        new_only=_one(args, "new", ("1",), "", problems) == "1",
     )
     return params, list(_unique(problems))
 
@@ -461,6 +465,7 @@ def _grouped(p: SearchParams, schema: str, values: dict[str, Any]) -> sql.Compos
                                    ORDER BY s.first_discovered_at, s.posting_id)
         ) w
         WHERE w.shown_rank = 1 AND w.group_fit >= %(min_fit)s
+          AND (NOT %(new_only)s OR w.discovered_at > %(new_cutoff)s)
         """
     ).format(srv=srv, population=population, scored=scored, columns=_COLUMNS)
 
@@ -504,6 +509,7 @@ class ResultRow:
     fit: int
     unknown_reasons: list[str]
     skill_notes: list[str] = field(default_factory=list)
+    is_new: bool = False  # discovered after the previous visit (signed-in owner only)
 
 
 @dataclass(frozen=True)
@@ -566,10 +572,20 @@ def search(
     problems: list[str] | None = None,
     schema: str = SERVING_SCHEMA,
     page_size: int = PAGE_SIZE,
+    new_cutoff: datetime | None = None,
 ) -> SearchResult:
-    """One page of matching opportunities, newest first (or by source date)."""
+    """One page of matching opportunities, newest first (or by source date).
+
+    new_cutoff (the previous visit's last activity, for a signed-in owner) marks
+    opportunities first discovered after it; with params.new_only only those are returned.
+    Without a cutoff (signed out, or a first visit) nothing is new.
+    """
     _check_serving(conn, schema)
-    values: dict[str, Any] = {}
+    if params.new_only and new_cutoff is None:
+        problems = [*(problems or []), "'New since your last visit' needs a previous visit; "
+                    "showing all jobs."]  # fmt: skip
+        params = replace(params, new_only=False)
+    values: dict[str, Any] = {"new_only": params.new_only, "new_cutoff": new_cutoff}
     grouped = _grouped(params, schema, values)
     view_states = list(ACTIVE_STATES if params.view == "active" else ARCHIVED_STATES)
     other_states = list(ARCHIVED_STATES if params.view == "active" else ACTIVE_STATES)
@@ -589,7 +605,8 @@ def search(
                CASE WHEN o.version_no > 1 THEN o.content_seen_at END,
                o.extraction_status, o.early_career, o.place, o.work_arrangement,
                o.employment_type, o.sponsorship, o.salary_range, o.group_fit,
-               o.group_unknown_reasons, o.total, o.other_total
+               o.group_unknown_reasons, o.discovered_at > %(new_cutoff)s,
+               o.total, o.other_total
         FROM ({grouped}) o
         WHERE o.group_state = ANY(%(view_states)s)
         ORDER BY {order}
@@ -633,11 +650,27 @@ def search(
             sorted({loc for loc in row[6] if loc}),
             *row[7:29],
             skill_notes=_skill_notes(extractions.get(row[1]), params.skills),
+            is_new=bool(row[29]),
         )
         for row in rows
     ]
     return SearchResult(replace(params, page=page), result_rows, total, other_total, page,
                         pages, page_size, list(problems or []))  # fmt: skip
+
+
+def group_members(
+    conn: psycopg.Connection, posting_id: int, schema: str = SERVING_SCHEMA
+) -> list[int]:
+    """The listings counted as one job with this one (its confident duplicate group), or just
+    the listing itself."""
+    rows = conn.execute(
+        sql.SQL(
+            "SELECT posting_id FROM {s}.srv_postings WHERE opportunity_key = (SELECT "
+            "opportunity_key FROM {s}.srv_postings WHERE posting_id = %s) ORDER BY posting_id"
+        ).format(s=sql.Identifier(schema)),
+        (posting_id,),
+    ).fetchall()
+    return [r[0] for r in rows] or [posting_id]
 
 
 def load_choices(conn: psycopg.Connection, schema: str = SERVING_SCHEMA) -> Choices:

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% set heading = "Profile" %}
+{% block title %}Profile{% endblock %}
+
+{% macro err(key) -%}
+  {% if errors.get(key) %}<span class="field-error" id="{{ key }}-error">{{ errors[key] }}</span>{% endif %}
+{%- endmacro %}
+{% macro described(key) -%}{% if errors.get(key) %} aria-invalid="true" aria-describedby="{{ key }}-error"{% endif %}{%- endmacro %}
+{% macro checks(name, choices, selected, label=none) -%}
+  {%- for key, value in choices.items() %}
+  <label class="check"><input type="checkbox" name="{{ name }}" value="{{ key }}" {{ "checked" if key in selected }}><span>{{ value[0] if label == "first" else value }}</span></label>
+  {%- endfor %}
+{%- endmacro %}
+
+{% block body %}
+{% include "_private_header.html" %}
+<main id="main" class="page profile-page">
+  {% include "_notice.html" %}
+  {% if errors %}<p class="banner bad" role="alert">Not saved yet: {{ errors|length }} thing{{ "s" if errors|length != 1 }} to fix below. Everything you typed is still here.</p>{% endif %}
+  <p class="subtitle">Only what you enter here is used. Nothing is filled in for you, read from a resume, or guessed.
+    {% if profile.version %}Saved version {{ profile.version }}, {{ fmt.when(profile.confirmed_at) }}.{% else %}Not saved yet.{% endif %}</p>
+
+  <form method="post" action="{{ url_for('profile') }}" class="profile-form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+
+    <section aria-labelledby="skills-h">
+      <h2 id="skills-h" class="section-title small">Skills</h2>
+      <p class="hint">Optionally add a note or an https link (a project, certificate, or repository) that supports each skill.</p>
+      <input type="hidden" name="skills-count" value="{{ rows.skills|length }}">
+      <div class="grid-rows">
+        {% for r in rows.skills %}{% set k = "skills-" ~ loop.index0 %}
+        <div class="grid-row skills">
+          <label class="field"><span>Skill</span><input name="{{ k }}-name" value="{{ r.name }}" maxlength="80"{{ described(k ~ '-name') }}>{{ err(k ~ "-name") }}</label>
+          <label class="field"><span>Note (optional)</span><input name="{{ k }}-note" value="{{ r.note }}" maxlength="500"{{ described(k ~ '-note') }}>{{ err(k ~ "-note") }}</label>
+          <label class="field"><span>Link (optional)</span><input name="{{ k }}-link" value="{{ r.link }}" inputmode="url"{{ described(k ~ '-link') }}>{{ err(k ~ "-link") }}</label>
+        </div>
+        {% endfor %}
+      </div>
+      <button class="button secondary small" type="submit" name="more" value="skills">Add skill rows</button>
+    </section>
+
+    <section aria-labelledby="exp-h">
+      <h2 id="exp-h" class="section-title small">Experience</h2>
+      <p class="hint">Employment, internships, and projects are kept apart. Only employment counts toward a job's required years; projects never do.</p>
+      <input type="hidden" name="experiences-count" value="{{ rows.experiences|length }}">
+      <div class="grid-rows">
+        {% for r in rows.experiences %}{% set k = "experiences-" ~ loop.index0 %}
+        <fieldset class="grid-row experience">
+          <legend class="visually-hidden">Experience {{ loop.index }}</legend>
+          <label class="field"><span>Type</span>
+            <select name="{{ k }}-kind"{{ described(k ~ '-kind') }}>
+              <option value="">Choose</option>
+              {% for key, label in kinds.items() %}<option value="{{ key }}" {{ "selected" if r.kind == key }}>{{ label }}</option>{% endfor %}
+            </select>{{ err(k ~ "-kind") }}</label>
+          <label class="field"><span>Title</span><input name="{{ k }}-title" value="{{ r.title }}" maxlength="120"{{ described(k ~ '-title') }}>{{ err(k ~ "-title") }}</label>
+          <label class="field"><span>Organization</span><input name="{{ k }}-organization" value="{{ r.organization }}" maxlength="120"></label>
+          <label class="field"><span>Start month</span><input type="month" name="{{ k }}-start" value="{{ r.start }}" placeholder="YYYY-MM"{{ described(k ~ '-start') }}>{{ err(k ~ "-start") }}</label>
+          <label class="field"><span>End month</span><input type="month" name="{{ k }}-end" value="{{ r.end }}" placeholder="YYYY-MM"{{ described(k ~ '-end') }}>{{ err(k ~ "-end") }}</label>
+          <label class="check"><input type="checkbox" name="{{ k }}-current" {{ "checked" if r.current }}{{ described(k ~ '-current') }}><span>Current</span></label>{{ err(k ~ "-current") }}
+          <label class="field wide"><span>Note (optional)</span><input name="{{ k }}-note" value="{{ r.note }}" maxlength="1000"></label>
+          <label class="field wide"><span>Link (optional)</span><input name="{{ k }}-link" value="{{ r.link }}" inputmode="url"{{ described(k ~ '-link') }}>{{ err(k ~ "-link") }}</label>
+        </fieldset>
+        {% endfor %}
+      </div>
+      <button class="button secondary small" type="submit" name="more" value="experiences">Add experience rows</button>
+    </section>
+
+    <section aria-labelledby="edu-h">
+      <h2 id="edu-h" class="section-title small">Education</h2>
+      <input type="hidden" name="education-count" value="{{ rows.education|length }}">
+      <div class="grid-rows">
+        {% for r in rows.education %}{% set k = "education-" ~ loop.index0 %}
+        <fieldset class="grid-row education">
+          <legend class="visually-hidden">Education {{ loop.index }}</legend>
+          <label class="field"><span>Level</span>
+            <select name="{{ k }}-level"{{ described(k ~ '-level') }}>
+              <option value="">Choose</option>
+              {% for key, label in levels.items() %}<option value="{{ key }}" {{ "selected" if r.level == key }}>{{ label }}</option>{% endfor %}
+            </select>{{ err(k ~ "-level") }}</label>
+          <label class="field"><span>Field of study</span><input name="{{ k }}-field" value="{{ r.field }}" maxlength="120"></label>
+          <label class="field"><span>Institution</span><input name="{{ k }}-institution" value="{{ r.institution }}" maxlength="120"></label>
+          <label class="field"><span>Status</span>
+            <select name="{{ k }}-status"{{ described(k ~ '-status') }}>
+              {% for key, label in edu_status.items() %}<option value="{{ key }}" {{ "selected" if r.status == key }}>{{ label }}</option>{% endfor %}
+            </select>{{ err(k ~ "-status") }}</label>
+          <label class="field"><span>Graduation month</span><input type="month" name="{{ k }}-graduation" value="{{ r.graduation }}" placeholder="YYYY-MM"{{ described(k ~ '-graduation') }}>{{ err(k ~ "-graduation") }}</label>
+        </fieldset>
+        {% endfor %}
+      </div>
+      <button class="button secondary small" type="submit" name="more" value="education">Add education rows</button>
+    </section>
+
+    <section aria-labelledby="pref-h">
+      <h2 id="pref-h" class="section-title small">Preferences</h2>
+      <div class="pref-grid">
+        <fieldset><legend>Role families</legend>{{ checks("role", S.ROLE_CHOICES, values.preferred_roles) }}</fieldset>
+        <fieldset><legend>Locations</legend>{{ checks("place", S.PLACE_CHOICES, values.preferred_places, "first") }}</fieldset>
+        <fieldset><legend>Work arrangements</legend>{{ checks("arrangement", S.ARRANGEMENT_CHOICES, values.preferred_arrangements) }}</fieldset>
+        <fieldset><legend>Employment types</legend>{{ checks("employment", S.EMPLOYMENT_CHOICES, values.preferred_employment) }}</fieldset>
+      </div>
+      {{ err("role") }}{{ err("place") }}{{ err("arrangement") }}{{ err("employment") }}
+      <fieldset>
+        <legend>Highlight on job pages</legend>
+        <label class="check"><input type="checkbox" name="highlight_sponsorship" {{ "checked" if values.highlight_sponsorship }}><span>Sponsorship statements</span></label>
+        <label class="check"><input type="checkbox" name="highlight_restrictions" {{ "checked" if values.highlight_restrictions }}><span>Other eligibility restrictions (work authorization, citizenship, clearance)</span></label>
+        <p class="hint">This only highlights what a listing says. Your eligibility is never stored or guessed.</p>
+      </fieldset>
+    </section>
+
+    <section class="confirm">
+      <label class="check"><input type="checkbox" name="confirm" {{ "checked" if confirmed }}{{ described('confirm') }}><span><strong>I confirm this describes my actual skills, experience, and education.</strong></span></label>
+      {{ err("confirm") }}
+      <button class="button" type="submit">Save profile</button>
+    </section>
+  </form>
+</main>
+{% endblock %}

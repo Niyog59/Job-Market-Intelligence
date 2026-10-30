@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set heading = "Applications" %}
+{% block title %}Applications{% endblock %}
+{% block body %}
+{% include "_private_header.html" %}
+<main id="main" class="page">
+  {% include "_notice.html" %}
+  <p class="subtitle">You set each status yourself. Opening an Apply link changes nothing, and a closed listing keeps your status.</p>
+  {% if not apps %}
+  <div class="empty"><p>No tracked applications yet. On a job page, set its status under <strong>Your application</strong>.</p></div>
+  {% else %}
+  <ol class="rows">
+    {% for a in apps %}{% set j = jobs.get(a.posting_id) %}{% set c = a.current %}
+    <li class="row">
+      <div class="row-main">
+        <h2 class="row-title"><a href="{{ url_for('detail', posting_id=a.posting_id) }}">{{ j.title if j else "Posting " ~ a.posting_id }}</a></h2>
+        {% if j %}<p class="row-sub">{{ j.employer_name }} · {{ j.location_text or "Location not listed" }}</p>{% endif %}
+        <p class="row-meta">{% if c %}<strong>{{ statuses[c.status] }}</strong> since {{ fmt.day_only(c.event_date) }}{% endif %} · {{ a.events|length }} history entr{{ "y" if a.events|length == 1 else "ies" }}</p>
+      </div>
+      <div class="row-status">{% if j and j.availability_state in ("closed", "assumed_inactive") %}<span class="status {{ 'bad' if j.availability_state == 'closed' else 'muted' }}">Listing {{ fmt.STATE_LABELS[j.availability_state]|lower }}</span>{% endif %}</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,69 @@
+{# The owner's private panel on a job page (only rendered for a signed-in owner). #}
+<section class="private-panel" aria-labelledby="mine-title">
+  <h2 id="mine-title">Your workspace</h2>
+  {% set saved = mine.saved[0] if mine.saved else none %}
+  {% if saved %}
+    <p>Saved {{ fmt.day(saved.saved_at) }}{% if saved.posting_id != l.posting_id %} (as another posting of this job){% endif %}.</p>
+    {% if mine.saved|length > 1 %}<p class="hint">{{ mine.saved|length }} postings of this job are saved separately; both entries are kept.</p>{% endif %}
+    <form method="post" action="{{ url_for('unsave', posting_id=l.posting_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+      <input type="hidden" name="from" value="{{ back_qs }}">
+      <button class="button secondary wide" type="submit">Remove from saved</button>
+    </form>
+    <form method="post" action="{{ url_for('saved_note', saved_id=saved.saved_id) }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+      <input type="hidden" name="posting_id" value="{{ l.posting_id }}">
+      <input type="hidden" name="from" value="{{ back_qs }}">
+      <label class="field"><span>Private note</span><textarea name="note" rows="3" maxlength="5000">{{ saved.note }}</textarea></label>
+      <button class="button secondary small" type="submit">Save note</button>
+    </form>
+  {% else %}
+    <form method="post" action="{{ url_for('save', posting_id=l.posting_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+      <input type="hidden" name="from" value="{{ back_qs }}">
+      <button class="button wide" type="submit">Save job</button>
+    </form>
+  {% endif %}
+
+  <h3 class="sub-heading">Your application</h3>
+  {% set app = mine.application %}
+  {% if app and app.current %}
+    <p><strong>{{ statuses[app.current.status] }}</strong> since {{ fmt.day_only(app.current.event_date) }}{% if app.posting_id != l.posting_id %} (tracked on another posting of this job){% endif %}</p>
+  {% else %}
+    <p class="muted">Not tracked. Opening the Apply link does not change this; you set it yourself.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('status', posting_id=l.posting_id) }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+    <input type="hidden" name="from" value="{{ back_qs }}">
+    <label class="field"><span>Status</span>
+      <select name="status">{% for key, label in statuses.items() %}<option value="{{ key }}" {{ "selected" if app and app.current and app.current.status == key }}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Date</span><input type="date" name="event_date" value="{{ mine.today.isoformat() }}" max="{{ mine.today.isoformat() }}" required></label>
+    <label class="field"><span>Note (optional)</span><textarea name="note" rows="2" maxlength="5000"></textarea></label>
+    <button class="button small" type="submit">Add status</button>
+  </form>
+  {% if app and app.events %}
+  <h3 class="sub-heading">History</h3>
+  <ol class="history">
+    {% for e in app.events|reverse %}
+    <li>
+      <span class="{{ 'corrected' if e.corrected_by }}">{{ fmt.day_only(e.event_date) }}: {{ statuses[e.status] }}{% if e.note %}. {{ e.note }}{% endif %}</span>
+      {% if e.corrected_by %}<span class="muted">(corrected)</span>{% endif %}
+      {% if e.corrects_event_id %}<span class="muted">(a correction)</span>{% endif %}
+      {% if not e.corrected_by %}
+      <details><summary>Correct this entry</summary>
+        <form method="post" action="{{ url_for('status', posting_id=l.posting_id) }}" class="form">
+          <input type="hidden" name="csrf_token" value="{{ owner.csrf_token }}">
+          <input type="hidden" name="from" value="{{ back_qs }}">
+          <input type="hidden" name="corrects" value="{{ e.event_id }}">
+          <label class="field"><span>Status</span><select name="status">{% for key, label in statuses.items() %}<option value="{{ key }}" {{ "selected" if e.status == key }}>{{ label }}</option>{% endfor %}</select></label>
+          <label class="field"><span>Date</span><input type="date" name="event_date" value="{{ e.event_date.isoformat() }}" max="{{ mine.today.isoformat() }}" required></label>
+          <label class="field"><span>Note</span><textarea name="note" rows="2" maxlength="5000">{{ e.note }}</textarea></label>
+          <button class="button secondary small" type="submit">Save correction</button>
+        </form>
+      </details>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</section>

@@ -67,6 +67,11 @@ def day(value: datetime | None) -> str:
     return f"{t:%b} {t.day}, {t.year}"
 
 
+def day_only(value) -> str:
+    """A calendar date ('Oct 28, 2026')."""
+    return f"{value:%b} {value.day}, {value.year}" if value else "unknown"
+
+
 def relative_day(value: datetime | None, now: datetime) -> str:
     """'today', 'yesterday', or the date, by America/Chicago calendar days."""
     if value is None:

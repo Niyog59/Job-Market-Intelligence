@@ -66,6 +66,18 @@
       <summary>Filters</summary>
       <input type="hidden" name="view" value="{{ p.view }}">
 
+      {% if owner %}
+      <fieldset>
+        <legend>Since your last visit</legend>
+        {% if visit and visit.cutoff %}
+        <label class="check"><input type="checkbox" name="new" value="1" {{ "checked" if p.new_only }}><span>Only jobs new since your last visit</span></label>
+        <p class="hint">Jobs first discovered after your previous visit ended ({{ fmt.when(visit.cutoff) }}) are marked New. This stays fixed while you browse; a new visit starts when you sign in or come back after an hour.</p>
+        {% else %}
+        <p class="hint">This is your first visit, so nothing is marked New yet. From your next visit on, jobs first discovered after this one are.</p>
+        {% endif %}
+      </fieldset>
+      {% endif %}
+
       <fieldset>
         <legend>Jobs</legend>
         {{ radios("population", {"kept": "Kept jobs", "all": "All collected listings"}, p.population) }}
@@ -230,6 +242,8 @@
               {% if row.content_updated_at %} · Description updated {{ fmt.day(row.content_updated_at) }}{% endif %}
               · Last seen {{ fmt.relative_day(row.last_seen_at, now) }}
               {% if row.records > 1 %} · <span class="tag">{{ row.records }} postings of one job</span>{% endif %}
+              {% if row.is_new %} · <span class="tag new">{{ "New board: initial import" if row.cohort == "initial_import" else "New since your last visit" }}</span>{% endif %}
+              {% set m = marks.get(row.opportunity_key) if marks else none %}{% if m and m.saved %} · <span class="tag">Saved</span>{% endif %}{% if m and m.status %} · <span class="tag">{{ m.status }}</span>{% endif %}
               {% if row.early_career == "yes" %} · <span class="tag">early career</span>{% elif row.early_career == "internship" %} · <span class="tag">internship</span>{% endif %}
             </p>
             {% if row.skill_notes %}<p class="row-meta">{{ row.skill_notes|join("; ") }}</p>{% endif %}
