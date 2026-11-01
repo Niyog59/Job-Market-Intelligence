@@ -166,7 +166,9 @@ Optional settings:
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
 | `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
 | `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
-| `jobmarket backup create [--dir D]` / `verify DIR` / `restore DIR --database NAME` | Back up the public and private schemas; check a backup; restore into an empty database |
+| `jobmarket backup create [--dir D] [--upload]` / `verify DIR` / `restore DIR --database NAME` | Back up the public and private schemas; check a backup; restore into an empty database |
+| `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3; list the backups in S3; download and verify one |
+| `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -888,6 +890,25 @@ jobmarket analytics build         # recreate the reporting tables and serving vi
 The logins `jobmarket_analytics` and `jobmarket_private` must exist first (see Analytics
 and Private workspace for how they are created).
 
+**S3.** With `pip install -e ".[aws]"` (boto3) and `JOBMARKET_S3_BUCKET` set, `backup create
+--upload` (or `backup upload DIR`) copies a verified backup to a private bucket, and
+`jobmarket sync-raw` copies raw responses before `cleanup-raw` removes them locally. Every
+object is written with S3-managed encryption (SSE-S3). Keys are separated by purpose so
+access and lifecycle rules can differ:
+
+| Prefix | Contents |
+|---|---|
+| `raw/<source>/<board>/` | raw responses, same paths as under `data/raw/` |
+| `backups/ingestion/<stamp>/` | `ingestion.dump` and the manifest |
+| `backups/private/<stamp>/` | `private.dump` and the manifest |
+
+Credentials come from the AWS SDK's default chain (on EC2, the instance role), so no access
+keys are configured. Nothing in the code deletes S3 objects: retention is a bucket lifecycle
+rule (30 days for backups and for raw responses). A dump's manifest is uploaded after the
+dump, so `backup list` shows only finished uploads; `backup fetch STAMP` downloads both parts
+and verifies them before a restore. Local copies under `data/backups/` are not deleted
+automatically.
+
 ## Posting history
 
 **Identity.** A job is identified by board (source system and board token) and the
@@ -1051,7 +1072,7 @@ transaction (such as `CREATE INDEX CONCURRENTLY`).
 ## Tests
 
 ```bash
-pip install -e ".[dev,analytics,web]"
+pip install -e ".[dev,analytics,web,aws]"
 ruff check .
 ruff format --check .
 pytest
@@ -1076,7 +1097,7 @@ Database tests create a temporary schema, work only inside it, and drop it after
 they do not modify existing tables in the configured database. The role needs permission
 to create schemas in that database (the database owner has it).
 
-The backup round trip
+S3 tests use moto's in-memory S3 (no network, no AWS account). The backup round trip
 (`pg_dump`, then `pg_restore` into a second database) creates and drops two temporary
 databases, so it runs only when the login may create databases and the PostgreSQL 17 client
 tools are available; otherwise it is skipped, unless `JOBMARKET_REQUIRE_PG_TOOLS=1` (CI).

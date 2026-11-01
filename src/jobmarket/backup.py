@@ -33,6 +33,7 @@ from pathlib import Path
 
 from jobmarket import db
 from jobmarket.config import Settings
+from jobmarket.s3store import BACKUP_PREFIXES, S3Store
 
 PG_BIN_ENV = "JOBMARKET_PG_BIN"
 DEFAULT_BACKUP_DIR = Path("data/backups")
@@ -41,6 +42,7 @@ FORMAT_VERSION = 1
 # Backup part -> (schema, file name). Separate files so the private part can be stored and
 # protected apart from the job data.
 PARTS = {"ingestion": ("public", "ingestion.dump"), "private": ("private", "private.dump")}
+_STAMP = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 # pg_restore list entries that create or comment on the public schema, which every new
 # database already has (restoring them would fail, or need ownership of that schema).
 _PUBLIC_SCHEMA_ENTRY = re.compile(r"\b(SCHEMA - public|COMMENT - SCHEMA public)\b")
@@ -158,6 +160,44 @@ def verify_backup(directory: Path) -> dict:
         if dump.stat().st_size != info["bytes"] or _sha256(dump) != info["sha256"]:
             raise BackupError(f"{dump} does not match its checksum; the {part} part is damaged")
     return manifest
+
+
+def upload_backup(store: S3Store, directory: Path) -> list[str]:
+    """Upload a verified backup: each dump under its own prefix, the manifest last."""
+    manifest = verify_backup(directory)
+    keys = []
+    for part, info in manifest["parts"].items():
+        prefix = f"{BACKUP_PREFIXES[part]}{manifest['stamp']}/"
+        for name in (info["file"], MANIFEST):
+            store.upload(directory / name, prefix + name)
+            keys.append(prefix + name)
+    return keys
+
+
+def list_backups(store: S3Store) -> dict[str, list[str]]:
+    """Backups in S3 by stamp, with the parts whose upload finished (manifest present)."""
+    found: dict[str, list[str]] = {}
+    for part, prefix in BACKUP_PREFIXES.items():
+        for key in store.keys(prefix):
+            stamp, _, name = key[len(prefix) :].partition("/")
+            if name == MANIFEST and _STAMP.fullmatch(stamp):
+                found.setdefault(stamp, []).append(part)
+    return dict(sorted(found.items()))
+
+
+def fetch_backup(store: S3Store, stamp: str, root: Path) -> Path:
+    """Download one backup from S3 into root/<stamp>/ and verify it."""
+    if not _STAMP.fullmatch(stamp):
+        raise BackupError(f"not a backup name: {stamp!r} (expected like 20261101T060000Z)")
+    target = root / stamp
+    if target.exists():
+        raise BackupError(f"{target} already exists")
+    for part, (_, name) in PARTS.items():
+        prefix = f"{BACKUP_PREFIXES[part]}{stamp}/"
+        store.download(prefix + name, target / name)
+        store.download(prefix + MANIFEST, target / MANIFEST)
+    verify_backup(target)
+    return target
 
 
 @dataclass(frozen=True)

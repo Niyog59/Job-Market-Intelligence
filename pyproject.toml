@@ -17,8 +17,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "moto[s3]>=5.1,<6",
     "pytest>=8",
     "ruff>=0.6",
+]
+# S3 storage for raw responses and backups (jobmarket sync-raw, jobmarket backup --upload).
+aws = [
+    "boto3>=1.40,<2",
 ]
 # dbt models in analytics/ (jobmarket analytics build). Pinned: 1.11 needs no build-time
 # downloads; upgraded deliberately.

@@ -1,5 +1,5 @@
-"""Backups (jobmarket.backup): manifests and checksums, the refusal to restore
-over existing data, and a full pg_dump / pg_restore round trip.
+"""Backups (jobmarket.backup): manifests and checksums, the S3 layout (moto), the refusal to
+restore over existing data, and a full pg_dump / pg_restore round trip.
 
 The round trip needs the PostgreSQL client tools and a login that may create databases (the
 CI service login can; a normal local owner login cannot, so it is skipped there). With
@@ -80,6 +80,49 @@ def test_restore_refuses_a_database_that_is_not_empty(db_settings, isolated_sche
     with pytest.raises(backup.BackupError, match="is not empty") as caught:
         backup.restore_backup(db_settings, fake_backup(tmp_path))
     assert f"schema {isolated_schema}" in str(caught.value)
+
+
+class TestS3:
+    @pytest.fixture
+    def store(self, monkeypatch):
+        pytest.importorskip("boto3")
+        moto = pytest.importorskip("moto")
+        import boto3
+
+        from jobmarket.s3store import S3Config, S3Store
+
+        for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+            monkeypatch.setenv(name, "testing")
+        with moto.mock_aws():
+            client = boto3.client("s3", region_name="us-east-2")
+            client.create_bucket(Bucket="jobmarket-backup-test", CreateBucketConfiguration={
+                "LocationConstraint": "us-east-2"})  # fmt: skip
+            yield S3Store(S3Config("jobmarket-backup-test", "us-east-2"), client)
+
+    def test_parts_go_to_separate_encrypted_prefixes(self, store, tmp_path):
+        keys = backup.upload_backup(store, fake_backup(tmp_path))
+        assert keys == [
+            "backups/ingestion/20261101T060000Z/ingestion.dump",
+            "backups/ingestion/20261101T060000Z/manifest.json",
+            "backups/private/20261101T060000Z/private.dump",
+            "backups/private/20261101T060000Z/manifest.json",
+        ]
+        for key in keys:
+            head = store.client.head_object(Bucket="jobmarket-backup-test", Key=key)
+            assert head["ServerSideEncryption"] == "AES256"
+
+    def test_list_and_fetch(self, store, tmp_path):
+        backup.upload_backup(store, fake_backup(tmp_path / "local"))
+        # An interrupted upload (dump without manifest) is not listed as a finished part.
+        unfinished = "backups/private/20261102T060000Z/private.dump"
+        store.client.put_object(Bucket=store.bucket, Key=unfinished, Body=b"x")
+        assert backup.list_backups(store) == {"20261101T060000Z": ["ingestion", "private"]}
+
+        fetched = backup.fetch_backup(store, "20261101T060000Z", tmp_path / "restored")
+        assert sorted(p.name for p in fetched.iterdir()) == [
+            "ingestion.dump", "manifest.json", "private.dump"]  # fmt: skip
+        with pytest.raises(backup.BackupError, match="not a backup name"):
+            backup.fetch_backup(store, "../../etc", tmp_path / "x")
 
 
 @pytest.fixture
