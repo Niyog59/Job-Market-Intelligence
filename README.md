@@ -653,6 +653,7 @@ The site shows whatever was last collected and extracted: run `jobmarket collect
 | `/` | search results; all search state is in the query string (see Job search) |
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
 | `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
+| `/healthz` | `ok` when the app and its database login work (for container health checks) |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable
 database give a 503 page that says what to run.
@@ -691,7 +692,13 @@ strict Content-Security-Policy (scripts, styles, and fonts from the site only), 
 a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
 `web/static/fonts/OFL.txt`).
 
-**Limitations.** Flask's development server for local use only; salary only from Lever's
+**On a server.** `jobmarket web` uses Flask's development server and is for this computer
+only. A server runs `gunicorn jobmarket.web.wsgi:app` behind a reverse proxy that
+terminates HTTPS (`deploy/`). Set `WEB_TRUST_PROXY=1` there, and only there: the app then
+takes the scheme, host, and client address from the proxy's `X-Forwarded-*` headers, which
+the sign-in origin check and the `Secure` cookie need.
+
+**Limitations.** Salary only from Lever's
 structured range (never parsed from text); requirements are AI extractions checked for
 evidence but not for accuracy (the evaluation labels are not reviewed yet); listings first
 seen before content was stored for every listing, and not seen since, have no page.

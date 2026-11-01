@@ -4,8 +4,8 @@ restoration, plus the owner's private pages after signing in (jobmarket.web.auth
 
 Public pages only read: they use the read-only analytics login in read-only sessions.
 Private pages use the private login, which can reach only the private schema. Browsing never
-calls a source, the model, or dbt. The site is meant to run locally (`jobmarket web`, bound
-to 127.0.0.1).
+calls a source, the model, or dbt. Locally it runs with `jobmarket web` (bound to
+127.0.0.1); on a server, with gunicorn behind a reverse proxy (jobmarket.web.wsgi, deploy/).
 """
 
 from urllib.parse import parse_qsl
@@ -107,6 +107,13 @@ def create_app(config: WebConfig | None = None) -> Flask:
             "levels": workspace.EDUCATION_LEVELS,
             "edu_status": workspace.EDUCATION_STATUS,
         }
+
+    @app.get("/healthz")
+    def health():
+        # For container health checks: the app answers and its database login works.
+        conn().execute("SELECT 1")
+        return "ok\n", 200, {"Content-Type": "text/plain; charset=utf-8",
+                             "Cache-Control": "no-store"}  # fmt: skip
 
     @app.get("/")
     def results():
