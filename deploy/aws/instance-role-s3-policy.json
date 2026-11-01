@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListOnlyTheAppPrefixes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["raw/*", "backups/ingestion/*", "backups/private/*"]
+        }
+      }
+    },
+    {
+      "Sid": "ReadAndWriteAppObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::YOUR-BUCKET-NAME/raw/*",
+        "arn:aws:s3:::YOUR-BUCKET-NAME/backups/ingestion/*",
+        "arn:aws:s3:::YOUR-BUCKET-NAME/backups/private/*"
+      ]
+    }
+  ]
+}

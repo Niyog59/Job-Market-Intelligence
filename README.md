@@ -56,8 +56,10 @@ Not yet in place:
 - **Alert email delivery.** Alerts and recovery notices are written to the
   `notifications` outbox. An SMTP sender exists but no provider is configured, so no
   email is sent.
-- **Hosting.** The website runs only on this computer, on Flask's development server
-  (bound to 127.0.0.1), with one owner account and no registration.
+- **Hosting.** Deployment to one AWS EC2 server is prepared but not done: a Docker
+  Compose stack (PostgreSQL, gunicorn, Caddy with HTTPS), backups to S3, IAM policy
+  examples, and a step-by-step runbook (`deploy/`). It has been tested in CI and locally,
+  never on AWS. Until it is deployed, the website runs only on this computer.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -1136,6 +1138,9 @@ secrets:
 | `Caddyfile` | HTTPS for `SITE_DOMAIN`, HTTP redirected to HTTPS |
 | `postgres-init/10-jobmarket.sh` | on the first start: the three logins and the database owned by the non-superuser owner login |
 | `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
+| `aws/` | IAM role policy (S3 prefixes only, no delete), EC2 trust policy, bucket policy (HTTPS only), lifecycle rules (30 days) |
+| `RUNBOOK.md` | ordered steps from an empty AWS account to the running site, updates, rollback, recovery |
+| `SIZING.md` | memory measurements and the 1 GiB estimate |
 
 All containers restart unless stopped, and Docker starts at boot. Visitors reach only
 Caddy: there is no SSH (administration uses AWS Systems Manager Session Manager), and the
