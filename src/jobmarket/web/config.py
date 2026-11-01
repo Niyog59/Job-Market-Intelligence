@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from jobmarket.analytics import ANALYTICS_ROLE
 from jobmarket.config import Settings, load_settings
 from jobmarket.private_db import PRIVATE_ROLE
+from jobmarket.reports import REPORTING_SCHEMA
 from jobmarket.search import SERVING_SCHEMA
 
 
@@ -33,6 +34,7 @@ class WebConfig:
     # None: private pages are unavailable (signing in says why); browsing still works.
     private_settings: Settings | None = None
     serving_schema: str = SERVING_SCHEMA
+    reporting_schema: str = REPORTING_SCHEMA
     private_schema: str = "private"
     # Where the ingestion views (listings, current_extractions, ...) are found; None means
     # the login's default search path.

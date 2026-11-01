@@ -1,4 +1,5 @@
-<nav class="owner-nav" aria-label="Your account">
+<nav class="owner-nav" aria-label="Site">
+  <a href="{{ url_for('reports_page') }}"{% if request.endpoint == 'reports_page' %} aria-current="page"{% endif %}>Reports</a>
   {% if owner %}
   <a href="{{ url_for('profile') }}"{% if request.endpoint == 'profile' %} aria-current="page"{% endif %}>Profile</a>
   <a href="{{ url_for('saved_jobs') }}"{% if request.endpoint == 'saved_jobs' %} aria-current="page"{% endif %}>Saved jobs</a>

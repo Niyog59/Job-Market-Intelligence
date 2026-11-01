@@ -35,8 +35,9 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   (sanitized description, original links, freshness, availability).
 - A local job-search website (`jobmarket web`): search with filters and shareable URLs,
   duplicate groups shown once, archived jobs kept separate, and a detail page with the
-  extracted requirements, their source quotes, and the full description. It reads the
-  database through a read-only login and never calls a source or the model.
+  extracted requirements, their source quotes, and the full description, plus a read-only
+  Reports page over the reporting tables. It reads the database through a read-only login
+  and never calls a source or the model.
 - A private workspace for one owner account: an editable profile, saved jobs, application
   tracking with history, "new since last visit", and explainable comparisons of each job's
   requirements with the profile (Matched, Gap, or Needs review, with quotes; no score).
@@ -648,6 +649,7 @@ The site shows whatever was last collected and extracted: run `jobmarket collect
 |---|---|
 | `/` | search results; all search state is in the query string (see Job search) |
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
+| `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable
 database give a 503 page that says what to run.
@@ -667,6 +669,17 @@ description version the Job description tab shows. Without an extraction, the pa
 structured details are pending or unavailable rather than "not stated". Back to results
 restores the search, the page, and the scroll position. Below 820 px the layout becomes one
 column.
+
+**Reports page.** Shows the reporting tables as they were at the last `jobmarket analytics
+build`: extraction coverage (with the queue, retries, and skips when processing is
+incomplete), current inventory, daily activity, skills in demand (required alone, required
+as one of several choices, and preferred kept in separate columns), experience,
+sponsorship and other eligibility statements with all three denominators, pipeline health,
+and board freshness. It says when the reports were built and what collection and
+extraction they include, and warns when job search already has a newer collection. The
+current day is marked as provisional. Before the first build the page says the reports do
+not exist yet. It reads `analytics_reporting` (`reporting_schema` in `WebConfig`) and
+computes nothing beyond the dbt models.
 
 **Security.** Pages run as the read-only login in read-only sessions. Descriptions are
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
