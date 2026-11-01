@@ -561,6 +561,7 @@ answers later re-normalized in Python show their current clean-up
 | `rpt_pipeline_health_daily` | day: scans by outcome, holds, AI requests and tokens, extraction coverage |
 | `rpt_board_freshness` | board: latest scan, last complete collection and its age, baseline, hold |
 | `rpt_extraction_coverage` | population: extracted, queued, failed, skipped |
+| `rpt_build_info` | one row: when the build ran, and the newest complete collection and extraction it saw |
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.
