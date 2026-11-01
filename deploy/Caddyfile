@@ -1,0 +1,11 @@
+# HTTPS for the public site. Caddy gets and renews a Let's Encrypt certificate for
+# SITE_DOMAIN with the HTTP-01 challenge (port 80 must be reachable from the internet) and
+# redirects http:// to https://. With SITE_DOMAIN=localhost it uses its own local
+# certificate instead (CI smoke test).
+{$SITE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8000
+	# The app sets its own security headers; do not advertise the server software.
+	header -Server
+	log
+}

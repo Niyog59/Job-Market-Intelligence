@@ -1,0 +1,124 @@
+# Production stack for one server: PostgreSQL, the website (gunicorn), and Caddy (HTTPS).
+# Run every command from this directory, with a .env file made from env.example
+# (see RUNBOOK.md). Only Caddy publishes ports (80 and 443); the database and the app are
+# reachable only from the other containers on this project's network.
+name: jobmarket
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: jobmarket-app:${APP_VERSION:-local}
+  logging: *logging
+  security_opt:
+    - no-new-privileges:true
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    logging: *logging
+    # Memory settings for a 1 GiB server (see SIZING.md).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - max_connections=20
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Read once, by postgres-init/10-jobmarket.sh, when the volume is first created.
+      DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      DB_USER: ${DB_USER:?set DB_USER in .env}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?set ANALYTICS_DB_PASSWORD in .env}
+      PRIVATE_DB_PASSWORD: ${PRIVATE_DB_PASSWORD:?set PRIVATE_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: the temporary server that runs the init scripts listens only on a socket,
+      # so this passes only once the real server is up.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    <<: *app
+    restart: unless-stopped
+    command: ["gunicorn", "--bind", "0.0.0.0:8000", "jobmarket.web.wsgi:app"]
+    # Only the logins the website uses: never the ingestion owner or the superuser.
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
+      PRIVATE_DB_PASSWORD: ${PRIVATE_DB_PASSWORD}
+      WEB_TRUST_PROXY: "1"
+      GUNICORN_CMD_ARGS: ${GUNICORN_CMD_ARGS:---workers 1 --threads 4}
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  # Command-line jobs, run by hand: docker compose run --rm jobs jobmarket <command>.
+  # Never started by `docker compose up`, and nothing schedules it.
+  jobs:
+    <<: *app
+    profiles: ["jobs"]
+    restart: "no"
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      POSTGRES_PASSWORD: ""  # the superuser password is not needed here
+    volumes:
+      - appdata:/app/data
+
+volumes:
+  pgdata:
+  appdata:
+  caddy_data:
+  caddy_config:

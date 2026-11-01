@@ -1118,3 +1118,27 @@ confirm the second run changes nothing, loads the board registry, runs the histo
 scenarios, runs the history integrity checks, and builds the analytics models with their
 data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
+
+A second job checks the deployment in `deploy/`: it builds the Docker image, starts the
+Compose stack with throwaway passwords, runs the first-start commands, requests pages over
+HTTPS from Caddy (with its local certificate for `localhost`), checks that only Caddy
+publishes ports, and makes a backup inside the container. It never contacts AWS.
+
+## Deployment
+
+`deploy/` holds everything for one server (EC2 t3.micro, Amazon Linux 2023) and no
+secrets:
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | one image for the website and the command-line jobs (Python 3.11, PostgreSQL 17 client tools) |
+| `docker-compose.yml` | `db` (PostgreSQL 17, no published port, data in a volume), `web` (gunicorn, read-only filesystem, analytics and private logins only), `caddy` (ports 80 and 443, Let's Encrypt), and `jobs` for running commands by hand |
+| `Caddyfile` | HTTPS for `SITE_DOMAIN`, HTTP redirected to HTTPS |
+| `postgres-init/10-jobmarket.sh` | on the first start: the three logins and the database owned by the non-superuser owner login |
+| `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
+
+All containers restart unless stopped, and Docker starts at boot. Visitors reach only
+Caddy: there is no SSH (administration uses AWS Systems Manager Session Manager), and the
+database is not exposed. Public pages read through the read-only login; nothing a visitor
+does starts a collection, an AI call, or a change to job data (signing in records sign-in
+attempts and sessions in the private schema).
