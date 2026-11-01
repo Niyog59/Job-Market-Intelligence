@@ -37,6 +37,9 @@ jobs:
       DB_USER: jobmarket
       DB_PASSWORD: ci-only-password
       JOBMARKET_REQUIRE_DB: "1"
+      # The backup round trip test must run here, not skip.
+      JOBMARKET_REQUIRE_PG_TOOLS: "1"
+      JOBMARKET_PG_BIN: /usr/lib/postgresql/17/bin
 
     steps:
       - uses: actions/checkout@v5
@@ -49,6 +52,12 @@ jobs:
 
       - name: Install
         run: pip install -e ".[dev,analytics,web]"
+
+      - name: PostgreSQL 17 client tools (pg_dump must match the server's major version)
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Lint
         run: |

@@ -1132,6 +1132,37 @@ def _analytics(settings: Settings, args) -> int:
     return EXIT_OK if outcome.success else EXIT_FAILURE
 
 
+def _backup(settings: Settings, args) -> int:
+    from dataclasses import replace
+
+    from jobmarket import backup
+
+    try:
+        if args.backup_command == "create":
+            directory = backup.create_backup(settings, Path(args.dir), system_clock())
+            manifest = backup.verify_backup(directory)
+            for part, info in manifest["parts"].items():
+                print(f"  {part:9} {info['file']:15} {info['bytes']:>12,} bytes")
+            print(f"Backup written to {directory} ({manifest['migrations']['applied']} "
+                  "migrations applied).")  # fmt: skip
+        elif args.backup_command == "verify":
+            manifest = backup.verify_backup(Path(args.directory))
+            print(f"Backup {manifest['stamp']} is complete and matches its checksums.")
+        else:
+            target = replace(settings, db_name=args.database)
+            result = backup.restore_backup(target, Path(args.directory))
+            print(f"Restored into {result.database}: {result.postings:,} postings, "
+                  f"{result.owner_accounts} owner account(s), {result.migrations_applied} "
+                  f"migrations (backup recorded {result.migrations_expected}).")  # fmt: skip
+            print("Next, with DB_NAME set to this database: jobmarket migrate; jobmarket "
+                  "analytics grant; jobmarket private grant; jobmarket private check-access; "
+                  "jobmarket analytics build.")  # fmt: skip
+    except backup.BackupError as exc:
+        print(f"Backup error: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    return EXIT_OK
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -1328,6 +1359,16 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--board", metavar="TOKEN")
     history.add_argument("--job", metavar="SOURCE_ID", help="the source's job id")
 
+    bk = commands.add_parser("backup", help="database backups and restores")
+    bk_cmds = bk.add_subparsers(dest="backup_command", required=True)
+    bk_create = bk_cmds.add_parser("create", help="dump the public and private schemas")
+    bk_create.add_argument("--dir", default="data/backups", help="parent directory")
+    bk_verify = bk_cmds.add_parser("verify", help="check a backup directory's checksums")
+    bk_verify.add_argument("directory")
+    bk_restore = bk_cmds.add_parser("restore", help="restore into a new, empty database")
+    bk_restore.add_argument("directory")
+    bk_restore.add_argument("--database", required=True, help="the empty target database")
+
     commands.add_parser(
         "refingerprint",
         help="evaluate stored versions under the current normalization rules",
@@ -1401,6 +1442,7 @@ HANDLERS = {
     "web": _web,
     "owner": _owner,
     "private": _private,
+    "backup": _backup,
 }
 
 

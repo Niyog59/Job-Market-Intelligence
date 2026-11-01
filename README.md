@@ -166,6 +166,7 @@ Optional settings:
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
 | `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
 | `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
+| `jobmarket backup create [--dir D]` / `verify DIR` / `restore DIR --database NAME` | Back up the public and private schemas; check a backup; restore into an empty database |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -797,11 +798,9 @@ version and description version used.
 - Without a current extraction (pending, failed, or skipped), or before the profile is saved,
   there is no comparison.
 
-**Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
-separately, into the ignored `data/backups/`:
-`pg_dump -n private -Fc -f data/backups/private_YYYYMMDD.dump` (as the owner login). Backups
-contain personal data: keep them out of Git and off shared drives. After restoring or moving
-the database, run `jobmarket migrate` and `jobmarket private grant` again.
+**Backups.** `jobmarket backup create` writes the private schema to its own file
+(`private.dump`), next to the ingestion data; see Backups and restore. Backups contain
+personal data: keep them out of Git and off shared drives.
 
 ## Listing data for display
 
@@ -852,6 +851,42 @@ store is reported as `omitted_too_long`, and an empty one as `empty`, never as c
 Raw responses are kept for four days. `jobmarket cleanup-raw` deletes older files and
 marks their rows `purged_at`; job records, history, and response metadata are never
 deleted. A replay of a purged response reports `expired`.
+
+## Backups and restore
+
+`jobmarket backup create` runs `pg_dump` (custom format) as the owner login and writes a
+directory named by its UTC time under the ignored `data/backups/`:
+
+| File | Contents |
+|---|---|
+| `ingestion.dump` | the `public` schema: boards, scans, postings, history, extractions, `schema_migrations` |
+| `private.dump` | the `private` schema: owner account (password hash only), sessions, profile, saved jobs, applications, visits |
+| `manifest.json` | sizes and SHA-256 checksums, server and `pg_dump` versions, migrations applied |
+
+The analytics schemas are not backed up; `jobmarket analytics build` recreates them. The
+directory is written as `<stamp>.partial` and renamed when complete. Dumps are made without
+owners or privileges, and database roles (with their passwords) are never in a backup, so a
+backup restores onto a fresh server whose roles were created separately. The password
+reaches `pg_dump` and `pg_restore` through `PGPASSWORD` in their environment, never on the
+command line. The client tools must be PostgreSQL 17 (`pg_dump` refuses a newer server);
+`JOBMARKET_PG_BIN` names their directory when they are not on the `PATH`.
+
+**Restore** (`jobmarket backup restore DIR --database NAME`) refuses any database that
+already contains a table, function, or schema other than an empty `public`, so it cannot
+overwrite data. It verifies every checksum first, then restores each part in one
+transaction (all or nothing), ingestion before private. Afterwards, with `DB_NAME` set to the
+restored database:
+
+```bash
+jobmarket migrate                 # apply migrations newer than the backup, if any
+jobmarket analytics grant         # read-only access for the analytics login
+jobmarket private grant           # private schema for the private login
+jobmarket private check-access    # confirm who can reach private data
+jobmarket analytics build         # recreate the reporting tables and serving views
+```
+
+The logins `jobmarket_analytics` and `jobmarket_private` must exist first (see Analytics
+and Private workspace for how they are created).
 
 ## Posting history
 
@@ -1041,6 +1076,11 @@ Database tests create a temporary schema, work only inside it, and drop it after
 they do not modify existing tables in the configured database. The role needs permission
 to create schemas in that database (the database owner has it).
 
+The backup round trip
+(`pg_dump`, then `pg_restore` into a second database) creates and drops two temporary
+databases, so it runs only when the login may create databases and the PostgreSQL 17 client
+tools are available; otherwise it is skipped, unless `JOBMARKET_REQUIRE_PG_TOOLS=1` (CI).
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes and pull requests to `main`: it starts a
@@ -1048,5 +1088,5 @@ PostgreSQL 17 service container, installs the package, runs `ruff` and `pytest` 
 `JOBMARKET_REQUIRE_DB=1`, runs `jobmarket check-db`, applies the migrations twice to
 confirm the second run changes nothing, loads the board registry, runs the history
 scenarios, runs the history integrity checks, and builds the analytics models with their
-data tests. Collection tests use a scripted HTTP
+data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
