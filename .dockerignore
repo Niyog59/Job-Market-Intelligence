@@ -6,6 +6,7 @@
 !src/
 !analytics/
 !config/
+!deploy/airflow/dags/
 analytics/target/
 analytics/logs/
 analytics/dbt_packages/

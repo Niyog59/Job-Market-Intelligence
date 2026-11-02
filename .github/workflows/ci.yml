@@ -123,10 +123,15 @@ jobs:
           python -m pytest deploy/airflow/tests -v -p no:cacheprovider
 
   deploy:
-    # The Docker deployment in deploy/: build the image and run the whole stack once, with
-    # Caddy serving https://localhost from its own local certificate. Throwaway values only.
+    # The Docker deployment in deploy/: build the image, start the whole stack (database,
+    # website, Caddy with its own certificate for https://localhost, Airflow), run the real
+    # pipeline through Airflow against a fake S3 (moto), and measure memory on Linux while
+    # the website serves requests. No job boards are loaded, so nothing contacts a source;
+    # no email is sent; throwaway values only.
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      COMPOSE_FILE: docker-compose.yml:ci/compose.ci.yml
     defaults:
       run:
         working-directory: deploy
@@ -136,27 +141,29 @@ jobs:
       - name: Settings for the test stack (placeholders replaced with throwaway values)
         run: |
           sed -e 's/^SITE_DOMAIN=.*/SITE_DOMAIN=localhost/' \
-              -e 's/^JOBMARKET_S3_BUCKET=.*/JOBMARKET_S3_BUCKET=not-used-in-ci/' \
+              -e 's/^JOBMARKET_S3_BUCKET=.*/JOBMARKET_S3_BUCKET=jobmarket-ci/' \
               -e 's/^JOBMARKET_SMTP_HOST=.*/JOBMARKET_SMTP_HOST=/' \
               -e 's/CHANGE_ME@gmail.com/ci@example.invalid/' \
               -e 's/=CHANGE_ME$/=ci0only0throwaway/' env.example > .env
+          fernet=$(python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
+          sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$fernet|" .env
           if grep -q CHANGE_ME .env; then exit 1; fi
           docker compose config --quiet
-          docker compose --profile jobs config --quiet
+          docker compose --profile jobs --profile init config --quiet
 
       - name: Build the application image
         run: docker compose build web
 
-      - name: First start (database, migrations, grants, analytics)
+      - name: First start (database, migrations, grants, first report publication)
         run: |
-          docker compose up -d --wait db
+          docker compose up -d --wait db moto
           run() { docker compose run --rm -T jobs jobmarket "$@"; }
           run migrate
-          run sources sync
           run analytics grant
           run private grant
           run private check-access
-          run analytics build
+          docker compose run --rm -T jobs python -c "import boto3; boto3.client('s3', region_name='us-east-2').create_bucket(Bucket='jobmarket-ci', CreateBucketConfiguration={'LocationConstraint': 'us-east-2'})"
+          run analytics publish
 
       - name: Website over HTTPS through Caddy
         run: |
@@ -167,24 +174,77 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -k https://localhost/profile)" = 302
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/)" = 308
 
-      - name: Only Caddy publishes ports
+      - name: Airflow starts with its own database and loads the DAGs
         run: |
-          for service in db web; do
+          docker compose run --rm -T airflow-init > /dev/null
+          docker compose up -d --wait airflow-api airflow-dag-processor airflow-scheduler
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors http://127.0.0.1:8080/api/v2/monitor/health
+          echo
+          for attempt in $(seq 1 24); do
+            count=$(docker compose exec -T airflow-scheduler airflow dags list -o plain 2>/dev/null | grep -c '^jobmarket_' || true)
+            [ "$count" = 3 ] && break
+            sleep 5
+          done
+          test "$count" = 3
+          docker compose exec -T airflow-scheduler airflow dags list-import-errors
+
+      - name: Pipeline through Airflow, with memory measured on Linux
+        run: |
+          (while true; do
+             t=$(date +%s)
+             docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}' | sed "s/^/$t /"
+             sleep 2
+           done) > stats.log &
+          sampler=$!
+          (for i in $(seq 1 400); do
+             curl -sk -o /dev/null https://localhost/
+             curl -sk -o /dev/null https://localhost/reports
+           done) &
+          load=$!
+          test_dag() { docker compose exec -T airflow-scheduler airflow dags test "$@" > "$1.log" 2>&1 || { tail -50 "$1.log"; exit 1; }; }
+          test_dag jobmarket_collection 2026-11-02T03:00:00+00:00
+          test_dag jobmarket_retries 2026-11-02T03:15:00+00:00
+          test_dag jobmarket_extraction 2026-11-02T03:30:00+00:00
+          wait "$load" || true
+          kill "$sampler"
+          free -m
+          python3 ci/memory_report.py stats.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The pipeline recorded its steps, confirmed S3 uploads, and queued the summary
+        run: |
+          sql() { docker compose exec -T db psql -U jobmarket -d Job_Market -Atc "$1"; }
+          sql "SELECT step, status, detail FROM pipeline_step_runs ORDER BY step_run_id"
+          for step in backup backup_prune raw_sync raw_cleanup report_publish daily_summary; do
+            test "$(sql "SELECT status FROM pipeline_step_runs WHERE step = '$step' ORDER BY step_run_id DESC LIMIT 1")" = succeeded
+          done
+          test "$(sql "SELECT detail->>'uploaded' FROM pipeline_step_runs WHERE step = 'backup' ORDER BY step_run_id DESC LIMIT 1")" = true
+          test "$(sql "SELECT count(*) FROM notifications WHERE kind = 'summary'")" = 1
+          docker compose run --rm -T jobs jobmarket backup list | grep -q "ingestion, private"
+
+      - name: The pipeline's backup restores into an empty database
+        run: |
+          docker compose exec -T db psql -U postgres -c 'CREATE DATABASE restore_check OWNER jobmarket'
+          docker compose run --rm -T jobs sh -c 'jobmarket backup restore "$(ls -d data/backups/*Z | tail -1)" --database restore_check'
+
+      - name: Only Caddy publishes public ports; the Airflow UI is loopback only
+        run: |
+          for service in db web airflow-scheduler airflow-dag-processor; do
             bindings=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$(docker compose ps -q "$service")")
             echo "$service: $bindings"
             case "$bindings" in "{}"|"null") ;; *) exit 1 ;; esac
           done
+          api=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$(docker compose ps -q airflow-api)")
+          echo "airflow-api: $api"
+          echo "$api" | grep -q '"HostIp":"127.0.0.1"'
+          if echo "$api" | grep -q '"HostIp":"0.0.0.0"\|"HostIp":""'; then exit 1; fi
           if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then exit 1; fi
-
-      - name: Backup inside the container
-        run: |
-          docker compose run --rm -T jobs jobmarket backup create
-          docker compose run --rm -T jobs sh -c 'jobmarket backup verify data/backups/*Z'
 
       - name: Logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          docker compose logs --no-color --tail 200
+          tail -100 *.log || true
 
       - name: Remove the test stack
         if: always()
-        run: docker compose --profile jobs down --volumes
+        run: docker compose --profile jobs --profile init down --volumes
