@@ -217,6 +217,16 @@ def compose(conn: psycopg.Connection, now: datetime) -> Summary:
         lines.append("  The website keeps the last good reports.")
         attention.append("report rebuild failed")
 
+    sheet = operations.last_step_run(conn, "sheets_sync")
+    if sheet:
+        good = operations.last_step_run(conn, "sheets_sync", "succeeded")
+        if sheet[1] == "failed":
+            kept = _when(good[0]) if good else "no earlier update"
+            lines.append(f"- Dashboard Sheet update FAILED at {_when(sheet[0])}; Tableau keeps "
+                         f"the data of {kept}.")  # fmt: skip
+        else:
+            lines.append(f"- Dashboard Sheet (Tableau Public) updated {_when(sheet[0])}.")
+
     # --- Backups and raw files --------------------------------------------------------
     lines += ["", "BACKUPS"]
     good = operations.last_step_run(conn, "backup", "succeeded")

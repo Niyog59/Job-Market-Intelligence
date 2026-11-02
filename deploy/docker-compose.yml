@@ -154,6 +154,8 @@ services:
     volumes:
       - appdata:/app/data
       - airflowdata:/app/airflow
+      # The Google service account key for the dashboard Sheet (git-ignored; README inside).
+      - ./secrets:/app/secrets:ro
 
   airflow-dag-processor:
     <<: *airflow
@@ -190,6 +192,7 @@ services:
       POSTGRES_PASSWORD: ""  # the superuser password is not needed here
     volumes:
       - appdata:/app/data
+      - ./secrets:/app/secrets:ro
 
 volumes:
   pgdata:

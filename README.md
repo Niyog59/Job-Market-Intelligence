@@ -176,6 +176,7 @@ Optional settings:
 | `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3 and confirm it; list the backups in S3; download and verify one |
 | `jobmarket backup prune --keep N` | Keep the newest N verified local backups; delete older ones only if confirmed in S3 |
 | `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
+| `jobmarket tableau sync [--dry-run]` | Copy the published dashboard tables to the Google Sheet behind Tableau Public |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -1214,6 +1215,27 @@ The `deploy` job checks the deployment in `deploy/`:
   ports (the Airflow UI only on 127.0.0.1).
 - It records container memory with `docker stats` in the job summary.
 - It never contacts AWS, a job board (none are loaded), Gemini, or an email server.
+
+## Dashboard data (Tableau Public)
+
+The Tableau Public dashboards read a Google Sheet, because Tableau Public cannot connect to the
+database. `jobmarket tableau sync` copies the published dashboard tables to that Sheet, one tab
+each: `about` (build time and the "data collected through ..." caption every chart shows),
+`jobs`, `job_skills`, `skill_pairs`, `weekly_jobs`, `weekly_skills`, `daily_activity`,
+`eligibility`, and `pipeline_health`.
+
+- Only published reporting tables are read, through the read-only analytics login, so
+  nothing from the private workspace can reach the Sheet.
+- All tabs are replaced in one Google `batchUpdate` request, which applies all or nothing:
+  the Sheet holds one complete publication, the previous one if an update fails.
+- Dates are sent as Sheets dates, so Tableau reads them as dates.
+- The scheduled run updates the Sheet after every successful publication (Airflow task
+  `sheets_sync`, 10-minute limit, skipped until `JOBMARKET_SHEETS_ID` and
+  `JOBMARKET_SHEETS_KEY_FILE` are set); a failed publication never reaches the Sheet. The
+  daily summary says when the Sheet was last updated.
+- `--dry-run` shows the tabs and their sizes without contacting Google. Tests use a fake
+  Sheets API.
+- Setup (Google project, service account, Sheet, key file): `deploy/RUNBOOK.md` section T.
 
 ## Deployment
 

@@ -30,7 +30,10 @@ ALERTING_STEPS = {
         "newest good backup is the one listed in the daily summary.",
     ),
 }
-STEPS = ("report_publish", "backup", "backup_prune", "raw_sync", "raw_cleanup", "daily_summary")
+STEPS = (
+    "report_publish", "backup", "backup_prune", "raw_sync", "raw_cleanup", "daily_summary",
+    "sheets_sync",
+)  # fmt: skip
 
 
 @dataclass(frozen=True)
