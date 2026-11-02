@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Market insights{% endblock %}
+{% block body_class %}insights-page{% endblock %}
+
+{% macro share(value) -%}{{ "%.0f"|format(value * 100) }}%{%- endmacro %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job Market Intelligence</p>
+    <h1>Market insights</h1>
+  </div>
+  <div class="toolbar-actions">
+    <a href="{{ url_for('results') }}">Job search</a>
+    {% include "_owner_nav.html" %}
+  </div>
+</header>
+
+<main id="main" class="page insights">
+  <section aria-labelledby="dashboard-title">
+    {% if dashboard.slug != "main" %}
+    <p class="hint"><a href="{{ url_for('insights_page') }}">Back to the main dashboard</a></p>
+    {% endif %}
+    <h2 class="section-title" id="dashboard-title">{{ dashboard.title }}</h2>
+    <p class="subtitle">{{ dashboard.question }}</p>
+    <p class="objective"><strong>Why it matters:</strong> {{ dashboard.objective }}</p>
+
+    {% if embed %}
+    <div class="viz-frame">
+      <iframe src="{{ embed }}" title="{{ dashboard.title }} (interactive Tableau dashboard)"
+              loading="lazy" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <p class="viz-caption">
+      {% if headline %}Based on data collected through {{ fmt.when(headline.collected_through) }}
+      · reports built {{ fmt.when(headline.built_at) }}.{% endif %}
+      <a href="{{ open_url }}" rel="noreferrer">Open in Tableau Public</a>
+    </p>
+    {% else %}
+    <p class="notice">
+      <strong>The interactive dashboards are on their way.</strong> They are being built in
+      Tableau Public from the published reports{% if headline %}, like the numbers below,{% endif %}
+      and will appear here once the workbook is published.
+    </p>
+    {% if headline %}
+    <div class="kpis">
+      <div class="kpi"><span class="kpi-value">{{ "{:,}".format(headline.jobs) }}</span>
+        <span class="kpi-label">open jobs</span></div>
+      <div class="kpi"><span class="kpi-value">{{ "{:,}".format(headline.employers) }}</span>
+        <span class="kpi-label">employers</span></div>
+      <div class="kpi"><span class="kpi-value">{{ share(headline.junior_share) }}</span>
+        <span class="kpi-label">junior, of jobs with a clear level</span></div>
+      <div class="kpi"><span class="kpi-value">{{ share(headline.senior_share) }}</span>
+        <span class="kpi-label">senior or above, of jobs with a clear level</span></div>
+      <div class="kpi"><span class="kpi-value">{{ share(headline.genai_share) }}</span>
+        <span class="kpi-label">mention generative AI</span></div>
+    </div>
+    <p class="viz-caption">Based on data collected through
+      {{ fmt.when(headline.collected_through) }} · reports built
+      {{ fmt.when(headline.built_at) }}.</p>
+    {% endif %}
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="more" class="more-dashboards">
+    <h2 class="section-title small" id="more">See more dashboards</h2>
+    <ul class="dashboard-cards">
+      {% for d in dashboards if d.slug != dashboard.slug %}
+      <li><a class="dashboard-card" href="{{ url_for('insights_page', d=d.slug) if d.slug != 'main' else url_for('insights_page') }}">
+        <strong>{{ d.title }}</strong>
+        <span>{{ d.question }}</span>
+      </a></li>
+      {% endfor %}
+    </ul>
+    {% if profile %}
+    <p class="hint"><a href="{{ profile }}" rel="noreferrer">All dashboards on Tableau Public</a></p>
+    {% endif %}
+  </section>
+
+  <p class="hint">Jobs are those kept by the screening rules (target roles in DFW, Houston, or
+    remote open to Texas). Levels and requirements come from AI-extracted details, so jobs not
+    yet processed are counted separately. "About the data" explains the definitions and
+    limits.</p>
+</main>
+{% endblock %}

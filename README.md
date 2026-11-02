@@ -696,6 +696,7 @@ The site shows whatever was last collected and extracted: run `jobmarket collect
 | `/` | search results; all search state is in the query string (see Job search) |
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
 | `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
+| `/insights` | Market insights: the Tableau Public dashboards; `?d=<dashboard>` picks one (see Dashboard data) |
 | `/healthz` | `ok` when the app and its database login work (for container health checks) |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable
@@ -731,9 +732,10 @@ computes nothing beyond the dbt models.
 **Security.** Pages run as the read-only login in read-only sessions. Descriptions are
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
-strict Content-Security-Policy (scripts, styles, and fonts from the site only), `nosniff`,
-a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
-`web/static/fonts/OFL.txt`).
+strict Content-Security-Policy (scripts, styles, and fonts from the site only; frames only
+from `https://public.tableau.com`, for the dashboards), `nosniff`, a `same-origin` referrer
+policy (other sites receive no referrer), and frame denial (no other site may frame these
+pages). Roboto is served locally (SIL Open Font License, `web/static/fonts/OFL.txt`).
 
 **On a server.** `jobmarket web` uses Flask's development server and is for this computer
 only. A server runs `gunicorn jobmarket.web.wsgi:app` behind a reverse proxy that
@@ -1237,6 +1239,24 @@ each: `about` (build time and the "data collected through ..." caption every cha
 - `--dry-run` shows the tabs and their sizes without contacting Google. Tests use a fake
   Sheets API.
 - Setup (Google project, service account, Sheet, key file): `deploy/RUNBOOK.md` section T.
+
+**Market insights page.** `/insights` embeds the published dashboards: the main one, "What
+are employers asking for?", first, and the others under "See more dashboards"
+(`src/jobmarket/web/insights.py` lists each dashboard's question and business objective).
+Each dashboard is framed from its Tableau Public address,
+`https://public.tableau.com/views/<workbook>/<view>`, so the workbook's dashboard names must
+match the view names there (`docs/tableau/BUILD_GUIDE.md`). Set
+`JOBMARKET_TABLEAU_WORKBOOK` (and optionally `JOBMARKET_TABLEAU_PROFILE`) once the workbook
+is published; until then the page shows the headline numbers and says the dashboards are on
+their way. Under each dashboard the page states the collection and build time of the
+published reports.
+
+The job-search page links to it with a short summary from the published `rpt_jobs_current`:
+the junior and senior shares among jobs with a clear level, and the share mentioning
+generative AI. Before the first publication, or when the published reports predate these
+tables, the link appears without numbers and job search is unaffected.
+
+Dashboard designs, the data dictionary, and the build steps: `docs/tableau/`.
 
 ## Deployment
 

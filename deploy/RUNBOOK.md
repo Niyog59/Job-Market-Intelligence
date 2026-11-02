@@ -520,6 +520,16 @@ summary says when it last did. If an update fails, the Sheet keeps the previous 
 data. To stop sharing data with Google, delete the Sheet or remove the service account's
 access, and remove `JOBMARKET_SHEETS_ID` from `.env`.
 
+**T5. Show the published dashboards on the site.**
+- Where: Tableau Public, after building and publishing the workbook from the Sheet
+  (`docs/tableau/BUILD_GUIDE.md`); then the server, in `~/Job-Market-Intelligence/deploy`.
+- Values: open the main dashboard on Tableau Public; its address is
+  `https://public.tableau.com/views/NAME/WhatEmployersAskFor`. In `.env`, set
+  `JOBMARKET_TABLEAU_WORKBOOK=NAME` and, optionally, `JOBMARKET_TABLEAU_PROFILE=` your
+  profile address. Then `docker compose up -d web`.
+- Check: `https://YOURNAME.duckdns.org/insights` shows the main dashboard, each card under
+  "See more dashboards" opens its own dashboard, and the job-search page links to it.
+
 **Before the server exists:** the same sync works from your Mac (in the project folder, with
 the key file somewhere outside the project):
 `JOBMARKET_SHEETS_ID=... JOBMARKET_SHEETS_KEY_FILE=/path/to/key.json .venv/bin/jobmarket tableau sync`,
@@ -637,4 +647,5 @@ Not done yet, and only you can do it in AWS:
 - [ ] G1 to G3 Airflow started, UI reached privately, first evening run and summary email
 - [ ] G6 heartbeat and uptime monitors (optional)
 - [ ] T1 to T4 dashboard Sheet: Google project, service account, Sheet shared, key on the server
+- [ ] T5 workbook published on Tableau Public and its name set for the Market insights page
 - [ ] Record real memory use in `deploy/SIZING.md` after a few days of schedules

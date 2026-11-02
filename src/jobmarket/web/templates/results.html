@@ -38,6 +38,24 @@
     <button class="button" type="submit">Search</button>
   </div>
 
+  <aside class="insights-prompt" aria-labelledby="insights-prompt-title">
+    <div>
+      <p class="insights-prompt-title" id="insights-prompt-title">Market insights</p>
+      {% if headline %}
+      <p>Among open jobs with a clear level,
+        <strong>{{ "%.0f"|format(headline.junior_share * 100) }}% are junior</strong> and
+        <strong>{{ "%.0f"|format(headline.senior_share * 100) }}% senior or above</strong>.
+        <strong>{{ "%.0f"|format(headline.genai_share * 100) }}%</strong> of all
+        {{ "{:,}".format(headline.jobs) }} open jobs mention generative AI.</p>
+      <p class="hint">Data collected through {{ fmt.when(headline.collected_through) }}.</p>
+      {% else %}
+      <p>Which skills employers ask for, junior vs senior hiring, and how AI is changing the
+        requirements.</p>
+      {% endif %}
+    </div>
+    <a class="button" href="{{ url_for('insights_page') }}">See the dashboards</a>
+  </aside>
+
   <p class="freshness">
     Last complete collection: {{ fmt.when(status.last_complete_collection) }}
     ({{ fmt.age(status.last_complete_collection, now) }}) · {{ status.boards }} boards
