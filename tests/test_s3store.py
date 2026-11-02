@@ -94,3 +94,17 @@ def test_commands_explain_a_missing_bucket(monkeypatch, capsys):
     assert main(["sync-raw"]) == 2
     assert main(["backup", "list"]) == 2
     assert "JOBMARKET_S3_BUCKET is required" in capsys.readouterr().err
+
+
+def test_raw_upload_confirmation_needs_the_same_size(s3, tmp_path):
+    from jobmarket.s3store import raw_upload_confirmation
+
+    root = tmp_path / "raw"
+    (root / "greenhouse" / "acme").mkdir(parents=True)
+    path = root / "greenhouse" / "acme" / "a-scan1.json"
+    path.write_text("{}")
+    sync_raw(s3, root, ["greenhouse"])
+    confirmed = raw_upload_confirmation(s3)
+    assert confirmed("greenhouse/acme/a-scan1.json", 2)
+    assert not confirmed("greenhouse/acme/a-scan1.json", 3)
+    assert not confirmed("greenhouse/acme/missing.json", 2)

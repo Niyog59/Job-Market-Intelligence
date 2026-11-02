@@ -1,10 +1,11 @@
 # Deployment runbook: one EC2 server
 
 This puts the public job-search demo online at `https://<name>.duckdns.org` on one EC2
-instance (Amazon Linux 2023, t3.micro, 20 GiB disk, region us-east-2):
+instance (Amazon Linux 2023, 20 GiB disk, region us-east-2):
 
-- **Docker Compose** runs three containers: PostgreSQL (`db`), the website (`web`,
-  gunicorn), and Caddy (`caddy`, HTTPS with a Let's Encrypt certificate).
+- **Docker Compose** runs PostgreSQL (`db`), the website (`web`, gunicorn), Caddy
+  (`caddy`, HTTPS with a Let's Encrypt certificate), and Airflow (`airflow-scheduler`,
+  `airflow-dag-processor`, `airflow-api`), which runs the pipeline on its schedule.
 - **Only ports 80 and 443 are open to the public.** PostgreSQL and the website are
   reachable only from the other containers. Administration uses AWS Systems Manager
   Session Manager, a shell in the browser. Your existing SSH access stays open during setup
@@ -12,9 +13,10 @@ instance (Amazon Linux 2023, t3.micro, 20 GiB disk, region us-east-2):
   after a reboot.
 - **S3** keeps raw responses and backups (encrypted, deleted after 30 days by lifecycle
   rules). The server reaches S3 through an IAM role, so no AWS keys are stored anywhere.
-- **Nothing runs on a schedule.** Collection, extraction, analytics builds, and backups
-  run when you start them (section G). The website always shows when data was last
-  collected.
+- **Scheduling needs a bigger instance.** Airflow and the rest of the stack do not fit in
+  a t3.micro's 1 GiB (see `SIZING.md`); a 2 GiB t3.small is the candidate, and changing
+  size is your budget decision. Sections A to F work on the current t3.micro with jobs run
+  by hand; section G (Airflow) waits for that decision.
 
 Every step says **where** to run it, **what** it does, the **values** you supply, and how
 to **check** it worked. Do the sections in order. Placeholders look like `YOUR-BUCKET-NAME`;
@@ -211,17 +213,38 @@ cd ~/Job-Market-Intelligence/deploy
 ```bash
 cp env.example .env
 chmod 600 .env
-for i in 1 2 3 4; do openssl rand -hex 24; done
+for i in 1 2 3 4 5 6; do openssl rand -hex 24; done
+python3 -c "import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
 nano .env
 ```
 
-- Values: in `nano`, paste one of the four printed values into each of
-  `POSTGRES_PASSWORD`, `DB_PASSWORD`, `ANALYTICS_DB_PASSWORD`, `PRIVATE_DB_PASSWORD`
-  (a different one each). Set `SITE_DOMAIN` to `YOURNAME.duckdns.org` and
-  `JOBMARKET_S3_BUCKET` to your bucket name. Save with Ctrl+O, Enter; exit with Ctrl+X.
-  These are new passwords for the server: do not reuse the ones from your Mac.
-- Check: `grep -c CHANGE_ME .env` prints `0`, and `docker compose config --quiet` prints
-  nothing (no errors). Keep a copy of the four passwords in your password manager.
+- Values: in `nano`:
+  - Paste one of the six printed hex values into each of `POSTGRES_PASSWORD`,
+    `DB_PASSWORD`, `ANALYTICS_DB_PASSWORD`, `PRIVATE_DB_PASSWORD`, `AIRFLOW_DB_PASSWORD`,
+    and `AIRFLOW_JWT_SECRET` (a different one each).
+  - Paste the last line (ends with `=`) into `AIRFLOW_FERNET_KEY`.
+  - Set `SITE_DOMAIN` to `YOURNAME.duckdns.org` and `JOBMARKET_S3_BUCKET` to your bucket.
+  - Email lines: fill them in step E6, or leave them for now.
+  - Save with Ctrl+O, Enter; exit with Ctrl+X. These are new secrets for the server: do
+    not reuse the ones from your Mac.
+- Check: `grep -c CHANGE_ME .env` prints `0` (after E6), and `docker compose config
+  --quiet` prints nothing. Keep a copy of the secrets in your password manager.
+
+**E6. Let the server send email (Gmail app password).**
+- Where: your browser, signed in to the Gmail account that will send the messages.
+- What: an app password is a separate 16-character password that only lets an app send
+  mail as you; it can be revoked any time without changing your Google password. EC2
+  allows outbound port 587, which Gmail uses.
+- Values:
+  1. Google Account > Security > 2-Step Verification: turn it on if it is off.
+  2. Google Account > Security > App passwords: create one named `Job Pipeline server`,
+     and copy it (shown once).
+  3. In `deploy/.env` on the server (`nano .env`): `JOBMARKET_SMTP_USER` and
+     `JOBMARKET_ALERT_FROM` = that Gmail address; `JOBMARKET_SMTP_PASSWORD` = the app
+     password without spaces; `JOBMARKET_ALERT_TO` = `upretyyniyog@gmail.com`.
+- Check (after F2): `docker compose run --rm jobs jobmarket notifications --send-test`
+  prints `Sent 1`, and the "[Job Pipeline] Test email" arrives. If it says failed,
+  `jobmarket notifications --full` shows the error.
 
 ---
 
@@ -286,18 +309,19 @@ docker compose run --rm jobs jobmarket migrate
 docker compose run --rm jobs jobmarket analytics grant
 docker compose run --rm jobs jobmarket private grant
 docker compose run --rm jobs jobmarket private check-access
-docker compose run --rm jobs jobmarket analytics build
+docker compose run --rm jobs jobmarket analytics publish
 ```
 
    Check: `check-access` shows the analytics login cannot use the private schema and the
-   private login cannot read or write job data; `analytics build` ends with `ERROR=0`.
+   private login cannot read or write job data; `analytics publish` prints "Published
+   reports built ...".
    Your owner account came with the backup: sign in later with your usual password.
 
 *Option 2: start empty.* Run `migrate`, `sources sync`, `analytics grant`, `private grant`,
 `private check-access`, then `owner create --username YOURNAME` (it asks for a new
 password at a hidden prompt; type it yourself), all as
 `docker compose run --rm jobs jobmarket ...`. The site will have no jobs until a collection
-runs (section G), then `analytics build`.
+runs (section G), then `analytics publish`.
 
 **F4. Start the website and HTTPS.**
 
@@ -347,26 +371,108 @@ docker compose run --rm jobs jobmarket backup create --upload
 
 ---
 
-## G. Running jobs (by hand)
+## G. Scheduled pipeline (Airflow)
 
-Run these from `~/Job-Market-Intelligence/deploy`. **One at a time:** never start a job
-while another is running (memory, see SIZING.md). Nothing here is scheduled; choosing a
-schedule is a separate decision.
+**What runs when** (America/Chicago time, daylight saving included):
+
+| When | What |
+|---|---|
+| 12:00 and 21:00 | Collect from every enabled board, copy raw files to S3 and remove local ones S3 confirmed, then publish reports |
+| 21:00 run only, right after collection | Back up both schemas to S3 (confirmed), keep the newest 3 verified local backups, send the daily summary email, clean Airflow history older than 30 days |
+| Every 15 minutes | Retry the boards whose retry is due (up to 3 per failed board, about 1, 2, and 3 hours after the failure), then send any alert |
+| Every hour at :30 | One AI batch of at most 20 listings (free tier; pauses itself on a quota error) |
+
+Only one task runs at a time. If the server was off at a scheduled time, Airflow makes one
+catch-up run for the latest missed time when it starts, not one per missed time.
+Backups: S3 keeps them 30 days (B3); restoring is F3 option 1 steps 3 to 5, or section I.
+
+**G0. Before Airflow: the instance size (your decision).** Airflow plus the rest needs more
+than 1 GiB (`SIZING.md`). Do not start Airflow on the t3.micro; keep using G5. When you
+decide to change size (a 2 GiB t3.small is the candidate; about $20.58 a month before
+credits):
+- Where: EC2 > Instances > yours > Instance state > Stop; then Actions > Instance settings
+  > Change instance type > `t3.small` > Apply; then Instance state > Start.
+- What: the disk and the Elastic IP stay; Docker starts the containers again at boot.
+- Check: after 2 minutes, reconnect (D1, D2), `free -h` shows about 1.9Gi total, and
+  `docker compose ps` shows `db`, `web`, and `caddy` running.
+
+**G1. Start Airflow.**
+
+```bash
+docker compose run --rm airflow-init
+docker compose up -d airflow-api airflow-dag-processor airflow-scheduler
+docker compose ps
+```
+
+- What: creates Airflow's tables in its own `airflow` database, then starts it. The three
+  schedules are active at once: Airflow makes one catch-up collection for the most recent
+  12:00 or 21:00 slot, one retry check, and one AI batch at the next :30.
+- Check: `airflow-api` shows `healthy` within 2 minutes, and
+  `curl -s http://127.0.0.1:8080/api/v2/monitor/health` (on the server) shows the
+  scheduler as healthy. If your database volume was created before this version (no
+  `airflow` database yet), create it first:
+  `docker compose exec db psql -U postgres -c "CREATE ROLE airflow LOGIN PASSWORD '<AIRFLOW_DB_PASSWORD from .env>'"`
+  and `docker compose exec db psql -U postgres -c 'CREATE DATABASE airflow OWNER airflow'`.
+
+**G2. Open the Airflow UI privately.** It listens only on the server's own address, so you
+reach it through a tunnel from your Mac:
+- While SSH is still open (before F8): `ssh -L 8080:127.0.0.1:8080 ec2-user@ELASTIC_IP`
+  (with your usual key), then open http://localhost:8080 on your Mac.
+- With Session Manager (needs the AWS CLI and its Session Manager plugin on your Mac):
+  `aws ssm start-session --target i-YOURINSTANCEID --region us-east-2 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'`,
+  then open http://localhost:8080.
+- Sign in as `admin`; the password is in the server's
+  `docker compose exec airflow-api cat /app/airflow/simple_auth_manager_passwords.json.generated`.
+- Check: three DAGs (`jobmarket_collection`, `jobmarket_retries`, `jobmarket_extraction`),
+  no import errors, and the catch-up runs green or skipped (skipped is normal: a noon run
+  skips the evening-only steps, and AI skips until Gemini is configured).
+
+**G3. Check the first evening run (after 21:00 Chicago time).**
+- The summary email "[Job Pipeline] Daily summary ..." arrives (E6 must be done).
+- `docker compose run --rm jobs jobmarket backup list` shows today's backup with
+  `ingestion, private`.
+- Airflow UI: the 21:00 run's tasks are green; `daily_summary` and `backup` ran.
+- Memory: `free -h` and `docker stats --no-stream`; write the numbers into `SIZING.md`.
+
+**G4. Pause, resume, or run now.**
+
+```bash
+docker compose exec airflow-scheduler airflow dags pause jobmarket_collection
+docker compose exec airflow-scheduler airflow dags unpause jobmarket_collection
+docker compose exec airflow-scheduler airflow dags trigger jobmarket_collection
+```
+
+A run triggered after 17:00 Chicago time counts as an evening run (backup and summary).
+Gemini extraction runs only when `GEMINI_API_KEY` and the `JOBMARKET_AI_*` limits are set
+in `.env` (then `docker compose up -d airflow-scheduler` to reload it); until then that DAG
+skips.
+
+**G5. Running jobs by hand.** Works with or without Airflow, from
+`~/Job-Market-Intelligence/deploy`. If Airflow is running, a job it is running at the same
+moment makes yours stop with "Not started: ... already running" (and the reverse), so
+nothing runs twice. Without Airflow, start one job at a time (memory).
 
 | Task | Command (each starts with `docker compose run --rm jobs`) |
 |---|---|
 | Collect jobs from all boards | `jobmarket collect` |
-| Run AI extraction (needs `GEMINI_API_KEY` and the `JOBMARKET_AI_*` limits in `.env`) | `jobmarket extract run` |
-| Refresh the reports and serving views | `jobmarket analytics build` |
-| Copy raw responses to S3, then remove local ones older than 4 days | `jobmarket sync-raw`, then `jobmarket cleanup-raw` |
-| Back up the database to S3 | `jobmarket backup create --upload` |
+| Retry boards whose retry is due | `jobmarket retry-due` |
+| Run one AI batch | `jobmarket extract run --limit 20` |
+| Rebuild and publish the reports | `jobmarket analytics publish` |
+| Copy raw responses to S3, then remove local ones S3 confirmed | `jobmarket sync-raw`, then `jobmarket cleanup-raw --require-s3` |
+| Back up to S3, then keep the newest 3 local copies | `jobmarket backup create --upload`, then `jobmarket backup prune --keep 3` |
+| Daily summary (once per day) and pending email | `jobmarket summary send` |
+| Test email | `jobmarket notifications --send-test` |
 | Owner account status, password reset, sign out everywhere | `jobmarket owner status` / `owner reset-password` / `owner sign-out-all` |
 
-A typical refresh: `collect`, then `extract run` (if configured), then `analytics build`,
-then `sync-raw` and `cleanup-raw`, then `backup create --upload`.
-
-Local backups in the `appdata` volume are not deleted automatically. List them with
-`docker compose run --rm jobs ls data/backups`.
+**G6. Outside monitoring (optional, free; set up when you want it).**
+- Heartbeat, so you hear when the evening run stops happening: create a free check at
+  healthchecks.io with period 1 day and a grace time of your choice (the summary normally
+  finishes a few minutes after 21:00). Put its ping URL into `.env` as
+  `JOBMARKET_HEARTBEAT_URL` (it identifies your check: keep it private), then
+  `docker compose up -d airflow-scheduler`. The evening summary step requests it.
+- Uptime, so you hear when the site is down: a free UptimeRobot HTTP(s) monitor for
+  `https://YOURNAME.duckdns.org/healthz`, expecting the word `ok`.
+- Check: both services show the first successful check.
 
 ---
 
@@ -375,7 +481,9 @@ Local backups in the `appdata` volume are not deleted automatically. List them w
 1. Back up first: `docker compose run --rm jobs jobmarket backup create --upload`.
    Write down the STAMP.
 2. Note the current version: `grep APP_VERSION .env` (needed for a rollback).
-3. Get the code and build:
+3. If Airflow runs, stop it so no task starts during the update:
+   `docker compose stop airflow-scheduler`.
+4. Get the code and build:
 
 ```bash
 git pull
@@ -383,11 +491,13 @@ sed -i "s/^APP_VERSION=.*/APP_VERSION=$(git rev-parse --short HEAD)/" .env
 docker compose build web
 ```
 
-4. Apply new migrations and rebuild analytics:
+5. Apply new migrations and publish analytics:
    `docker compose run --rm jobs jobmarket migrate`, then
-   `docker compose run --rm jobs jobmarket analytics build`.
-5. Restart the website on the new image: `docker compose up -d web caddy`.
-6. Check: `docker compose ps` shows `web` healthy; repeat the F5 browser checks.
+   `docker compose run --rm jobs jobmarket analytics publish`.
+6. Restart on the new image: `docker compose up -d web caddy`, and if Airflow runs,
+   `docker compose run --rm airflow-init` then
+   `docker compose up -d airflow-api airflow-dag-processor airflow-scheduler`.
+7. Check: `docker compose ps` shows `web` healthy; repeat the F5 browser checks.
 
 The previous image stays on the server under its old tag.
 
@@ -416,7 +526,7 @@ docker compose run --rm jobs jobmarket backup restore data/backups/STAMP --datab
 ```
 
 Then set `DB_NAME=Job_Market_before` in `.env`, roll the code back as above, run
-`analytics grant`, `private grant`, `private check-access`, and `analytics build` as in F3,
+`analytics grant`, `private grant`, `private check-access`, and `analytics publish` as in F3,
 and `docker compose up -d web caddy`. Changes made after the backup are not in that
 database; the newer `Job_Market` database is kept until you decide to remove it.
 
@@ -426,7 +536,7 @@ database; the newer `Job_Market` database is kept until you decide to remove it.
 
 On a new Amazon Linux 2023 instance: B5 to B7 (role, security group, Elastic IP; update
 DuckDNS if the IP changed), D, E, F1, F2, then F3 Option 1 steps 3 to 5 with the newest
-STAMP from `backup list`, then F4 to F8. Give the new instance an SSH rule and keep it
+STAMP from `backup list`, then F4 to F8, then G1 if the instance has 2 GiB or more. Give the new instance an SSH rule and keep it
 until Session Manager works there too (F8). Raw responses and backups older than 30 days
 are gone by design.
 
@@ -438,7 +548,12 @@ are gone by design.
 |---|---|
 | No certificate, browser warns | `dig +short YOURNAME.duckdns.org` equals the Elastic IP; B6 allows TCP 80 and 443; `docker compose logs caddy` |
 | Site shows "Database not reachable" | `docker compose ps` (is `db` healthy?); `docker compose logs db` |
-| Site shows "Search data is being rebuilt" or reports "not built yet" | `docker compose run --rm jobs jobmarket analytics build` |
+| Site shows "Search data is being rebuilt", or Reports says "Reports not ready yet" | `docker compose run --rm jobs jobmarket analytics publish` |
+| Reports page says the latest rebuild did not pass its checks | The alert email (or `jobmarket notifications --full`) has the error; the site keeps the last good reports. Fix, then `analytics publish` |
+| No email arrives | E6; `jobmarket notifications --full` shows each message's last error; `notifications --send-test` |
+| Airflow UI does not open | G2 tunnel running? `docker compose ps` (is `airflow-api` healthy?); `docker compose logs airflow-api` |
+| A DAG is missing or shows an import error | `docker compose exec airflow-scheduler airflow dags list-import-errors` |
+| A task keeps failing | Airflow UI > the task > Logs; the same command can be run by hand (G5) to see its output |
 | `web` unhealthy | `docker compose logs web` |
 | Slow, or a job stopped by itself | `free -h`, `docker stats --no-stream`, `sudo dmesg \| grep -i oom`; run one job at a time |
 | Disk full | `df -h /`, `docker system df`; `docker image prune` removes unused images (keep the current and previous tag) |
@@ -450,7 +565,8 @@ are gone by design.
 ## Remaining manual work checklist
 
 Done in the code (this repository): Docker image, Compose stack, Caddy HTTPS, database
-first-start script, backups and S3 commands, IAM and bucket policy examples, this runbook.
+first-start script, backups and S3 commands, IAM and bucket policy examples, the Airflow
+schedules, email and summary commands, this runbook.
 Not done yet, and only you can do it in AWS:
 
 - [ ] B1 S3 bucket (block public access, SSE-S3)
@@ -465,6 +581,8 @@ Not done yet, and only you can do it in AWS:
 - [ ] E1 to E5 server preparation (swap, Docker, plugins, code, `.env`)
 - [ ] F1 to F7 first start, checks, restart test, first S3 backup
 - [ ] F8 SSH rule removed, only after Session Manager worked in D1 and after the F6 reboot
-- [ ] Record real memory use in `deploy/SIZING.md` after a few days
-- [ ] Decide schedules for collection, extraction, analytics builds, and backups (none are
-      set up)
+- [ ] E6 Gmail app password; `notifications --send-test` arrives
+- [ ] G0 instance size decision (budget); resize only after approving it
+- [ ] G1 to G3 Airflow started, UI reached privately, first evening run and summary email
+- [ ] G6 heartbeat and uptime monitors (optional)
+- [ ] Record real memory use in `deploy/SIZING.md` after a few days of schedules

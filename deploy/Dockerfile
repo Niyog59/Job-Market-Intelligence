@@ -1,5 +1,6 @@
-# One application image for the website (gunicorn) and the command-line jobs
-# (docker compose run --rm jobs jobmarket ...). Build from the repository root:
+# One application image for the website (gunicorn), the command-line jobs
+# (docker compose run --rm jobs jobmarket ...), and the Airflow scheduler that runs those
+# jobs on a schedule. Build from the repository root:
 #   docker compose -f deploy/docker-compose.yml build
 FROM python:3.11-slim-bookworm
 
@@ -32,10 +33,23 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install -e ".[analytics,web,aws]"
 
+# Apache Airflow in its own virtual environment, installed with the project's official
+# constraints file: its pinned dependencies must not change the app's (dbt pins many of the
+# same libraries). Its commands are reached through PATH (after the app's, so `python` and
+# `jobmarket` stay the app's).
+ARG AIRFLOW_VERSION=3.3.2
+RUN python -m venv /opt/airflow \
+ && /opt/airflow/bin/pip install "apache-airflow[postgres]==${AIRFLOW_VERSION}" \
+      --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.11.txt"
+ENV PATH="${PATH}:/opt/airflow/bin" \
+    AIRFLOW_HOME=/app/airflow
+
 COPY analytics ./analytics
 COPY config ./config
-# The app user writes only raw responses and backups (data/) and dbt's own output (analytics/).
-RUN mkdir -p data/raw data/backups && chown -R app:app data analytics
+COPY deploy/airflow/dags ./deploy/airflow/dags
+# The app user writes only raw responses and backups (data/), dbt's own output (analytics/),
+# and Airflow's logs and generated files (airflow/).
+RUN mkdir -p data/raw data/backups airflow && chown -R app:app data analytics airflow
 
 USER app
 EXPOSE 8000

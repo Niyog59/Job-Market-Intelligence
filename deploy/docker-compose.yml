@@ -1,7 +1,9 @@
-# Production stack for one server: PostgreSQL, the website (gunicorn), and Caddy (HTTPS).
+# Production stack for one server: PostgreSQL, the website (gunicorn), Caddy (HTTPS), and
+# Airflow (scheduler, DAG processor, API server) running the pipeline on a schedule.
 # Run every command from this directory, with a .env file made from env.example
-# (see RUNBOOK.md). Only Caddy publishes ports (80 and 443); the database and the app are
-# reachable only from the other containers on this project's network.
+# (see RUNBOOK.md). Only Caddy publishes public ports (80 and 443). The Airflow UI listens on
+# the server's loopback address only (reach it through an SSH or Session Manager tunnel);
+# the database and the website are reachable only from the other containers.
 name: jobmarket
 
 x-logging: &logging
@@ -22,6 +24,33 @@ x-app: &app
     db:
       condition: service_healthy
 
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__PARALLELISM: "1"
+  AIRFLOW__CORE__DEFAULT_POOL_TASK_SLOT_COUNT: "1"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__CORE__DAGS_FOLDER: /app/deploy/airflow/dags
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Chicago
+  # New DAGs start active: the first scheduler start makes one fresh collection.
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api:8080/execution/
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set AIRFLOW_FERNET_KEY in .env}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+  AIRFLOW__API__SECRET_KEY: ${AIRFLOW_JWT_SECRET}
+  AIRFLOW__API__WORKERS: "1"
+  AIRFLOW__API__EXPOSE_CONFIG: "False"
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@db:5432/airflow
+  AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "2"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "3"
+
+x-airflow: &airflow
+  <<: *app
+  restart: unless-stopped
+  environment: *airflow-env
+  volumes:
+    - airflowdata:/app/airflow
+
 services:
   db:
     image: postgres:17-bookworm
@@ -39,7 +68,8 @@ services:
       - -c
       - effective_cache_size=256MB
       - -c
-      - max_connections=20
+      # Airflow holds a few connections per component (pools set below); 20 was too few.
+      - max_connections=40
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres
@@ -50,6 +80,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD:?set ANALYTICS_DB_PASSWORD in .env}
       PRIVATE_DB_PASSWORD: ${PRIVATE_DB_PASSWORD:?set PRIVATE_DB_PASSWORD in .env}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
@@ -103,8 +134,51 @@ services:
     depends_on:
       - web
 
+  # Airflow. One task at a time across every DAG (PARALLELISM=1), so the pipeline never
+  # competes with itself for the server's memory; tasks run inside the scheduler container
+  # (LocalExecutor) as `jobmarket` commands. Run history lives in the separate "airflow"
+  # database; logs and generated files in the airflowdata volume.
+  airflow-scheduler:
+    <<: *airflow
+    command: ["airflow", "scheduler"]
+    # The pipeline's tasks need the application's settings (database, S3, email, Gemini).
+    env_file: .env
+    environment:
+      <<: *airflow-env
+      DB_HOST: db
+      DB_PORT: "5432"
+      POSTGRES_PASSWORD: ""  # the superuser password is not needed here
+      # Only for the daily `airflow db clean` task (Airflow blocks its own database inside
+      # tasks; see the DAG file).
+      JOBMARKET_AIRFLOW_DB_URL: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@db:5432/airflow
+    volumes:
+      - appdata:/app/data
+      - airflowdata:/app/airflow
+
+  airflow-dag-processor:
+    <<: *airflow
+    command: ["airflow", "dag-processor"]
+
+  airflow-api:
+    <<: *airflow
+    command: ["airflow", "api-server", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"  # loopback only: never reachable from the internet
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v2/monitor/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  # One-shot: create or upgrade Airflow's tables. docker compose run --rm airflow-init
+  airflow-init:
+    <<: *airflow
+    profiles: ["init"]
+    restart: "no"
+    command: ["airflow", "db", "migrate"]
+
   # Command-line jobs, run by hand: docker compose run --rm jobs jobmarket <command>.
-  # Never started by `docker compose up`, and nothing schedules it.
+  # Never started by `docker compose up`.
   jobs:
     <<: *app
     profiles: ["jobs"]
@@ -120,5 +194,6 @@ services:
 volumes:
   pgdata:
   appdata:
+  airflowdata:
   caddy_data:
   caddy_config:

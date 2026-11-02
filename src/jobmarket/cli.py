@@ -1,6 +1,7 @@
 """Command-line entry point: ``jobmarket <command>``."""
 
 import argparse
+import os
 import sys
 import time
 from collections.abc import Sequence
@@ -558,8 +559,23 @@ def _notifications(settings: Settings, args) -> int:
 
 
 def _cleanup_raw(settings: Settings, args) -> int:
+    from jobmarket.s3store import BUCKET_ENV, S3Unavailable, raw_upload_confirmation
+
+    started = system_clock()
+    confirmed = None
+    if args.require_s3 or os.environ.get(BUCKET_ENV, "").strip():
+        # On a server raw files leave the disk only after S3 confirms them.
+        try:
+            confirmed = raw_upload_confirmation(_s3_store())
+        except (S3Unavailable, ConfigError) as exc:
+            print(f"Not cleaned up: cannot confirm uploads ({exc}).", file=sys.stderr)
+            if not args.dry_run:
+                _record(settings, "raw_cleanup", started, "failed",
+                        error=f"cannot confirm uploads: {exc}")  # fmt: skip
+            return EXIT_CONFIG_ERROR if isinstance(exc, ConfigError) else EXIT_FAILURE
     with db.connect(settings, autocommit=True) as conn:
-        result = cleanup_raw(conn, raw_dir(), system_clock(), RAW_RETENTION, args.dry_run)
+        result = cleanup_raw(conn, raw_dir(), system_clock(), RAW_RETENTION, args.dry_run,
+                             confirmed)  # fmt: skip
     verb = "Would delete" if result.dry_run else "Deleted"
     print(
         f"{verb} {result.files_deleted} raw response file(s) older than "
@@ -567,6 +583,13 @@ def _cleanup_raw(settings: Settings, args) -> int:
         f"{result.purged_rows} row(s) {'to mark' if result.dry_run else 'marked'} purged) "
         f"and {result.orphan_files_deleted} orphan file(s). Job records are not touched."
     )
+    if confirmed is not None:
+        print(f"Kept {result.kept_not_uploaded} old file(s) not yet confirmed in S3.")
+    if not args.dry_run:
+        _record(settings, "raw_cleanup", started, "succeeded", {
+            "deleted": result.files_deleted + result.orphan_files_deleted,
+            "kept_not_uploaded": result.kept_not_uploaded,
+            "s3_confirmed": confirmed is not None})  # fmt: skip
     return EXIT_OK
 
 
@@ -1113,6 +1136,8 @@ def _analytics(settings: Settings, args) -> int:
             return EXIT_FAILURE
         print("Read-only on ingestion tables, as intended.")
         return EXIT_OK
+    if command == "publish":
+        return _analytics_publish(settings, args)
     dbt_args = {"build": ["build"], "test": ["test"], "docs": ["docs", "generate"]}[command]
     if command == "build" and args.select:
         # Run only tests whose parents are all selected, so a partial build does not test
@@ -1138,37 +1163,72 @@ def _s3_store():
     return S3Store(load_s3_config())
 
 
+def _record(settings: Settings, step, started, status, detail=None, error=None) -> None:
+    """Record a pipeline step; a failure to record never hides the step's own result."""
+    from jobmarket import operations
+
+    try:
+        with db.connect(settings, autocommit=True) as conn:
+            operations.record_step(conn, step, started, system_clock(), status, detail, error)
+    except psycopg.Error as exc:
+        print(f"Could not record the {step} step: {exc}".rstrip(), file=sys.stderr)
+
+
 def _backup(settings: Settings, args) -> int:
     from dataclasses import replace
 
     from jobmarket import backup
     from jobmarket.s3store import S3Unavailable
 
+    started = system_clock()
+    command = args.backup_command
     try:
-        if args.backup_command == "create":
-            directory = backup.create_backup(settings, Path(args.dir), system_clock())
+        if command == "create":
+            directory = backup.create_backup(settings, Path(args.dir), started)
             manifest = backup.verify_backup(directory)
             for part, info in manifest["parts"].items():
                 print(f"  {part:9} {info['file']:15} {info['bytes']:>12,} bytes")
             print(f"Backup written to {directory} ({manifest['migrations']['applied']} "
                   "migrations applied).")  # fmt: skip
+            size = sum(info["bytes"] for info in manifest["parts"].values())
+            detail = {"stamp": manifest["stamp"], "bytes": size, "uploaded": False}
             if args.upload:
-                keys = backup.upload_backup(_s3_store(), directory)
-                print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys).")
-        elif args.backup_command == "upload":
-            keys = backup.upload_backup(_s3_store(), Path(args.directory))
+                keys = backup.upload_backup(_s3_store(), directory, system_clock())
+                detail["uploaded"] = True
+                print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys) "
+                      "and confirmed them.")  # fmt: skip
+            _record(settings, "backup", started, "succeeded", detail)
+        elif command == "prune":
+            result = backup.prune_backups(Path(args.dir), args.keep)
+            print(f"Kept {len(result.kept)} newest verified backup(s): {', '.join(result.kept)}")
+            for label, names in (("Deleted (confirmed in S3)", result.deleted),
+                                 ("Kept: not confirmed in S3", result.kept_not_uploaded),
+                                 ("Damaged, kept for inspection", result.damaged),
+                                 ("Removed unfinished", result.partials_removed)):  # fmt: skip
+                if names:
+                    print(f"{label}: {', '.join(names)}")
+            summary = {
+                "kept": result.kept,
+                "deleted": result.deleted,
+                "kept_not_uploaded": result.kept_not_uploaded,
+                "damaged": result.damaged,
+            }
+            _record(settings, "backup_prune", started, "succeeded", summary)
+        elif command == "upload":
+            keys = backup.upload_backup(_s3_store(), Path(args.directory), system_clock())
             for key in keys:
                 print(f"  {key}")
-            print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys).")
-        elif args.backup_command == "list":
+            print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys) "
+                  "and confirmed them.")  # fmt: skip
+        elif command == "list":
             found = backup.list_backups(_s3_store())
             for stamp, parts in found.items():
                 print(f"  {stamp}  {', '.join(parts)}")
             print(f"{len(found)} backup(s) in S3.")
-        elif args.backup_command == "fetch":
+        elif command == "fetch":
             directory = backup.fetch_backup(_s3_store(), args.stamp, Path(args.dir))
             print(f"Downloaded and verified {directory}.")
-        elif args.backup_command == "verify":
+        elif command == "verify":
             manifest = backup.verify_backup(Path(args.directory))
             print(f"Backup {manifest['stamp']} is complete and matches its checksums.")
         else:
@@ -1179,24 +1239,104 @@ def _backup(settings: Settings, args) -> int:
                   f"migrations (backup recorded {result.migrations_expected}).")  # fmt: skip
             print("Next, with DB_NAME set to this database: jobmarket migrate; jobmarket "
                   "analytics grant; jobmarket private grant; jobmarket private check-access; "
-                  "jobmarket analytics build.")  # fmt: skip
-    except (backup.BackupError, S3Unavailable) as exc:
+                  "jobmarket analytics publish.")  # fmt: skip
+    except (backup.BackupError, S3Unavailable, ConfigError, OSError, psycopg.Error) as exc:
         print(f"Backup error: {exc}", file=sys.stderr)
-        return EXIT_FAILURE
+        if command in ("create", "prune"):
+            step = "backup" if command == "create" else "backup_prune"
+            _record(settings, step, started, "failed", error=f"{type(exc).__name__}: {exc}")
+        return EXIT_CONFIG_ERROR if isinstance(exc, ConfigError) else EXIT_FAILURE
     return EXIT_OK
+
+
+def _summary(settings: Settings, args) -> int:
+    """Queue today's summary (once per Chicago day), deliver pending email, ping the
+    heartbeat."""
+    from jobmarket import summary
+
+    started = system_clock()
+    with db.connect(settings, autocommit=True) as conn:
+        try:
+            result, notification_id = summary.queue_daily(conn, started)
+        except psycopg.Error as exc:
+            _record(settings, "daily_summary", started, "failed", error=str(exc)[:500])
+            raise
+        if args.dry_run:
+            print(result.subject)
+            print(result.body)
+        if notification_id is None:
+            print(f"The summary for {result.day} was already queued; nothing new.")
+        else:
+            print(f"Queued the summary for {result.day}: {result.subject}")
+        _record(settings, "daily_summary", started, "succeeded",
+                {"day": result.day, "queued": notification_id is not None,
+                 "attention": result.attention})  # fmt: skip
+        sent = send_pending(conn, smtp_settings(), system_clock())
+    if not sent.configured:
+        print("Email delivery is not configured; the summary stays in the outbox.")
+    else:
+        print(f"Email: sent {sent.sent}, failed {sent.failed}, pending {sent.pending_left}.")
+    problem = summary.ping_heartbeat()
+    if problem:
+        print(problem, file=sys.stderr)
+    return EXIT_FAILURE if sent.failed or problem else EXIT_OK
 
 
 def _sync_raw(settings: Settings, args) -> int:
     from jobmarket.connectors import SOURCE_SYSTEMS
     from jobmarket.s3store import S3Unavailable, sync_raw
 
+    started = system_clock()
     try:
         result = sync_raw(_s3_store(), raw_dir(), SOURCE_SYSTEMS)
-    except S3Unavailable as exc:
-        print(str(exc), file=sys.stderr)
-        return EXIT_FAILURE
+    except (S3Unavailable, ConfigError, OSError) as exc:
+        print(f"Raw upload failed: {exc}", file=sys.stderr)
+        _record(settings, "raw_sync", started, "failed", error=f"{type(exc).__name__}: {exc}")
+        return EXIT_CONFIG_ERROR if isinstance(exc, ConfigError) else EXIT_FAILURE
     print(f"Uploaded {result.uploaded} raw response file(s) to S3; "
           f"{result.already_present} were already there.")  # fmt: skip
+    _record(settings, "raw_sync", started, "succeeded",
+            {"uploaded": result.uploaded, "already_present": result.already_present})  # fmt: skip
+    return EXIT_OK
+
+
+def _analytics_publish(settings: Settings, args) -> int:
+    """Build in shadow schemas, validate, publish atomically, and record the outcome (which
+    alerts on the first failure and sends one recovery notice after it)."""
+    from dataclasses import replace
+
+    from jobmarket import analytics, operations
+
+    target = getattr(args, "target", "analytics")
+    builder = settings
+    if target == "analytics":
+        login = os.environ.get("ANALYTICS_DB_USER", "").strip() or analytics.ANALYTICS_ROLE
+        builder = replace(settings, db_user=login,
+                          db_password=os.environ.get("ANALYTICS_DB_PASSWORD", ""))  # fmt: skip
+    started = system_clock()
+    try:
+        with db.connect(builder, autocommit=True) as conn:
+            result = analytics.build_and_publish(conn, target=target)
+    except analytics.PublishBusy as exc:
+        print(f"Not started: {exc}.", file=sys.stderr)
+        return EXIT_BUSY
+    except analytics.AnalyticsUnavailable as exc:
+        result = analytics.PublishResult(False, [str(exc)])
+    finished = system_clock()
+    with db.connect(settings, autocommit=True) as conn:
+        if result.published:
+            operations.record_step(conn, "report_publish", started, finished, "succeeded",
+                                   {"built_at": result.built_at.isoformat()})  # fmt: skip
+        else:
+            operations.record_step(conn, "report_publish", started, finished, "failed",
+                                   {"failures": result.failures[:20]},
+                                   "; ".join(result.failures)[:2000] or "build failed")  # fmt: skip
+    if not result.published:
+        for failure in result.failures:
+            print(f"  {failure}", file=sys.stderr)
+        print("Not published: the website keeps the previous reports.", file=sys.stderr)
+        return EXIT_FAILURE
+    print(f"Published reports built {_when(result.built_at)}.")
     return EXIT_OK
 
 
@@ -1309,6 +1449,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = commands.add_parser("cleanup-raw", help="delete raw responses older than 4 days")
     cleanup.add_argument("--dry-run", action="store_true")
+    cleanup.add_argument(
+        "--require-s3",
+        action="store_true",
+        help="delete only files confirmed in S3, and fail if S3 is not configured",
+    )
 
     replay = commands.add_parser(
         "replay", help="reprocess saved raw responses under their original collection time"
@@ -1357,11 +1502,14 @@ def build_parser() -> argparse.ArgumentParser:
     an_cmds = an.add_subparsers(dest="analytics_command", required=True)
     an_build = an_cmds.add_parser("build", help="rebuild and test every analytics model")
     an_build.add_argument("--select", metavar="SELECTOR", help="dbt selector, e.g. reporting")
+    an_publish = an_cmds.add_parser(
+        "publish", help="build and test in shadow schemas, then replace the live ones at once"
+    )
     an_cmds.add_parser("test", help="run the analytics data tests only")
     an_cmds.add_parser("docs", help="generate dbt documentation and the dependency graph")
     an_cmds.add_parser("grant", help="give the analytics login read-only access (owner)")
     an_cmds.add_parser("check-access", help="show what the analytics login may do")
-    for cmd in (an_build,):
+    for cmd in (an_build, an_publish):
         cmd.add_argument(
             "--target",
             default="analytics",
@@ -1407,6 +1555,10 @@ def build_parser() -> argparse.ArgumentParser:
     bk_fetch = bk_cmds.add_parser("fetch", help="download one backup from S3 and verify it")
     bk_fetch.add_argument("stamp", help="the backup's name, like 20261101T060000Z")
     bk_fetch.add_argument("--dir", default="data/backups", help="parent directory")
+    bk_prune = bk_cmds.add_parser("prune", help="bound local backups (keeps the newest)")
+    bk_prune.add_argument("--keep", type=int, required=True, metavar="N",
+                          help="newest verified backups to keep")  # fmt: skip
+    bk_prune.add_argument("--dir", default="data/backups", help="parent directory")
     bk_verify = bk_cmds.add_parser("verify", help="check a backup directory's checksums")
     bk_verify.add_argument("directory")
     bk_restore = bk_cmds.add_parser("restore", help="restore into a new, empty database")
@@ -1414,6 +1566,13 @@ def build_parser() -> argparse.ArgumentParser:
     bk_restore.add_argument("--database", required=True, help="the empty target database")
 
     commands.add_parser("sync-raw", help="upload raw responses not yet in S3")
+
+    summ = commands.add_parser("summary", help="the daily summary email")
+    summ_cmds = summ.add_subparsers(dest="summary_command", required=True)
+    summ_send = summ_cmds.add_parser(
+        "send", help="queue today's summary (once a day), send pending email, ping heartbeat"
+    )
+    summ_send.add_argument("--dry-run", action="store_true", help="also print the summary")
 
     commands.add_parser(
         "refingerprint",
@@ -1490,6 +1649,7 @@ HANDLERS = {
     "private": _private,
     "backup": _backup,
     "sync-raw": _sync_raw,
+    "summary": _summary,
 }
 
 

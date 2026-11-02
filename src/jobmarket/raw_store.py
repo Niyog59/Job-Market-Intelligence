@@ -7,6 +7,7 @@ touched by cleanup.
 
 import hashlib
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -64,6 +65,7 @@ class CleanupResult:
     files_already_missing: int
     orphan_files_deleted: int
     dry_run: bool
+    kept_not_uploaded: int = 0  # old enough, but not (yet) confirmed in S3
 
 
 def cleanup_raw(
@@ -72,13 +74,25 @@ def cleanup_raw(
     now: datetime,
     retention: timedelta = RAW_RETENTION,
     dry_run: bool = False,
+    confirmed: Callable[[str, int], bool] | None = None,
 ) -> CleanupResult:
     """Delete stored response bytes older than the retention period.
 
     Rows in raw_responses are kept and marked with purged_at. Files on disk with no row
     (left behind if a process stopped between writing a file and recording it) are also
     deleted once they are older than the retention period.
+
+    With confirmed (path relative to root, size) -> bool, a response file is deleted only
+    when it returns True (on a server: the file is in S3 with the same size). Unconfirmed
+    files stay, unpurged, and are tried again by the next cleanup. Half-written "*.tmp"
+    files hold no complete response and are removed without confirmation.
     """
+
+    def may_delete(path: Path) -> bool:
+        if confirmed is None or path.suffix == ".tmp":
+            return True
+        return confirmed(path.relative_to(root).as_posix(), path.stat().st_size)
+
     cutoff = now - retention
     rows = conn.execute(
         "SELECT raw_response_id, storage_uri FROM raw_responses "
@@ -86,11 +100,14 @@ def cleanup_raw(
         (cutoff,),
     ).fetchall()
 
-    deleted = missing = 0
+    deleted = missing = kept = 0
     purged_ids = []
     for raw_id, uri in rows:
         path = root / uri
         if path.exists():
+            if not may_delete(path):
+                kept += 1
+                continue
             deleted += 1
             if not dry_run:
                 # A crash after this line leaves the row unmarked; the next cleanup sees
@@ -117,8 +134,11 @@ def cleanup_raw(
             relative = path.relative_to(root).as_posix()
             modified = datetime.fromtimestamp(path.stat().st_mtime, tz=now.tzinfo)
             if relative not in known and modified < cutoff:
+                if not may_delete(path):
+                    kept += 1
+                    continue
                 orphans += 1
                 if not dry_run:
                     path.unlink()
 
-    return CleanupResult(len(rows), deleted, missing, orphans, dry_run)
+    return CleanupResult(len(purged_ids), deleted, missing, orphans, dry_run, kept)

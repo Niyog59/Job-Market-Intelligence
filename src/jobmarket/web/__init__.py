@@ -147,7 +147,8 @@ def create_app(config: WebConfig | None = None) -> Flask:
             data = None
         # The live collection time, to say when the reports are behind job search.
         status = search.site_status(conn(), g.now, config.serving_schema)
-        return render_template("reports.html", r=data, status=status,
+        failed_at = reports.failed_rebuild_since(conn(), data.build.built_at if data else None)
+        return render_template("reports.html", r=data, status=status, failed_at=failed_at,
                                population=data.population if data else "kept")  # fmt: skip
 
     @app.errorhandler(404)

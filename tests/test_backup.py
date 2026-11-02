@@ -111,6 +111,18 @@ class TestS3:
             head = store.client.head_object(Bucket="jobmarket-backup-test", Key=key)
             assert head["ServerSideEncryption"] == "AES256"
 
+    def test_upload_is_confirmed_before_it_is_marked(self, store, tmp_path, monkeypatch):
+        directory = fake_backup(tmp_path)
+        backup.upload_backup(store, directory, NOW)
+        marked = json.loads((directory / backup.UPLOADED).read_text())
+        assert len(marked["objects"]) == 4 and marked["bucket"] == store.bucket
+
+        other = fake_backup(tmp_path, "20261102T060000Z")
+        monkeypatch.setattr(store, "size", lambda key: 1)  # S3 reports a different size
+        with pytest.raises(backup.BackupError, match="expected"):
+            backup.upload_backup(store, other, NOW)
+        assert not backup.is_uploaded(other)
+
     def test_list_and_fetch(self, store, tmp_path):
         backup.upload_backup(store, fake_backup(tmp_path / "local"))
         # An interrupted upload (dump without manifest) is not listed as a finished part.
@@ -186,3 +198,35 @@ def test_backup_and_restore_round_trip(two_databases, tmp_path):
     # Restoring again into the now-filled database is refused.
     with pytest.raises(backup.BackupError, match="is not empty"):
         backup.restore_backup(target, directory)
+
+
+def test_prune_keeps_the_newest_and_deletes_only_confirmed_older_backups(tmp_path):
+    names = [f"202611{d:02}T060000Z" for d in range(1, 7)]  # oldest first
+    for name in names:
+        fake_backup(tmp_path, name)
+    for name in names[:2]:  # the two oldest were confirmed in S3
+        (tmp_path / name / backup.UPLOADED).write_text("{}")
+    damaged = tmp_path / names[2]
+    (damaged / "private.dump").write_bytes(b"damaged!!!!!")
+    (tmp_path / "20261107T060000Z.partial").mkdir()
+
+    result = backup.prune_backups(tmp_path, keep=2)
+    assert result.kept == [names[5], names[4]]
+    assert result.deleted == [names[1], names[0]]
+    assert result.kept_not_uploaded == [names[3]]  # older, but S3 never confirmed it
+    assert result.damaged == [names[2]]  # reported, not deleted
+    assert result.partials_removed == ["20261107T060000Z.partial"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(names[2:])
+
+
+def test_prune_never_deletes_the_only_verified_copy(tmp_path):
+    only = fake_backup(tmp_path, "20261101T060000Z")
+    (only / backup.UPLOADED).write_text("{}")
+    assert backup.prune_backups(tmp_path, keep=1).deleted == []
+    with pytest.raises(ValueError):
+        backup.prune_backups(tmp_path, keep=0)
+    assert only.exists()
+
+
+def test_prune_of_a_missing_directory_does_nothing(tmp_path):
+    assert backup.prune_backups(tmp_path / "none", keep=3).kept == []
