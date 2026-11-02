@@ -207,8 +207,9 @@ def compose(conn: psycopg.Connection, now: datetime) -> Summary:
     good = operations.last_step_run(conn, "report_publish", "succeeded")
     latest = operations.last_step_run(conn, "report_publish")
     if good:
-        lines.append(f"- Published reports built: {good[2].get('built_at', '?')[:16]} UTC "
-                     f"(published {_when(good[0])})")  # fmt: skip
+        built = good[2].get("built_at")
+        built = _when(datetime.fromisoformat(built)) if built else "unknown"
+        lines.append(f"- Published reports built: {built} (published {_when(good[0])})")
     else:
         lines.append("- No reports published yet (the Reports page says 'not ready yet').")
     if latest and latest[1] == "failed":

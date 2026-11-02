@@ -533,6 +533,14 @@ def _availability(settings: Settings, args) -> int:
 
 def _notifications(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
+        if args.send_test:
+            from jobmarket.operations import queue_notification
+
+            now = system_clock()
+            queue_notification(conn, "alert", "[Job Pipeline] Test email",
+                               "This is a test of the server's email delivery. Nothing is "
+                               "wrong.", now, dedup_key=f"test:{now.isoformat()}")  # fmt: skip
+            args.send = True
         if args.send:
             result = send_pending(conn, smtp_settings(), system_clock())
             if not result.configured:
@@ -1261,7 +1269,7 @@ def _summary(settings: Settings, args) -> int:
         except psycopg.Error as exc:
             _record(settings, "daily_summary", started, "failed", error=str(exc)[:500])
             raise
-        if args.dry_run:
+        if args.print:
             print(result.subject)
             print(result.body)
         if notification_id is None:
@@ -1444,6 +1452,9 @@ def build_parser() -> argparse.ArgumentParser:
     notifications.add_argument(
         "--send", action="store_true", help="deliver pending notifications if SMTP is configured"
     )
+    notifications.add_argument(
+        "--send-test", action="store_true", help="queue one test email, then send pending email"
+    )
     notifications.add_argument("--full", action="store_true", help="show message bodies")
     notifications.add_argument("--limit", type=int, default=20)
 
@@ -1572,7 +1583,7 @@ def build_parser() -> argparse.ArgumentParser:
     summ_send = summ_cmds.add_parser(
         "send", help="queue today's summary (once a day), send pending email, ping heartbeat"
     )
-    summ_send.add_argument("--dry-run", action="store_true", help="also print the summary")
+    summ_send.add_argument("--print", action="store_true", help="also print the summary")
 
     commands.add_parser(
         "refingerprint",

@@ -46,6 +46,8 @@ def test_summary_reports_jobs_problems_and_steps(env, monkeypatch):
     now = env.clock.now + timedelta(minutes=30)
     record_step(env.conn, "backup", now, now, "succeeded",
                 {"stamp": "20261102T030000Z", "bytes": 1234, "uploaded": True})  # fmt: skip
+    record_step(env.conn, "report_publish", now, now, "succeeded",
+                {"built_at": "2026-10-26T20:00:00+00:00"})  # fmt: skip
     record_step(env.conn, "report_publish", now, now, "failed", error="dbt test failed")
 
     result = summary.compose(env.conn, now + timedelta(minutes=1))
@@ -57,6 +59,7 @@ def test_summary_reports_jobs_problems_and_steps(env, monkeypatch):
     assert "Pending retries: 1" in body
     assert "20261102T030000Z (1,234 bytes), confirmed in S3" in body
     assert "Latest rebuild FAILED" in body and "keeps the last good reports" in body
+    assert "Published reports built: Mon Oct 26, 3:00 PM CDT" in body
     assert "Waiting:" in body
     assert result.subject.endswith("(needs a look)")
     assert "report rebuild failed" in result.attention
@@ -133,3 +136,19 @@ def test_heartbeat():
     problem = summary.ping_heartbeat({summary.HEARTBEAT_ENV: url}, failing)
     assert problem == "heartbeat failed: HTTPStatusError"
     assert url not in problem  # the URL is a secret
+
+
+def test_send_test_queues_a_test_message(env, db_settings, monkeypatch, capsys):
+    from jobmarket import cli, db
+
+    schema = env.conn.execute("SELECT current_schema()").fetchone()[0]
+    real = db.connect
+
+    def in_test_schema(settings, **kwargs):
+        return real(db_settings, **{**kwargs, "options": f"-c search_path={schema}"})
+
+    monkeypatch.setattr(cli.db, "connect", in_test_schema)
+    monkeypatch.setenv("JOBMARKET_SMTP_HOST", "")  # delivery not configured: nothing is sent
+    assert cli.main(["notifications", "--send-test"]) == 0
+    assert env.scalar("SELECT subject FROM notifications") == "[Job Pipeline] Test email"
+    assert "not configured" in capsys.readouterr().out
