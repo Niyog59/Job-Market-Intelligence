@@ -1143,7 +1143,8 @@ secrets:
 | `SIZING.md` | memory measurements and the 1 GiB estimate |
 
 All containers restart unless stopped, and Docker starts at boot. Visitors reach only
-Caddy: there is no SSH (administration uses AWS Systems Manager Session Manager), and the
-database is not exposed. Public pages read through the read-only login; nothing a visitor
+Caddy, and the database is not exposed. Administration uses AWS Systems Manager Session
+Manager; the runbook keeps the existing SSH rule as a fallback until Session Manager has
+been tested, including after a reboot, and only then removes it. Public pages read through the read-only login; nothing a visitor
 does starts a collection, an AI call, or a change to job data (signing in records sign-in
 attempts and sessions in the private schema).

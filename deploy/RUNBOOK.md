@@ -5,9 +5,11 @@ instance (Amazon Linux 2023, t3.micro, 20 GiB disk, region us-east-2):
 
 - **Docker Compose** runs three containers: PostgreSQL (`db`), the website (`web`,
   gunicorn), and Caddy (`caddy`, HTTPS with a Let's Encrypt certificate).
-- **Only ports 80 and 443 are open.** PostgreSQL and the website are reachable only from
-  the other containers. There is no SSH: you open a shell through AWS Systems Manager
-  Session Manager in the browser.
+- **Only ports 80 and 443 are open to the public.** PostgreSQL and the website are
+  reachable only from the other containers. Administration uses AWS Systems Manager
+  Session Manager, a shell in the browser. Your existing SSH access stays open during setup
+  as a fallback, and is closed (step F8) only after Session Manager has worked, including
+  after a reboot.
 - **S3** keeps raw responses and backups (encrypted, deleted after 30 days by lifecycle
   rules). The server reaches S3 through an IAM role, so no AWS keys are stored anywhere.
 - **Nothing runs on a schedule.** Collection, extraction, analytics builds, and backups
@@ -82,15 +84,21 @@ Never paste a password, key, or the contents of `.env` into a chat, an issue, or
 - Values: `jobmarket-ec2`. Update IAM role.
 - Check: the instance's Details tab shows IAM Role `jobmarket-ec2`.
 
-**B6. Open only ports 80 and 443.**
+**B6. Open ports 80 and 443; keep SSH for now.**
 - Where: EC2 > Instances > yours > Security tab > click the security group > Edit inbound
   rules.
-- What: lets browsers reach Caddy; nothing else gets in.
-- Values: exactly these inbound rules, and delete any others (including SSH port 22):
-  - HTTP, TCP 80, source `0.0.0.0/0`; and again with source `::/0`.
-  - HTTPS, TCP 443, source `0.0.0.0/0`; and again with source `::/0`.
+- What: lets browsers reach Caddy, and keeps your current way into the server until
+  Session Manager is proven.
+- Values:
+  - Add HTTP, TCP 80, source `0.0.0.0/0`; and again with source `::/0`.
+  - Add HTTPS, TCP 443, source `0.0.0.0/0`; and again with source `::/0`.
   - Optional for HTTP/3: Custom UDP 443, sources `0.0.0.0/0` and `::/0`.
-- Check: no rule for 22 or 5432. Session Manager does not need any inbound rule.
+  - **Keep the existing SSH rule (TCP 22). Do not delete it yet**; step F8 removes it after
+    Session Manager has worked. If its source is "Anywhere" (`0.0.0.0/0`), you may narrow
+    it to "My IP"; if your home address changes later, edit the rule to your new IP.
+  - Delete any other rule, such as one for 5432.
+- Check: rules for 80 and 443, your SSH rule, and nothing for 5432. Session Manager does
+  not need any inbound rule.
 
 **B7. Give the instance a fixed public address.**
 - Where: EC2 > Elastic IPs > Allocate Elastic IP address > Allocate; then select it >
@@ -128,6 +136,8 @@ Elastic IP does not change.
 - Check: a terminal opens with a prompt like `sh-5.2$`. If the Connect button is greyed
   out, wait 10 minutes after B5, or reboot the instance (Instance state > Reboot), then try
   again.
+- If Session Manager still does not work, continue with SSH as you do today (you log in as
+  `ec2-user` directly, so skip D2) and see Troubleshooting. Do not do F8 until D1 works.
 
 **D2. Work as `ec2-user`.**
 - Where: the Session Manager shell. Run: `sudo su - ec2-user`
@@ -135,7 +145,7 @@ Elastic IP does not change.
 
 ---
 
-## E. Prepare the server (Session Manager shell, as ec2-user)
+## E. Prepare the server (Session Manager or SSH shell, as ec2-user)
 
 **E1. Add 2 GiB of swap.**
 - What: disk space the kernel can use when memory runs out, so a short spike slows the
@@ -310,7 +320,6 @@ docker compose logs caddy | grep -i "certificate obtained"
 - Mac Terminal:
   - `curl -sI http://YOURNAME.duckdns.org | head -1` shows `308` (HTTP goes to HTTPS).
   - `nc -vz -w 5 YOURNAME.duckdns.org 5432` fails or times out (the database is closed).
-  - `nc -vz -w 5 YOURNAME.duckdns.org 22` fails or times out (no SSH).
 
 **F6. Check that everything comes back after a restart.**
 - Where: EC2 > Instances > Instance state > Reboot. Wait 2 minutes, reconnect (D1, D2),
@@ -325,6 +334,16 @@ docker compose run --rm jobs jobmarket backup create --upload
 ```
 
 - Check: it prints "Uploaded 4 files to S3". `backup list` shows the new STAMP.
+
+**F8. Close SSH, only after Session Manager is proven.**
+- Do this only when Session Manager has worked twice: in D1, and again after the F6 reboot
+  (open a new session, run `sudo su - ec2-user`, then `docker compose ps` in
+  `~/Job-Market-Intelligence/deploy`). Until then, leave SSH open.
+- Where: EC2 > Instances > yours > Security tab > the security group > Edit inbound rules.
+- What: delete the SSH rule (TCP 22). Keep the 80 and 443 rules. Keep your key pair file:
+  if SSH is ever needed again, adding the rule back restores access.
+- Check: from your Mac, `nc -vz -w 5 YOURNAME.duckdns.org 22` fails or times out; then open
+  one more Session Manager session to confirm you can still get in.
 
 ---
 
@@ -407,8 +426,9 @@ database; the newer `Job_Market` database is kept until you decide to remove it.
 
 On a new Amazon Linux 2023 instance: B5 to B7 (role, security group, Elastic IP; update
 DuckDNS if the IP changed), D, E, F1, F2, then F3 Option 1 steps 3 to 5 with the newest
-STAMP from `backup list`, then F4 to F7. Raw responses and backups older than 30 days are
-gone by design.
+STAMP from `backup list`, then F4 to F8. Give the new instance an SSH rule and keep it
+until Session Manager works there too (F8). Raw responses and backups older than 30 days
+are gone by design.
 
 ---
 
@@ -423,7 +443,7 @@ gone by design.
 | Slow, or a job stopped by itself | `free -h`, `docker stats --no-stream`, `sudo dmesg \| grep -i oom`; run one job at a time |
 | Disk full | `df -h /`, `docker system df`; `docker image prune` removes unused images (keep the current and previous tag) |
 | `backup list` says AccessDenied | B4 inline policy (bucket name), B5 role attached |
-| Session Manager will not connect | B4 `AmazonSSMManagedInstanceCore`, B5, reboot, wait 10 minutes |
+| Session Manager will not connect | B4 `AmazonSSMManagedInstanceCore`, B5, reboot, wait 10 minutes. Meanwhile use SSH; it stays open until F8. If SSH was already closed, add the TCP 22 rule back (source "My IP") |
 
 ---
 
@@ -438,12 +458,13 @@ Not done yet, and only you can do it in AWS:
 - [ ] B3 lifecycle rules, 30 days for `raw/` and `backups/`
 - [ ] B4 IAM role `jobmarket-ec2` with Session Manager and the `jobmarket-s3` inline policy
 - [ ] B5 role attached to the instance
-- [ ] B6 security group: only 80 and 443 (no 22, no 5432)
+- [ ] B6 security group: 80 and 443 added, existing SSH rule kept, nothing for 5432
 - [ ] B7 Elastic IP associated
 - [ ] B8 budget alert (optional)
 - [ ] C1 DuckDNS name pointing to the Elastic IP
 - [ ] E1 to E5 server preparation (swap, Docker, plugins, code, `.env`)
 - [ ] F1 to F7 first start, checks, restart test, first S3 backup
+- [ ] F8 SSH rule removed, only after Session Manager worked in D1 and after the F6 reboot
 - [ ] Record real memory use in `deploy/SIZING.md` after a few days
 - [ ] Decide schedules for collection, extraction, analytics builds, and backups (none are
       set up)
