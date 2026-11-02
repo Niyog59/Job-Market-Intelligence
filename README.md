@@ -1140,7 +1140,7 @@ secrets:
 | `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
 | `aws/` | IAM role policy (S3 prefixes only, no delete), EC2 trust policy, bucket policy (HTTPS only), lifecycle rules (30 days) |
 | `RUNBOOK.md` | ordered steps from an empty AWS account to the running site, updates, rollback, recovery |
-| `SIZING.md` | memory measurements and the 1 GiB estimate |
+| `SIZING.md` | memory measurements (including Airflow), estimates, their limits, and candidate instance sizes with costs |
 
 All containers restart unless stopped, and Docker starts at boot. Visitors reach only
 Caddy, and the database is not exposed. Administration uses AWS Systems Manager Session
