@@ -873,6 +873,35 @@ store is reported as `omitted_too_long`, and an empty one as `empty`, never as c
   alerted incident is resolved, one recovery notice is queued. Messages list the affected
   employers, errors, retries used, last successful collection, and what remains usable.
 
+### Pipeline steps, alerts, and the daily summary
+
+Scheduled steps other than collection record each run in `pipeline_step_runs`:
+`report_publish`, `backup`, `backup_prune`, `raw_sync`, `raw_cleanup`, and
+`daily_summary`. A failed report publication or backup opens an incident (`ops_incidents`)
+and queues one alert; later failures of the same step only update it; the next success
+resolves it and queues one recovery notice. AI quota pauses never alert: they appear in the
+daily summary. Every queued message has a unique `dedup_key` in the outbox, so re-runs and
+restarts cannot queue it twice.
+
+`jobmarket summary send` queues one summary per America/Chicago day (a second call the same
+day queues nothing), delivers pending email, and requests `JOBMARKET_HEARTBEAT_URL` if set.
+The summary covers the time since the previous one: collection runs, new kept jobs (initial
+imports of newly added boards counted apart), content and availability changes, board
+health and every open collection incident with its next retry, the AI queue and today's
+requests (and any quota pause), the published report build and any failed rebuild,
+the last good backup and whether S3 confirmed it, local backup copies, raw uploads, and
+undelivered email. Problems are listed first, and the subject then ends with "(needs a
+look)". `--dry-run` also prints it.
+
+**Email delivery** uses SMTP (`jobmarket.notify`), which works on any server. The intended
+setup is a Gmail account with 2-Step Verification and an app password (Google Account >
+Security > App passwords): `JOBMARKET_SMTP_HOST=smtp.gmail.com`, `JOBMARKET_SMTP_PORT=587`
+(STARTTLS; EC2 limits outbound port 25, not 587), `JOBMARKET_SMTP_USER` and
+`JOBMARKET_ALERT_FROM` = that Gmail address, `JOBMARKET_SMTP_PASSWORD` = the app password,
+`JOBMARKET_ALERT_TO` = the recipient. The app password can be revoked at any time without
+changing the account password. Without these settings, messages stay in the outbox
+(`jobmarket notifications --full`). Tests use a fake SMTP class and never send email.
+
 ### Raw response retention
 
 Raw responses are kept for four days. `jobmarket cleanup-raw` deletes older files and

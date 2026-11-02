@@ -111,6 +111,8 @@ jobs:
         run: |
           sed -e 's/^SITE_DOMAIN=.*/SITE_DOMAIN=localhost/' \
               -e 's/^JOBMARKET_S3_BUCKET=.*/JOBMARKET_S3_BUCKET=not-used-in-ci/' \
+              -e 's/^JOBMARKET_SMTP_HOST=.*/JOBMARKET_SMTP_HOST=/' \
+              -e 's/CHANGE_ME@gmail.com/ci@example.invalid/' \
               -e 's/=CHANGE_ME$/=ci0only0throwaway/' env.example > .env
           if grep -q CHANGE_ME .env; then exit 1; fi
           docker compose config --quiet

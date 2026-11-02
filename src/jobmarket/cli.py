@@ -1249,6 +1249,39 @@ def _backup(settings: Settings, args) -> int:
     return EXIT_OK
 
 
+def _summary(settings: Settings, args) -> int:
+    """Queue today's summary (once per Chicago day), deliver pending email, ping the
+    heartbeat."""
+    from jobmarket import summary
+
+    started = system_clock()
+    with db.connect(settings, autocommit=True) as conn:
+        try:
+            result, notification_id = summary.queue_daily(conn, started)
+        except psycopg.Error as exc:
+            _record(settings, "daily_summary", started, "failed", error=str(exc)[:500])
+            raise
+        if args.dry_run:
+            print(result.subject)
+            print(result.body)
+        if notification_id is None:
+            print(f"The summary for {result.day} was already queued; nothing new.")
+        else:
+            print(f"Queued the summary for {result.day}: {result.subject}")
+        _record(settings, "daily_summary", started, "succeeded",
+                {"day": result.day, "queued": notification_id is not None,
+                 "attention": result.attention})  # fmt: skip
+        sent = send_pending(conn, smtp_settings(), system_clock())
+    if not sent.configured:
+        print("Email delivery is not configured; the summary stays in the outbox.")
+    else:
+        print(f"Email: sent {sent.sent}, failed {sent.failed}, pending {sent.pending_left}.")
+    problem = summary.ping_heartbeat()
+    if problem:
+        print(problem, file=sys.stderr)
+    return EXIT_FAILURE if sent.failed or problem else EXIT_OK
+
+
 def _sync_raw(settings: Settings, args) -> int:
     from jobmarket.connectors import SOURCE_SYSTEMS
     from jobmarket.s3store import S3Unavailable, sync_raw
@@ -1534,6 +1567,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("sync-raw", help="upload raw responses not yet in S3")
 
+    summ = commands.add_parser("summary", help="the daily summary email")
+    summ_cmds = summ.add_subparsers(dest="summary_command", required=True)
+    summ_send = summ_cmds.add_parser(
+        "send", help="queue today's summary (once a day), send pending email, ping heartbeat"
+    )
+    summ_send.add_argument("--dry-run", action="store_true", help="also print the summary")
+
     commands.add_parser(
         "refingerprint",
         help="evaluate stored versions under the current normalization rules",
@@ -1609,6 +1649,7 @@ HANDLERS = {
     "private": _private,
     "backup": _backup,
     "sync-raw": _sync_raw,
+    "summary": _summary,
 }
 
 
