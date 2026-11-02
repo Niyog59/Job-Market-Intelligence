@@ -86,17 +86,26 @@ class S3Store:
 
     def keys(self, prefix: str) -> list[str]:
         """Every key under prefix (follows pagination)."""
+        return list(self.objects(prefix))
+
+    def objects(self, prefix: str) -> dict[str, int]:
+        """Every key under prefix with its size in bytes (follows pagination)."""
 
         def collect():
-            found = []
+            found = {}
             pages = self.client.get_paginator("list_objects_v2").paginate(
                 Bucket=self.bucket, Prefix=prefix
             )
             for page in pages:
-                found.extend(item["Key"] for item in page.get("Contents", []))
+                found.update((item["Key"], item["Size"]) for item in page.get("Contents", []))
             return found
 
         return _calling(f"listing of {prefix}", collect)
+
+    def size(self, key: str) -> int | None:
+        """The stored object's size, or None if it does not exist."""
+        objects = self.objects(key)
+        return objects.get(key)
 
 
 @dataclass(frozen=True)
@@ -118,16 +127,24 @@ def _raw_files(root: Path, sources: Iterable[str]) -> list[Path]:
 def sync_raw(store: S3Store, root: Path, sources: Iterable[str]) -> SyncResult:
     """Upload raw response files that are not in S3 yet.
 
-    Raw files are written once and never changed, so a file whose key already exists is
-    skipped. Run it before the local cleanup removes files (cleanup-raw keeps 4 days).
+    Raw files are written once and never changed, so a file whose key already exists with
+    the same size is skipped. Run it before the local cleanup, which deletes only files S3
+    confirms (raw_upload_confirmation).
     """
-    present = set(store.keys(RAW_PREFIX))
+    present = store.objects(RAW_PREFIX)
     uploaded = skipped = 0
     for path in _raw_files(root, sources):
         key = RAW_PREFIX + path.relative_to(root).as_posix()
-        if key in present:
+        if present.get(key) == path.stat().st_size:
             skipped += 1
             continue
         store.upload(path, key)
         uploaded += 1
     return SyncResult(uploaded, skipped)
+
+
+def raw_upload_confirmation(store: S3Store):
+    """A check for cleanup_raw: is this raw file (path relative to the raw directory) in S3
+    with the same size? Lists the raw prefix once."""
+    present = store.objects(RAW_PREFIX)
+    return lambda relative, size: present.get(RAW_PREFIX + relative) == size

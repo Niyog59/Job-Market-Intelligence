@@ -170,7 +170,8 @@ Optional settings:
 | `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
 | `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
 | `jobmarket backup create [--dir D] [--upload]` / `verify DIR` / `restore DIR --database NAME` | Back up the public and private schemas; check a backup; restore into an empty database |
-| `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3; list the backups in S3; download and verify one |
+| `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3 and confirm it; list the backups in S3; download and verify one |
+| `jobmarket backup prune --keep N` | Keep the newest N verified local backups; delete older ones only if confirmed in S3 |
 | `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
@@ -930,8 +931,19 @@ Credentials come from the AWS SDK's default chain (on EC2, the instance role), s
 keys are configured. Nothing in the code deletes S3 objects: retention is a bucket lifecycle
 rule (30 days for backups and for raw responses). A dump's manifest is uploaded after the
 dump, so `backup list` shows only finished uploads; `backup fetch STAMP` downloads both parts
-and verifies them before a restore. Local copies under `data/backups/` are not deleted
-automatically.
+and verifies them before a restore. After an upload, every object is checked in S3 (it
+must exist with the local size) and only then is an `UPLOADED` file written into the
+backup directory.
+
+**Local copies.** `jobmarket backup prune --keep N` keeps the newest N verified backups
+(the scheduled run uses 3) and deletes an older one only if its `UPLOADED` mark shows S3
+confirmed it. Damaged backups are reported and never deleted; unfinished
+`<stamp>.partial` directories are removed. So the newest verified copy always stays.
+
+**Raw files.** `jobmarket cleanup-raw` deletes a raw response only when S3 has the same
+file with the same size, whenever `JOBMARKET_S3_BUCKET` is set (`--require-s3` makes a
+missing bucket an error instead of a plain local cleanup). Files not yet confirmed stay and
+are retried by the next cleanup. Locally, without a bucket, cleanup works as before.
 
 ## Posting history
 

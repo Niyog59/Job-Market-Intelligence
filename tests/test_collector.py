@@ -339,6 +339,29 @@ def test_raw_cleanup_keeps_job_history(env):
     assert history() == before  # job records, history, and raw metadata all kept
 
 
+def test_cleanup_deletes_only_files_confirmed_in_s3(env):
+    env.transport.queue("acme", ok([gh_job(1)]))
+    env.transport.queue("beta", ok([gh_job(2)]))
+    env.collector().collect()
+    files = sorted(env.raw_root.rglob("*.json"))
+    assert len(files) == 2
+    uploaded = files[0].relative_to(env.raw_root).as_posix()
+
+    def in_s3(relative, size):
+        return relative == uploaded
+
+    later = env.clock.now + timedelta(days=5)
+    first = cleanup_raw(env.conn, env.raw_root, later, confirmed=in_s3)
+    assert (first.files_deleted, first.kept_not_uploaded, first.purged_rows) == (1, 1, 1)
+    assert [p.name for p in env.raw_root.rglob("*.json")] == [files[1].name]
+    assert env.scalar("SELECT count(*) FROM raw_responses WHERE purged_at IS NULL") == 1
+
+    # Once the second upload is confirmed, the next cleanup removes it too.
+    second = cleanup_raw(env.conn, env.raw_root, later, confirmed=lambda relative, size: True)
+    assert (second.files_deleted, second.kept_not_uploaded) == (1, 0)
+    assert list(env.raw_root.rglob("*.json")) == []
+
+
 def test_possible_duplicates_are_flagged_not_merged(env):
     remote = {"location": "Remote", "offices": [{"name": "Distributed", "location": "Remote"}]}
     env.transport.queue(
