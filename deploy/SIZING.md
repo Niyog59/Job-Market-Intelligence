@@ -1,98 +1,107 @@
 # Resource sizing
 
 The server today is one EC2 t3.micro (2 vCPU burstable, 1 GiB memory, 20 GiB disk) in
-us-east-2. This report covers two stacks:
+us-east-2. The full stack is PostgreSQL, the website, Caddy, and Airflow (scheduler, DAG
+processor, API server) running the pipeline one task at a time.
 
-1. **The stack in this repository:** PostgreSQL, the website, and Caddy in Docker, with
-   collection, extraction, analytics builds, and backups started by hand, one at a time.
-2. **The planned stack with scheduling:** the same plus Apache Airflow running those jobs on
-   a schedule. Airflow is not implemented yet.
+**Status: nothing here has been measured on EC2.** There are three kinds of evidence below,
+labeled every time: measured on macOS with the real data, measured on Linux in CI with
+almost no data, and estimates. No instance size has been confirmed, and none has been
+changed.
 
-**Status: nothing here has been measured on EC2 or on Linux.** All measurements were taken
-on macOS against a restored copy of the real data; everything else is an estimate. No
-instance size has been confirmed.
+## 1. Full stack with the real pipeline, macOS (2026-11-01)
 
-## Measurements (2026-11-01, macOS)
+A local run of the actual DAGs under a real Airflow 3.3.2 scheduler (LocalExecutor,
+parallelism 1, one API worker), against a restored copy of the real database on a
+PostgreSQL 17 server with the settings in `docker-compose.yml`:
+- **Real work:** collection over the network from all 51 enabled boards (twice: the
+  first-start catch-up run and the 9 PM run), one real Gemini batch of 20 listings, report
+  publication, and a backup.
+- **Website:** answering about two requests a second the whole time; all 318 requests
+  succeeded.
+- **Mocked:** S3 was a local moto server (backup and 77 raw files uploaded and confirmed),
+  and email was not configured.
+- **Method:** values are physical footprint, which includes memory macOS compressed,
+  sampled every 5 seconds over the 6.8 minutes of pipeline work.
 
-### Application (from a restored copy of the data)
+| Component | Peak | Median | Notes |
+|---|---|---|---|
+| Airflow scheduler (with the running task) | 640 MB | 544 MB | 373 MB between tasks |
+| PostgreSQL (all processes) | 298 MB | 188 MB | peak during the backup |
+| Airflow API server, 1 worker | 256 MB | 256 MB | |
+| Airflow DAG processor | 155 MB | 155 MB | |
+| Website | 51 MB | 50 MB | development server, under light load |
+| **Total at one moment** | **1,362 MB** | **1,168 MB** | lowest 914 MB |
 
-PostgreSQL ran with the settings in `docker-compose.yml` (`shared_buffers=128MB`,
-`work_mem=4MB`, `maintenance_work_mem=64MB`, `effective_cache_size=256MB`,
-`max_connections=20`). Values are peak resident memory (max RSS) while working.
+Peak total while each task ran:
 
-| Process | Peak memory | Notes |
+| Task | Duration | Peak total |
 |---|---|---|
-| PostgreSQL (all processes) | 189 MB | during an analytics build and website load at the same time |
-| Website (one process) | 113 MB | 180 requests, 97 ms average |
-| gunicorn loading the app | 109 MB | one worker |
-| `jobmarket analytics build` (dbt) | 141 MB | 6.8 s, 138 models and tests |
-| `jobmarket replay` of 318 saved scans | 150 MB | 70 s; stands in for a collection run |
-| Extraction code loaded | 61 MB | no AI calls were made |
-| `jobmarket migrate` | 42 MB | |
-| `jobmarket backup restore` | 46 MB | 6.5 s for 18.5 MB of dumps |
+| Collection (network, 51 boards) | 89 to 101 s | 1,325 to 1,362 MB |
+| Report publication | 8 to 9 s | 1,345 MB |
+| Backup (20.4 MB of dumps, upload confirmed) | 6 s | 1,285 MB |
+| AI batch (20 real Gemini requests) | 90 s | 1,236 MB |
+| Raw upload and cleanup, retry check, email | 1 to 2 s each | 1,038 to 1,135 MB |
 
-Data sizes: database 107 MB after a fresh restore; ingestion backup 18.5 MB, private
-backup 31 kB; raw responses about 460 MB for 4 days (about 110 files a day).
+CPU over the run averaged 5.5% of one core.
 
-### Apache Airflow (throwaway installation, removed afterwards)
+## 2. Full stack in the container images, Linux (CI, every push)
 
-Airflow 3.3.2 with the LocalExecutor, `parallelism=1`, one API server worker, its metadata
-in a separate PostgreSQL 17 database, and one test DAG whose only task runs `sleep 45`.
-Values are physical footprint, which includes memory macOS has compressed. (macOS
-compresses idle memory, so `ps` badly undercounts idle services: the scheduler showed 52 MB
-in `ps` and 144 MB in footprint at the same moment.)
+The CI `deploy` job builds the real image, starts the Compose stack, and runs the
+collection, retry, and extraction DAGs through Airflow (`airflow dags test`) while the
+website serves requests. It records `docker stats` (sampled about every 2 seconds) in the
+job summary. Run of 2026-11-02 (GitHub runner with 16 GB, so no memory pressure):
 
-| Component | Memory | Notes |
+| Container | Peak MiB | Median MiB |
 |---|---|---|
-| Scheduler | 368 MB | idle, after one task had run (264 MB before any task) |
-| DAG processor | 153 MB | idle |
-| API server (UI and task API), 1 worker | 255 MB | idle |
-| Triggerer | 311 MB | only needed for deferrable tasks |
-| A running task, extra | about 110 MB | scheduler tree peaked at 478 MB during the task |
-| CPU, all components idle | 4.6% of one core | over 60 s |
+| airflow-scheduler | 526 | 410 |
+| airflow-api | 200 | 200 |
+| airflow-dag-processor | 150 | 150 |
+| db | 63 | 58 |
+| web (gunicorn, 1 worker) | 54 | 54 |
+| caddy | 23 | 19 |
+| moto (fake S3, CI only) | 62 | 61 |
+| **Total at one moment** | **1,072** (about 1,010 without moto) | |
 
-Without the triggerer, idle Airflow alone measured 776 MB; with it, 1,087 MB.
+This is Linux and the real containers, but the database held almost nothing (no job boards
+are loaded in CI, so collection had no work), and only about 8 samples were taken.
 
 ## What these measurements do not show
 
-- **Linux and Amazon Linux 2023.** Memory accounting, shared libraries, and the page cache
-  differ from macOS. The OS and Docker overhead below is an estimate.
-- **Our real pipeline under Airflow.** The Airflow task only waited. A real task would run
-  `jobmarket collect`, `extract run`, `analytics build`, or `backup create` inside Airflow's
-  task process; those costs were measured separately, never together.
-- **Real collection and extraction.** Collection was measured as a replay of saved
-  responses, without network requests; extraction only loaded its code and made no Gemini
-  calls.
-- **PostgreSQL serving Airflow too.** Airflow opens its own database connections; the
-  current `max_connections=20` has not been tested with it and is likely too low.
-- **Caddy, sustained traffic, and long-running behavior** (memory growth over days).
+- **EC2 and Amazon Linux 2023:** the OS, the Docker daemon, and the kernel's own memory.
+- **Linux with the real data:** the Linux run had an empty database; the real-data run was
+  on macOS, where memory is counted differently.
+- **Memory pressure:** both machines had plenty of free memory; behavior near a 2 GiB limit
+  (page cache eviction, swapping) has not been observed.
+- **Long running:** days of schedules, memory growth over time, a full AI quota day.
+- **Email and real S3:** delivery through Gmail and uploads to a real bucket.
 
-## Estimates
+## Estimate for EC2 with the full stack
 
-| Part | Stack in this repo | With Airflow (no triggerer) |
-|---|---|---|
-| OS and Docker | 250 MB (estimate) | 250 MB (estimate) |
-| PostgreSQL | 190 to 250 MB | 240 to 350 MB (extra for Airflow, estimate) |
-| Website, 1 worker with 4 threads | 110 to 130 MB | 110 to 130 MB |
-| Caddy | 30 to 50 MB (estimate) | 30 to 50 MB (estimate) |
-| Airflow, idle | none | 776 MB |
-| **Idle total** | **about 580 to 680 MB** | **about 1.41 to 1.56 GB** |
-| One job running | +150 MB | +150 MB job, +110 MB Airflow task |
-| **Peak total** | **about 730 to 830 MB** | **about 1.67 to 1.82 GB** |
-
-With the triggerer, add about 310 MB to the Airflow column.
+| Part | Estimate |
+|---|---|
+| Amazon Linux 2023 and Docker | about 250 MB (estimate, not measured) |
+| PostgreSQL with the real data | 190 to 300 MB (macOS peak 298) |
+| Airflow API server and DAG processor | 350 to 410 MB (Linux 350, macOS 411) |
+| Airflow scheduler between tasks | 370 to 410 MB (macOS 373; Linux median 410 includes tasks) |
+| Website | 55 to 130 MB (one worker) |
+| Caddy | about 25 MB (Linux 23) |
+| **Between tasks** | **about 1.24 to 1.53 GB** |
+| A running task (Airflow task process plus the job) | +150 to 270 MB (macOS scheduler peak 640 vs 373) |
+| **Peak** | **about 1.4 to 1.8 GB** |
 
 ## What this means
 
-- **Stack in this repo on t3.micro (1 GiB):** tight but expected to work with a 2 GiB swap
-  file, one website worker, and one job at a time. Unconfirmed until measured on the server.
-- **With Airflow, t3.micro does not fit:** idle Airflow alone (776 MB) uses most of 1 GiB.
-- **t3.small (2 GiB) is a candidate, not a confirmed fit.** By the estimate above it leaves
-  roughly 100 to 380 MB of its 2,048 MB at peak (less after the kernel's own share), only without the triggerer, with one task at a time, and
-  with swap as a safety net. The estimate rests on macOS numbers and a task that only
-  waited, so it does not prove that the real pipeline fits reliably. It has to be tested
-  with the full stack before it is relied on (see below).
-- **t3.medium (4 GiB)** is the next step up if a 2 GiB test shows too little headroom.
+- **t3.micro (1 GiB) cannot run the full stack.** The stack measured 914 MB at its lowest
+  on macOS, about 1 GB on Linux with an empty database, and has to share the 1 GiB with the
+  OS and Docker. Swap would be in constant use. Without Airflow (jobs started by hand) the
+  earlier estimate of 730 to 830 MB still applies.
+- **t3.small (2 GiB) is a candidate, not a confirmed fit.** By the estimate it keeps roughly
+  250 to 650 MB free at peak, with the 2 GiB swap file as a safety net. That margin rests on
+  macOS numbers and a Linux run without data; it has to be measured on the instance itself
+  (below) before it is relied on.
+- **t3.medium (4 GiB)** is the step up if the 2 GiB measurement shows too little headroom or
+  regular swapping.
 
 ## Candidate sizes and monthly cost before credits (us-east-2)
 
@@ -103,42 +112,43 @@ responses kept 30 days, backups, and requests). A gp2 disk would be $2.00 instea
 
 | Instance | Memory | EC2 | Total | Notes |
 |---|---|---|---|---|
-| t3.micro (current) | 1 GiB | $7.59 | **$13.00** | not enough for Airflow |
+| t3.micro (current) | 1 GiB | $7.59 | **$13.00** | too small for the full stack |
 | t3.small | 2 GiB | $15.18 | **$20.58** | same x86 image; the existing instance can be resized in place |
 | t4g.small | 2 GiB | $12.26 | **$17.66** | ARM: needs a new instance and an arm64 image, not built or tested |
 | t3.medium | 4 GiB | $30.37 | **$35.77** | comfortable headroom |
 
 t3 instances default to "unlimited" CPU credits: sustained CPU above the baseline would add
-charges. The idle measurement (4.6% of one core) is far below the baseline, but long
-extraction or build runs have not been measured on EC2. Instance types available under an
-AWS free-plan account are limited; check eligibility in the console before choosing.
+charges. Measured CPU (4.6% of one core idle, 5.5% during the pipeline run) is far below a
+t3.small's baseline, but a full day on EC2 has not been measured. Instance types available
+under an AWS free-plan account are limited; check eligibility in the console before
+choosing.
 
 No instance has been resized and no spending has changed.
 
 ## What would confirm a size
 
-Run the full stack on Linux with the target memory, for example on the candidate instance
-or in containers limited to that memory:
+On the candidate instance, with the full stack running its normal schedule (RUNBOOK
+section G):
 
-1. Airflow (as it will actually be configured) running the real tasks: a collection, an
-   extraction batch, `analytics build`, and a backup, one after another.
-2. The website under light traffic at the same time.
-3. Record peak and idle memory (`free -h`, `docker stats`), swap activity (`vmstat 5`, the
-   `si`/`so` columns should stay near 0), any processes stopped for lack of memory
+1. Watch at least one 9 PM run (collection, backup, publication, summary) and several hourly
+   AI batches, with the website in use.
+2. Record peak and idle memory (`free -h`, `docker stats --no-stream`), swapping (`vmstat 5`:
+   the `si`/`so` columns should stay near 0), processes stopped for lack of memory
    (`sudo dmesg | grep -i oom`), and the CPU credit balance in CloudWatch.
-4. Repeat over several days of the schedule before calling the size a fit.
+3. Repeat over several days before calling the size a fit, then record the numbers here.
 
-## Settings that follow from the current estimate
+## Settings that follow from the current evidence
 
 | Setting | Value | Where |
 |---|---|---|
-| PostgreSQL `shared_buffers` / `work_mem` / `maintenance_work_mem` / `effective_cache_size` / `max_connections` | 128MB / 4MB / 64MB / 256MB / 20 | `docker-compose.yml` |
+| PostgreSQL `shared_buffers` / `work_mem` / `maintenance_work_mem` / `effective_cache_size` | 128MB / 4MB / 64MB / 256MB | `docker-compose.yml` |
+| PostgreSQL `max_connections` | 40 (Airflow holds a few per component) | `docker-compose.yml` |
+| Airflow pools per component | 2, up to 3 more on demand | `docker-compose.yml` |
+| Airflow tasks at once | 1 (`PARALLELISM=1`) | `docker-compose.yml` |
+| Airflow API server workers | 1 | `docker-compose.yml` |
 | Website processes | 1 worker, 4 threads | `GUNICORN_CMD_ARGS` in `.env` |
 | Swap file | 2 GiB | RUNBOOK step E1 |
 | Container log files | 10 MB, 3 files per container | `docker-compose.yml` |
-
-These were chosen for the stack in this repository. Adding Airflow will need at least a
-higher `max_connections` and a new measurement.
 
 ## Checks on the server
 
@@ -149,5 +159,3 @@ vmstat 5 5                     # "si"/"so" columns: swapping in/out (should stay
 sudo dmesg | grep -i oom       # any process stopped for lack of memory
 df -h /                        # disk
 ```
-
-Record the results here, replacing the estimates.

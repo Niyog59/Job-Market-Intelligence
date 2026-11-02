@@ -50,16 +50,19 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
 
 Not yet in place:
 
-- **Scheduling.** Nothing runs automatically. Collections and retries run only when
-  `jobmarket collect` or `jobmarket retry-due` is executed. The intended schedule (noon
-  and 9 PM America/Chicago, plus retry checks) will be wired to a scheduler later.
-- **Alert email delivery.** Alerts and recovery notices are written to the
-  `notifications` outbox. An SMTP sender exists but no provider is configured, so no
-  email is sent.
+- **Running scheduling.** Airflow schedules (collection at noon and 9 PM America/Chicago,
+  retry checks, hourly AI batches, evening backups and the daily summary) are built and
+  tested in CI and in a local run with the real data, but not running anywhere: on this
+  computer nothing runs automatically, and the server is not deployed.
+- **Email delivery.** Alerts, recovery notices, and the daily summary go through the
+  `notifications` outbox and SMTP; the Gmail setup is documented, but no account is
+  configured yet, so no email is sent.
 - **Hosting.** Deployment to one AWS EC2 server is prepared but not done: a Docker
-  Compose stack (PostgreSQL, gunicorn, Caddy with HTTPS), backups to S3, IAM policy
-  examples, and a step-by-step runbook (`deploy/`). It has been tested in CI and locally,
-  never on AWS. Until it is deployed, the website runs only on this computer.
+  Compose stack (PostgreSQL, gunicorn, Caddy with HTTPS, Airflow), backups to S3, IAM
+  policy examples, and a step-by-step runbook (`deploy/`). It has been tested in CI and
+  locally, never on AWS. The full stack with Airflow needs more than the current 1 GiB
+  instance (`deploy/SIZING.md`). Until it is deployed, the website runs only on this
+  computer.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -1177,20 +1180,31 @@ scenarios, runs the history integrity checks, and builds the analytics models wi
 data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
 
-A second job checks the deployment in `deploy/`: it builds the Docker image, starts the
-Compose stack with throwaway passwords, runs the first-start commands, requests pages over
-HTTPS from Caddy (with its local certificate for `localhost`), checks that only Caddy
-publishes ports, and makes a backup inside the container. It never contacts AWS.
+The `airflow` job installs Airflow 3.3.2 with its official constraints and runs the DAG
+tests in `deploy/airflow/tests`.
+
+The `deploy` job checks the deployment in `deploy/`:
+- It builds the Docker image and starts the Compose stack with throwaway passwords plus a
+  moto S3 server, then runs the first-start commands.
+- It requests pages over HTTPS from Caddy (with its local certificate for `localhost`),
+  starts Airflow, and runs the collection, retry, and extraction DAGs in the containers.
+- It checks the recorded pipeline steps, the S3-confirmed backup, and the queued summary,
+  restores that backup into an empty database, and checks that only Caddy publishes public
+  ports (the Airflow UI only on 127.0.0.1).
+- It records container memory with `docker stats` in the job summary.
+- It never contacts AWS, a job board (none are loaded), Gemini, or an email server.
 
 ## Deployment
 
-`deploy/` holds everything for one server (EC2 t3.micro, Amazon Linux 2023) and no
-secrets:
+`deploy/` holds everything for one server (EC2, Amazon Linux 2023) and no secrets:
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | one image for the website and the command-line jobs (Python 3.11, PostgreSQL 17 client tools) |
-| `docker-compose.yml` | `db` (PostgreSQL 17, no published port, data in a volume), `web` (gunicorn, read-only filesystem, analytics and private logins only), `caddy` (ports 80 and 443, Let's Encrypt), and `jobs` for running commands by hand |
+| `Dockerfile` | one image for the website, the command-line jobs, and Airflow (Python 3.11, PostgreSQL 17 client tools, Airflow 3.3.2 in its own virtual environment) |
+| `docker-compose.yml` | `db` (PostgreSQL 17, no published port, data in a volume), `web` (gunicorn, read-only filesystem, analytics and private logins only), `caddy` (ports 80 and 443, Let's Encrypt), Airflow (`airflow-scheduler`, `airflow-dag-processor`, `airflow-api` on 127.0.0.1 only; `airflow-init` for its tables), and `jobs` for running commands by hand |
+| `airflow/dags/jobmarket.py` | the schedules (see Scheduling) |
+| `airflow/tests/` | DAG tests run by the CI `airflow` job |
+| `ci/` | the CI-only Compose layer (a moto S3 server) and the memory report script |
 | `Caddyfile` | HTTPS for `SITE_DOMAIN`, HTTP redirected to HTTPS |
 | `postgres-init/10-jobmarket.sh` | on the first start: the three logins and the database owned by the non-superuser owner login |
 | `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
@@ -1201,6 +1215,50 @@ secrets:
 All containers restart unless stopped, and Docker starts at boot. Visitors reach only
 Caddy, and the database is not exposed. Administration uses AWS Systems Manager Session
 Manager; the runbook keeps the existing SSH rule as a fallback until Session Manager has
-been tested, including after a reboot, and only then removes it. Public pages read through the read-only login; nothing a visitor
-does starts a collection, an AI call, or a change to job data (signing in records sign-in
-attempts and sessions in the private schema).
+been tested, including after a reboot, and only then removes it. Public pages read through
+the read-only login; nothing a visitor does starts a collection, an AI call, or a change to
+job data (signing in records sign-in attempts and sessions in the private schema).
+
+## Scheduling
+
+Apache Airflow 3.3.2 runs the pipeline on the server (`deploy/airflow/dags/jobmarket.py`).
+Every task runs an existing `jobmarket` command, so each step can also be run by hand.
+
+| DAG | When (America/Chicago) | Tasks |
+|---|---|---|
+| `jobmarket_collection` | 12:00 and 21:00 | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
+| `jobmarket_retries` | every 15 minutes | `retry-due`, then `notifications --send` |
+| `jobmarket_extraction` | every hour at :30 | `extract run --limit 20` |
+
+- **Time zone:** the cron expressions are read in America/Chicago, so the local times hold
+  across daylight saving changes.
+- **After downtime:** with `catchup=False`, Airflow makes one run for the latest missed
+  time, never one per missed time. Collection always scans the boards as they are now.
+- **One task at a time** across all DAGs (`PARALLELISM=1`), one run at a time per DAG,
+  and the commands' own advisory locks stop a manual run from overlapping a scheduled one
+  (exit code 3, shown as skipped).
+- **Retries never wait inside a task:** each failed board's next retry time is in the
+  database, and the 15-minute check runs only those that are due. The three retries are
+  planned about 1, 2, and 3 hours after a failure; a check up to 15 minutes late moves the
+  next one a full hour after it, so they span about 3 to 3.75 hours.
+- **A failure never stops later steps** (trigger rule `all_done`): reports, the backup,
+  and the summary run even when collection failed. The backup runs right after the evening
+  collection, whatever its result and before any AI work.
+- **AI work is separate and bounded:** at most 20 listings per hourly batch, within the free
+  limits; a quota pause shows in the summary, not as an alert. Without a Gemini key the
+  batch is skipped.
+- **Time limits:** collection 45 minutes, retry check 30, AI batch 20, report publication
+  20, backup and raw uploads 20, summary and email 10.
+- **No triggerer:** none of the tasks are deferrable, so Airflow's optional triggerer is
+  not run.
+- **Run history:** kept in its own `airflow` database (login `airflow`) and cleaned after
+  30 days by the evening run; Airflow 3 blocks its database inside tasks, so that one
+  command gets the address as `JOBMARKET_AIRFLOW_DB_URL`.
+- **Administration stays private:** the UI listens on the server's loopback address only
+  (RUNBOOK G2).
+
+Tests: `deploy/airflow/tests` (run by the CI `airflow` job with Airflow installed) check
+the local times across both 2026 daylight saving changes, the single catch-up run, the
+evening/noon split, and whole runs with a stub `jobmarket` command; the CI `deploy` job runs
+the real DAGs in the containers against a moto S3 server and checks the recorded steps, the
+confirmed backup, the queued summary, and a restore of that backup.
