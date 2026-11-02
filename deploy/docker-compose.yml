@@ -148,6 +148,9 @@ services:
       DB_HOST: db
       DB_PORT: "5432"
       POSTGRES_PASSWORD: ""  # the superuser password is not needed here
+      # Only for the daily `airflow db clean` task (Airflow blocks its own database inside
+      # tasks; see the DAG file).
+      JOBMARKET_AIRFLOW_DB_URL: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@db:5432/airflow
     volumes:
       - appdata:/app/data
       - airflowdata:/app/airflow

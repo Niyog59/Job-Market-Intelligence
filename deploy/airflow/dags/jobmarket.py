@@ -110,11 +110,20 @@ with DAG(
     summary = task("daily_summary", evening_only("jobmarket summary send"), SUMMARY_LIMIT,
                    **after)  # fmt: skip
     notify = task("send_email", "jobmarket notifications --send", SUMMARY_LIMIT, **after)
+    # Airflow 3 blocks the metadata database inside task processes (it replaces the
+    # connection setting with a dead value). `airflow db clean` is the one task that needs
+    # it, so the scheduler container provides the address under JOBMARKET_AIRFLOW_DB_URL and
+    # only this command uses it.
+    cutoff = (
+        "python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - "
+        f'd.timedelta(days={AIRFLOW_HISTORY_DAYS})).isoformat(timespec="seconds"))\''
+    )
     cleanup_airflow = task(
         "airflow_history_cleanup",
         evening_only(
-            "airflow db clean --yes --skip-archive --clean-before-timestamp "
-            f'"$(date -u -d "{AIRFLOW_HISTORY_DAYS} days ago" +%Y-%m-%dT%H:%M:%S+00:00)" && '
+            ': "${JOBMARKET_AIRFLOW_DB_URL:?set in docker-compose.yml}" && '
+            'AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="$JOBMARKET_AIRFLOW_DB_URL" '
+            f'airflow db clean --yes --skip-archive --clean-before-timestamp "$({cutoff})" && '
             f'find "$AIRFLOW_HOME/logs" -type f -mtime +{AIRFLOW_HISTORY_DAYS} -delete && '
             'find "$AIRFLOW_HOME/logs" -mindepth 1 -type d -empty -delete'
         ),

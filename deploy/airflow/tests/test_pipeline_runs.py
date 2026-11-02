@@ -36,6 +36,7 @@ def stubs(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("STUB_LOG", str(log))
     monkeypatch.setenv("JOBMARKET_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("JOBMARKET_AIRFLOW_DB_URL", "postgresql+psycopg2://stub")
     (tmp_path / "logs").mkdir()
     return log
 
@@ -74,7 +75,8 @@ def test_evening_run_does_every_step_in_order(stubs):
         "summary send",
         "notifications --send",
     ]
-    assert calls(stubs)[8].startswith("airflow db clean --yes --skip-archive")
+    cleanup = "airflow db clean --yes --skip-archive --clean-before-timestamp 20"
+    assert calls(stubs)[8].startswith(cleanup)
 
 
 def test_noon_run_skips_the_evening_only_steps(stubs):
