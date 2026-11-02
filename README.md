@@ -891,7 +891,8 @@ health and every open collection incident with its next retry, the AI queue and 
 requests (and any quota pause), the published report build and any failed rebuild,
 the last good backup and whether S3 confirmed it, local backup copies, raw uploads, and
 undelivered email. Problems are listed first, and the subject then ends with "(needs a
-look)". `--dry-run` also prints it.
+look)". `--print` also prints it. `jobmarket notifications --send-test` queues one test
+message and sends pending email, to check delivery on a new server.
 
 **Email delivery** uses SMTP (`jobmarket.notify`), which works on any server. The intended
 setup is a Gmail account with 2-Step Verification and an app password (Google Account >
