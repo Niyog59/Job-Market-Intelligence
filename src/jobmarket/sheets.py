@@ -42,6 +42,7 @@ TABS: dict[str, tuple[str, str, str]] = {
     "jobs": ("rpt_jobs_current", "", "employer_name, title, job_key"),
     "job_skills": ("rpt_job_skills", "", "job_key, skill, requirement"),
     "skill_pairs": ("rpt_skill_pairs", "", "skill_a, skill_b, role_group"),
+    "genai_terms": ("rpt_job_genai_terms", "", "term, job_key"),
     "weekly_jobs": ("rpt_weekly_jobs", "", "week_start, level_rule, level, role_group, metro"),
     "weekly_skills": ("rpt_weekly_skills", "", "week_start, skill, role_group"),
     "daily_activity": ("rpt_daily_activity", "population = 'retained'", "report_day"),

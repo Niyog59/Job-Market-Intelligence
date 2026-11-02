@@ -70,6 +70,9 @@ def test_genai_mentions_ignore_the_employers_own_name(world, reporting):
     assert job(world, reporting, 1)["genai_terms"] == "LLM, AI agents"
     # "Acme GenAI" is the employer's name and a bare "AI" is not a term: no mention.
     assert job(world, reporting, 2)["genai_mention"] is False
+    terms = rows(world, f'SELECT job_key, term FROM "{reporting}".rpt_job_genai_terms ORDER BY 2')
+    key = job(world, reporting, 1)["job_key"]
+    assert terms == [(key, "AI agents"), (key, "LLM")]  # one row per term, for that job only
 
 
 def test_skills_and_pairs(world, reporting):

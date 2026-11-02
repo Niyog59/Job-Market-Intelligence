@@ -105,6 +105,11 @@ models:
     data_tests:
       - unique_combination: {arguments: {columns: ['job_key', 'skill', 'requirement']}}
 
+  - name: rpt_job_genai_terms
+    description: "Grain: one row per current job per generative-AI term its title or description mentions (macro genai_terms)."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['job_key', 'term']}}
+
   - name: rpt_skill_pairs
     description: "Grain: one row per skill pair (skill_a < skill_b) per role group: current jobs that require or prefer both."
     data_tests:

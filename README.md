@@ -590,6 +590,7 @@ answers later re-normalized in Python show their current clean-up
 | `rpt_build_info` | one row: when the build ran, and the newest complete collection and extraction it saw |
 | `rpt_jobs_current` | distinct current job (duplicates merged), kept and listed: employer, title, metro, role group, level by both rules, minimum degree, eligibility statements, generative-AI mention, discovery week |
 | `rpt_job_skills` | current job x skill x requirement level, with the job's filter fields |
+| `rpt_job_genai_terms` | current job x generative-AI term it mentions, with the job's filter fields |
 | `rpt_skill_pairs` | skill pair x role group: current jobs that require or prefer both |
 | `rpt_weekly_jobs` | week x level rule x level x role group x metro: new jobs (initial imports excluded), jobs open at the week's end, generative-AI mentions |
 | `rpt_weekly_skills` | week x skill x role group: new jobs requiring the skill |
@@ -1221,8 +1222,8 @@ The `deploy` job checks the deployment in `deploy/`:
 The Tableau Public dashboards read a Google Sheet, because Tableau Public cannot connect to the
 database. `jobmarket tableau sync` copies the published dashboard tables to that Sheet, one tab
 each: `about` (build time and the "data collected through ..." caption every chart shows),
-`jobs`, `job_skills`, `skill_pairs`, `weekly_jobs`, `weekly_skills`, `daily_activity`,
-`eligibility`, and `pipeline_health`.
+`jobs`, `job_skills`, `genai_terms`, `skill_pairs`, `weekly_jobs`, `weekly_skills`,
+`daily_activity`, `eligibility`, and `pipeline_health`.
 
 - Only published reporting tables are read, through the read-only analytics login, so
   nothing from the private workspace can reach the Sheet.
