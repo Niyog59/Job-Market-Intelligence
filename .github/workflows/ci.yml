@@ -96,6 +96,32 @@ jobs:
       - name: Analytics models build and pass their tests
         run: jobmarket analytics build --target owner
 
+  airflow:
+    # The Airflow DAGs (deploy/airflow): they import, keep noon and 9 PM local time across
+    # daylight saving, make one catch-up run after downtime, and run every step in order
+    # (with a stub jobmarket command, so nothing touches data or the network).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Airflow with its official constraints
+        run: |
+          pip install "apache-airflow==3.3.2" pytest \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.11.txt"
+
+      - name: DAG tests
+        run: |
+          export AIRFLOW_HOME="$RUNNER_TEMP/airflow" AIRFLOW__CORE__LOAD_EXAMPLES=False
+          export AIRFLOW__CORE__DAGS_FOLDER="$PWD/deploy/airflow/dags"
+          airflow db migrate > /dev/null
+          airflow dags list-import-errors
+          python -m pytest deploy/airflow/tests -v -p no:cacheprovider
+
   deploy:
     # The Docker deployment in deploy/: build the image and run the whole stack once, with
     # Caddy serving https://localhost from its own local certificate. Throwaway values only.
