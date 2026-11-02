@@ -46,6 +46,8 @@ def test_summary_reports_jobs_problems_and_steps(env, monkeypatch):
     now = env.clock.now + timedelta(minutes=30)
     record_step(env.conn, "backup", now, now, "succeeded",
                 {"stamp": "20261102T030000Z", "bytes": 1234, "uploaded": True})  # fmt: skip
+    record_step(env.conn, "report_publish", now, now, "succeeded",
+                {"built_at": "2026-10-26T20:00:00+00:00"})  # fmt: skip
     record_step(env.conn, "report_publish", now, now, "failed", error="dbt test failed")
 
     result = summary.compose(env.conn, now + timedelta(minutes=1))
@@ -57,6 +59,7 @@ def test_summary_reports_jobs_problems_and_steps(env, monkeypatch):
     assert "Pending retries: 1" in body
     assert "20261102T030000Z (1,234 bytes), confirmed in S3" in body
     assert "Latest rebuild FAILED" in body and "keeps the last good reports" in body
+    assert "Published reports built: Mon Oct 26, 3:00 PM CDT" in body
     assert "Waiting:" in body
     assert result.subject.endswith("(needs a look)")
     assert "report rebuild failed" in result.attention
