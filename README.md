@@ -587,6 +587,26 @@ answers later re-normalized in Python show their current clean-up
 | `rpt_board_freshness` | board: latest scan, last complete collection and its age, baseline, hold |
 | `rpt_extraction_coverage` | population: extracted, queued, failed, skipped |
 | `rpt_build_info` | one row: when the build ran, and the newest complete collection and extraction it saw |
+| `rpt_jobs_current` | distinct current job (duplicates merged), kept and listed: employer, title, metro, role group, level by both rules, minimum degree, eligibility statements, generative-AI mention, discovery week |
+| `rpt_job_skills` | current job x skill x requirement level, with the job's filter fields |
+| `rpt_skill_pairs` | skill pair x role group: current jobs that require or prefer both |
+| `rpt_weekly_jobs` | week x level rule x level x role group x metro: new jobs (initial imports excluded), jobs open at the week's end, generative-AI mentions |
+| `rpt_weekly_skills` | week x skill x role group: new jobs requiring the skill |
+
+**Dashboard definitions** (`int_job_attributes`, `int_genai_mentions`):
+- **Role group:** one per job, by priority Data (data analysis, BI, data and analytics
+  engineering) > AI/ML (ML, data science) > Software (software, backend, full stack) > Other.
+- **Level, two rules:** `level_ai` is Junior (early career, entry, internship), Mid, Senior+
+  (senior and above), or Unclear, from the AI's seniority and early-career answers.
+  `level_years` uses the smallest required overall minimum: 0-2, 3-4, 5+ years, or Not stated.
+- **Minimum degree:** the lowest degree listed as required, or "Degree preferred only" or
+  "Not stated".
+- **Weeks:** Monday to Sunday, America/Chicago. **New jobs** exclude initial imports of newly
+  added boards.
+- **Generative-AI mention:** the title or description matches a term in
+  `analytics/macros/genai_terms.sql` (version 1), with the employer's own name removed first.
+  A bare "AI" is not a term, because it appears in company names and boilerplate. Changing
+  the list changes every week's numbers from the next build on.
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.

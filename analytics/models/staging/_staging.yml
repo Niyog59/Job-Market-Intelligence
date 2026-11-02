@@ -55,6 +55,12 @@ models:
               arguments:
                 values: ['observed', 'possibly_unavailable', 'assumed_inactive', 'closed']
 
+  - name: stg_posting_descriptions
+    description: "Grain: one row per posting version with its stored description text (null when too long to store). Used only by keyword rules."
+    columns:
+      - name: version_id
+        data_tests: [unique, not_null]
+
   - name: stg_posting_versions
     description: "Grain: one row per meaningful content version. Version 1 is first sight; later versions are updates."
     columns:
