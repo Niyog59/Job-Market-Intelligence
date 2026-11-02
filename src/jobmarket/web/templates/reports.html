@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block body_class %}reports-page{% endblock %}
+
+{% macro pct(value) -%}
+  {%- if value is none %}<span class="muted">n/a</span>{% else %}{{ "%.1f"|format(value) }}%{% endif -%}
+{%- endmacro %}
+{% macro num(value) -%}{{ "{:,}".format(value or 0) }}{%- endmacro %}
+{% macro provisional(row) -%}
+  {%- if not row.is_complete %} <span class="tag warn">so far today</span>{% endif -%}
+{%- endmacro %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job Market Intelligence</p>
+    <h1>Reports</h1>
+  </div>
+  <div class="toolbar-actions">
+    <a href="{{ url_for('results') }}">Job search</a>
+    {% include "_owner_nav.html" %}
+  </div>
+</header>
+
+<main id="main" class="page reports">
+{% if r is none %}
+  <p class="notice">
+    The reports have not been built yet. They are created by the analytics build
+    (<code>jobmarket analytics build</code>); job search works without them.
+  </p>
+{% else %}
+  {% set b = r.build %}
+  <nav class="population" aria-label="Which jobs">
+    {% for key, name in {"kept": "Kept jobs", "all": "All collected listings"}.items() %}
+    <a href="{{ url_for('reports_page', population=key) }}"{% if key == population %} aria-current="page"{% endif %}>{{ name }}</a>
+    {% endfor %}
+  </nav>
+  <p class="hint">
+    {% if population == "kept" %}Kept jobs passed the screening rules (target role, and in
+    DFW, Houston, or remote open to Texas).{% else %}Every listing collected from the tracked
+    boards, before screening.{% endif %}
+  </p>
+
+  <p class="freshness">
+    Reports built {{ fmt.when(b.built_at) }} ({{ fmt.age(b.built_at, now) }}).
+    They include collections up to {{ fmt.when(b.latest_complete_collection) }} and structured
+    details (AI extraction) up to {{ fmt.when(b.latest_extraction) }}.
+    Reports change only when the analytics are rebuilt; collection runs only when started by hand.
+  </p>
+  {% if status.last_complete_collection and (b.latest_complete_collection is none
+        or status.last_complete_collection > b.latest_complete_collection) %}
+  <p class="banner warn" role="status">
+    A newer collection ({{ fmt.when(status.last_complete_collection) }}) is already in job
+    search. These reports will include it after the next analytics rebuild.
+  </p>
+  {% endif %}
+
+  {% set c = r.coverage %}
+  {% if c %}
+  <section aria-labelledby="coverage">
+    <h2 class="section-title small" id="coverage">Structured details coverage</h2>
+    <p class="subtitle">
+      {{ num(c.extracted) }} of {{ num(c.listed_postings) }} listed postings
+      ({{ pct(c.coverage_pct) }}) have structured details. Skills, experience, and eligibility
+      below count only those postings.
+    </p>
+    {% if c.extracted < c.listed_postings %}
+    <p class="banner warn" role="status">
+      Processing is incomplete: {{ num(c.waiting_in_queue) }} waiting in the queue,
+      {{ num(c.failed_will_retry) }} failed and will be retried, {{ num(c.gave_up) }} gave up,
+      {{ num(c.skipped) }} skipped, and {{ num(c.not_queued_for_current_content) }} not yet
+      queued for their current text.
+    </p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section aria-labelledby="inventory">
+    <h2 class="section-title small" id="inventory">Current inventory</h2>
+    <p class="subtitle">
+      {% if r.inventory_complete %}As of the end of {{ fmt.day_only(r.inventory_day) }}.{% else %}As
+      of {{ fmt.day_only(r.inventory_day) }} (today, so far).{% endif %} A job posted more than once counts once as an opportunity.
+    </p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th scope="col">Availability</th><th scope="col">Postings</th><th scope="col">Opportunities</th><th scope="col">Seen that day</th><th scope="col">Carried forward</th></tr></thead>
+        <tbody>
+        {% for row in r.inventory %}
+          <tr><th scope="row">{{ R.STATE_LABELS.get(row.availability_state, row.availability_state) }}</th>
+            <td>{{ num(row.source_records) }}</td><td>{{ num(row.opportunities) }}</td>
+            <td>{{ num(row.seen_that_day) }}</td><td>{{ num(row.carried_forward) }}</td></tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">No postings.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">"Carried forward" means the board was not scanned completely that day, so the
+      last known state is kept.</p>
+  </section>
+
+  <section aria-labelledby="activity">
+    <h2 class="section-title small" id="activity">Daily activity</h2>
+    <p class="subtitle">Days in America/Chicago time. Initial imports are listings found when a
+      board was first added, not new openings.</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th scope="col">Day</th><th scope="col">Initial imports</th><th scope="col">Discovered</th><th scope="col">Updated</th><th scope="col">Possibly unavailable</th><th scope="col">Assumed inactive</th><th scope="col">Closed</th><th scope="col">Back again</th><th scope="col">Boards added</th></tr></thead>
+        <tbody>
+        {% for row in r.activity %}
+          <tr><th scope="row">{{ fmt.day_only(row.report_day) }}{{ provisional(row) }}</th>
+            <td>{{ num(row.initial_imports) }}</td><td>{{ num(row.discoveries) }}</td>
+            <td>{{ num(row.updates) }}</td><td>{{ num(row.became_possibly_unavailable) }}</td>
+            <td>{{ num(row.assumed_inactive) }}</td><td>{{ num(row.explicit_closures) }}</td>
+            <td>{{ num(row.reactivations) }}</td><td>{{ num(row.boards_baselined) }}</td></tr>
+        {% else %}
+          <tr><td colspan="9" class="muted">No activity recorded.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="skills">
+    <h2 class="section-title small" id="skills">Skills in demand</h2>
+    <p class="subtitle">Postings with structured details that mention each skill. "One of
+      several" means the listing accepts any of a set (for example "Python or Java"). A posting
+      can appear in more than one column, so columns do not add up.</p>
+    {% if r.skills %}
+    <p class="hint">Out of {{ num(r.skills[0].extracted_postings) }} postings with structured
+      details. {{ num(r.skills|length) }} skills, most required first.</p>
+    <div class="table-wrap scroll">
+      <table class="data-table">
+        <thead><tr><th scope="col">Skill</th><th scope="col">Required</th><th scope="col">Required, one of several</th><th scope="col">Preferred</th></tr></thead>
+        <tbody>
+        {% for row in r.skills %}
+          <tr><th scope="row">{{ row.skill }}</th><td>{{ num(row.required) }}</td>
+            <td>{{ num(row.required_choice) }}</td><td>{{ num(row.preferred) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">No structured details yet.</p>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="experience">
+    <h2 class="section-title small" id="experience">Experience</h2>
+    <p class="subtitle">Listed postings by what the listing asks for. Shares are of postings
+      with structured details.</p>
+    <div class="report-grid">
+    {% for measure, rows in r.experience.items() %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <caption>{{ R.MEASURE_LABELS.get(measure, measure) }}</caption>
+          <thead><tr><th scope="col">Value</th><th scope="col">Postings</th><th scope="col">Share</th></tr></thead>
+          <tbody>
+          {% for row in rows %}
+            <tr><th scope="row">{{ R.label(row.value) }}</th><td>{{ num(row.postings) }}</td>
+              <td>{{ pct(row.share_of_extracted) }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+    </div>
+  </section>
+
+  <section aria-labelledby="eligibility">
+    <h2 class="section-title small" id="eligibility">Sponsorship, authorization, citizenship, and clearance</h2>
+    <p class="subtitle">Only what listings state; nothing is inferred. Three ways to read each
+      share: of all listed postings, of those with structured details, and of those that state
+      a policy at all.</p>
+    <div class="report-grid wide">
+    {% for concept, rows in r.eligibility.items() %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <caption>{{ R.CONCEPT_LABELS.get(concept, concept) }}</caption>
+          <thead><tr><th scope="col">Statement</th><th scope="col">Postings</th><th scope="col">Of listed</th><th scope="col">Of with details</th><th scope="col">Of stating a policy</th></tr></thead>
+          <tbody>
+          {% for row in rows %}
+            <tr><th scope="row">{{ R.label(row.status) }}</th><td>{{ num(row.postings) }}</td>
+              <td>{{ pct(row.share_of_listed) }}</td><td>{{ pct(row.share_of_extracted) }}</td>
+              <td>{{ pct(row.share_of_stating) }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+    </div>
+  </section>
+
+  <section aria-labelledby="health">
+    <h2 class="section-title small" id="health">Pipeline health</h2>
+    <p class="subtitle">Board scans and AI extraction requests per day, for all boards.</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th scope="col">Day</th><th scope="col">Scans</th><th scope="col">Complete</th><th scope="col">Partial</th><th scope="col">Failed</th><th scope="col">Boards on hold</th><th scope="col">AI requests</th><th scope="col">AI failures</th><th scope="col">Kept jobs with details</th></tr></thead>
+        <tbody>
+        {% for row in r.health %}
+          <tr><th scope="row">{{ fmt.day_only(row.report_day) }}{{ provisional(row) }}</th>
+            <td>{{ num(row.scans) }}</td><td>{{ num(row.complete_scans) }}</td>
+            <td>{{ num(row.partial_scans) }}</td><td>{{ num(row.failed_scans) }}</td>
+            <td>{{ num(row.boards_on_hold) }}</td><td>{{ num(row.extraction_requests) }}</td>
+            <td>{{ num(row.extraction_failures) }}</td>
+            <td>{{ pct(row.retained_extraction_coverage_pct) }}</td></tr>
+        {% else %}
+          <tr><td colspan="9" class="muted">No scans recorded.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="boards">
+    <h2 class="section-title small" id="boards">Board freshness</h2>
+    <p class="subtitle">{{ r.boards|length }} enabled boards, oldest complete collection first,
+      as of the build. A board with no complete collection in {{ S.STALE_AFTER.total_seconds()|int // 3600 }}
+      hours is marked; its availability may be out of date.</p>
+    <div class="table-wrap scroll">
+      <table class="data-table">
+        <thead><tr><th scope="col">Employer</th><th scope="col">Source</th><th scope="col">Last complete collection</th><th scope="col">Latest scan</th></tr></thead>
+        <tbody>
+        {% for row in r.boards %}
+          {% set hours = row.hours_since_complete_collection %}
+          <tr><th scope="row">{{ row.employer_name }}</th>
+            <td>{{ fmt.SOURCE_LABELS.get(row.source_system, row.source_system) }}</td>
+            <td>{{ fmt.when(row.last_complete_collected_at) }}
+              {% if hours is none or hours > S.STALE_AFTER.total_seconds() / 3600 %} <span class="tag warn">out of date</span>{% endif %}
+              {% if row.on_hold %} <span class="tag warn">on hold</span>{% endif %}</td>
+            <td>{{ fmt.words(row.latest_scan_status) or "none" }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endif %}
+</main>
+{% endblock %}

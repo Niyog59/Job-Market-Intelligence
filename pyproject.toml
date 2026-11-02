@@ -17,8 +17,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "moto[s3]>=5.1,<6",
     "pytest>=8",
     "ruff>=0.6",
+]
+# S3 storage for raw responses and backups (jobmarket sync-raw, jobmarket backup --upload).
+aws = [
+    "boto3>=1.40,<2",
 ]
 # dbt models in analytics/ (jobmarket analytics build). Pinned: 1.11 needs no build-time
 # downloads; upgraded deliberately.
@@ -26,10 +31,12 @@ analytics = [
     "dbt-core==1.11.16",
     "dbt-postgres==1.11.0",
 ]
-# The job-search website (jobmarket web) and the owner account (Argon2id password hashing).
+# The job-search website (jobmarket web; gunicorn on a server) and the owner account
+# (Argon2id password hashing).
 web = [
     "argon2-cffi>=25.1,<26",
     "flask>=3.1,<4",
+    "gunicorn>=23,<24",
 ]
 
 [project.scripts]

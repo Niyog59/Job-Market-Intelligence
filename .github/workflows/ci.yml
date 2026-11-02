@@ -37,6 +37,9 @@ jobs:
       DB_USER: jobmarket
       DB_PASSWORD: ci-only-password
       JOBMARKET_REQUIRE_DB: "1"
+      # The backup round trip test must run here, not skip.
+      JOBMARKET_REQUIRE_PG_TOOLS: "1"
+      JOBMARKET_PG_BIN: /usr/lib/postgresql/17/bin
 
     steps:
       - uses: actions/checkout@v5
@@ -48,7 +51,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install
-        run: pip install -e ".[dev,analytics,web]"
+        run: pip install -e ".[dev,analytics,web,aws]"
+
+      - name: PostgreSQL 17 client tools (pg_dump must match the server's major version)
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Lint
         run: |
@@ -86,3 +95,68 @@ jobs:
 
       - name: Analytics models build and pass their tests
         run: jobmarket analytics build --target owner
+
+  deploy:
+    # The Docker deployment in deploy/: build the image and run the whole stack once, with
+    # Caddy serving https://localhost from its own local certificate. Throwaway values only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Settings for the test stack (placeholders replaced with throwaway values)
+        run: |
+          sed -e 's/^SITE_DOMAIN=.*/SITE_DOMAIN=localhost/' \
+              -e 's/^JOBMARKET_S3_BUCKET=.*/JOBMARKET_S3_BUCKET=not-used-in-ci/' \
+              -e 's/=CHANGE_ME$/=ci0only0throwaway/' env.example > .env
+          if grep -q CHANGE_ME .env; then exit 1; fi
+          docker compose config --quiet
+          docker compose --profile jobs config --quiet
+
+      - name: Build the application image
+        run: docker compose build web
+
+      - name: First start (database, migrations, grants, analytics)
+        run: |
+          docker compose up -d --wait db
+          run() { docker compose run --rm -T jobs jobmarket "$@"; }
+          run migrate
+          run sources sync
+          run analytics grant
+          run private grant
+          run private check-access
+          run analytics build
+
+      - name: Website over HTTPS through Caddy
+        run: |
+          docker compose up -d --wait web caddy
+          curl -fsS --retry 10 --retry-delay 3 --retry-all-errors -k https://localhost/healthz | grep -qx ok
+          curl -fsSk https://localhost/ | grep -q "Job search"
+          curl -fsSk https://localhost/reports | grep -q "Reports built"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -k https://localhost/profile)" = 302
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/)" = 308
+
+      - name: Only Caddy publishes ports
+        run: |
+          for service in db web; do
+            bindings=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$(docker compose ps -q "$service")")
+            echo "$service: $bindings"
+            case "$bindings" in "{}"|"null") ;; *) exit 1 ;; esac
+          done
+          if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then exit 1; fi
+
+      - name: Backup inside the container
+        run: |
+          docker compose run --rm -T jobs jobmarket backup create
+          docker compose run --rm -T jobs sh -c 'jobmarket backup verify data/backups/*Z'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Remove the test stack
+        if: always()
+        run: docker compose --profile jobs down --volumes

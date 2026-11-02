@@ -35,8 +35,9 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   (sanitized description, original links, freshness, availability).
 - A local job-search website (`jobmarket web`): search with filters and shareable URLs,
   duplicate groups shown once, archived jobs kept separate, and a detail page with the
-  extracted requirements, their source quotes, and the full description. It reads the
-  database through a read-only login and never calls a source or the model.
+  extracted requirements, their source quotes, and the full description, plus a read-only
+  Reports page over the reporting tables. It reads the database through a read-only login
+  and never calls a source or the model.
 - A private workspace for one owner account: an editable profile, saved jobs, application
   tracking with history, "new since last visit", and explainable comparisons of each job's
   requirements with the profile (Matched, Gap, or Needs review, with quotes; no score).
@@ -55,8 +56,10 @@ Not yet in place:
 - **Alert email delivery.** Alerts and recovery notices are written to the
   `notifications` outbox. An SMTP sender exists but no provider is configured, so no
   email is sent.
-- **Hosting.** The website runs only on this computer, on Flask's development server
-  (bound to 127.0.0.1), with one owner account and no registration.
+- **Hosting.** Deployment to one AWS EC2 server is prepared but not done: a Docker
+  Compose stack (PostgreSQL, gunicorn, Caddy with HTTPS), backups to S3, IAM policy
+  examples, and a step-by-step runbook (`deploy/`). It has been tested in CI and locally,
+  never on AWS. Until it is deployed, the website runs only on this computer.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
@@ -165,6 +168,9 @@ Optional settings:
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
 | `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
 | `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
+| `jobmarket backup create [--dir D] [--upload]` / `verify DIR` / `restore DIR --database NAME` | Back up the public and private schemas; check a backup; restore into an empty database |
+| `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3; list the backups in S3; download and verify one |
+| `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -561,6 +567,7 @@ answers later re-normalized in Python show their current clean-up
 | `rpt_pipeline_health_daily` | day: scans by outcome, holds, AI requests and tokens, extraction coverage |
 | `rpt_board_freshness` | board: latest scan, last complete collection and its age, baseline, hold |
 | `rpt_extraction_coverage` | population: extracted, queued, failed, skipped |
+| `rpt_build_info` | one row: when the build ran, and the newest complete collection and extraction it saw |
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.
@@ -647,6 +654,8 @@ The site shows whatever was last collected and extracted: run `jobmarket collect
 |---|---|
 | `/` | search results; all search state is in the query string (see Job search) |
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
+| `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
+| `/healthz` | `ok` when the app and its database login work (for container health checks) |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable
 database give a 503 page that says what to run.
@@ -667,6 +676,17 @@ structured details are pending or unavailable rather than "not stated". Back to 
 restores the search, the page, and the scroll position. Below 820 px the layout becomes one
 column.
 
+**Reports page.** Shows the reporting tables as they were at the last `jobmarket analytics
+build`: extraction coverage (with the queue, retries, and skips when processing is
+incomplete), current inventory, daily activity, skills in demand (required alone, required
+as one of several choices, and preferred kept in separate columns), experience,
+sponsorship and other eligibility statements with all three denominators, pipeline health,
+and board freshness. It says when the reports were built and what collection and
+extraction they include, and warns when job search already has a newer collection. The
+current day is marked as provisional. Before the first build the page says the reports do
+not exist yet. It reads `analytics_reporting` (`reporting_schema` in `WebConfig`) and
+computes nothing beyond the dbt models.
+
 **Security.** Pages run as the read-only login in read-only sessions. Descriptions are
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
@@ -674,7 +694,13 @@ strict Content-Security-Policy (scripts, styles, and fonts from the site only), 
 a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
 `web/static/fonts/OFL.txt`).
 
-**Limitations.** Flask's development server for local use only; salary only from Lever's
+**On a server.** `jobmarket web` uses Flask's development server and is for this computer
+only. A server runs `gunicorn jobmarket.web.wsgi:app` behind a reverse proxy that
+terminates HTTPS (`deploy/`). Set `WEB_TRUST_PROXY=1` there, and only there: the app then
+takes the scheme, host, and client address from the proxy's `X-Forwarded-*` headers, which
+the sign-in origin check and the `Secure` cookie need.
+
+**Limitations.** Salary only from Lever's
 structured range (never parsed from text); requirements are AI extractions checked for
 evidence but not for accuracy (the evaluation labels are not reviewed yet); listings first
 seen before content was stored for every listing, and not seen since, have no page.
@@ -783,11 +809,9 @@ version and description version used.
 - Without a current extraction (pending, failed, or skipped), or before the profile is saved,
   there is no comparison.
 
-**Backups.** Private data is not in the ingestion backup (`pg_dump -n public`). Back it up
-separately, into the ignored `data/backups/`:
-`pg_dump -n private -Fc -f data/backups/private_YYYYMMDD.dump` (as the owner login). Backups
-contain personal data: keep them out of Git and off shared drives. After restoring or moving
-the database, run `jobmarket migrate` and `jobmarket private grant` again.
+**Backups.** `jobmarket backup create` writes the private schema to its own file
+(`private.dump`), next to the ingestion data; see Backups and restore. Backups contain
+personal data: keep them out of Git and off shared drives.
 
 ## Listing data for display
 
@@ -838,6 +862,61 @@ store is reported as `omitted_too_long`, and an empty one as `empty`, never as c
 Raw responses are kept for four days. `jobmarket cleanup-raw` deletes older files and
 marks their rows `purged_at`; job records, history, and response metadata are never
 deleted. A replay of a purged response reports `expired`.
+
+## Backups and restore
+
+`jobmarket backup create` runs `pg_dump` (custom format) as the owner login and writes a
+directory named by its UTC time under the ignored `data/backups/`:
+
+| File | Contents |
+|---|---|
+| `ingestion.dump` | the `public` schema: boards, scans, postings, history, extractions, `schema_migrations` |
+| `private.dump` | the `private` schema: owner account (password hash only), sessions, profile, saved jobs, applications, visits |
+| `manifest.json` | sizes and SHA-256 checksums, server and `pg_dump` versions, migrations applied |
+
+The analytics schemas are not backed up; `jobmarket analytics build` recreates them. The
+directory is written as `<stamp>.partial` and renamed when complete. Dumps are made without
+owners or privileges, and database roles (with their passwords) are never in a backup, so a
+backup restores onto a fresh server whose roles were created separately. The password
+reaches `pg_dump` and `pg_restore` through `PGPASSWORD` in their environment, never on the
+command line. The client tools must be PostgreSQL 17 (`pg_dump` refuses a newer server);
+`JOBMARKET_PG_BIN` names their directory when they are not on the `PATH`.
+
+**Restore** (`jobmarket backup restore DIR --database NAME`) refuses any database that
+already contains a table, function, or schema other than an empty `public`, so it cannot
+overwrite data. It verifies every checksum first, then restores each part in one
+transaction (all or nothing), ingestion before private. Afterwards, with `DB_NAME` set to the
+restored database:
+
+```bash
+jobmarket migrate                 # apply migrations newer than the backup, if any
+jobmarket analytics grant         # read-only access for the analytics login
+jobmarket private grant           # private schema for the private login
+jobmarket private check-access    # confirm who can reach private data
+jobmarket analytics build         # recreate the reporting tables and serving views
+```
+
+The logins `jobmarket_analytics` and `jobmarket_private` must exist first (see Analytics
+and Private workspace for how they are created).
+
+**S3.** With `pip install -e ".[aws]"` (boto3) and `JOBMARKET_S3_BUCKET` set, `backup create
+--upload` (or `backup upload DIR`) copies a verified backup to a private bucket, and
+`jobmarket sync-raw` copies raw responses before `cleanup-raw` removes them locally. Every
+object is written with S3-managed encryption (SSE-S3). Keys are separated by purpose so
+access and lifecycle rules can differ:
+
+| Prefix | Contents |
+|---|---|
+| `raw/<source>/<board>/` | raw responses, same paths as under `data/raw/` |
+| `backups/ingestion/<stamp>/` | `ingestion.dump` and the manifest |
+| `backups/private/<stamp>/` | `private.dump` and the manifest |
+
+Credentials come from the AWS SDK's default chain (on EC2, the instance role), so no access
+keys are configured. Nothing in the code deletes S3 objects: retention is a bucket lifecycle
+rule (30 days for backups and for raw responses). A dump's manifest is uploaded after the
+dump, so `backup list` shows only finished uploads; `backup fetch STAMP` downloads both parts
+and verifies them before a restore. Local copies under `data/backups/` are not deleted
+automatically.
 
 ## Posting history
 
@@ -1002,7 +1081,7 @@ transaction (such as `CREATE INDEX CONCURRENTLY`).
 ## Tests
 
 ```bash
-pip install -e ".[dev,analytics,web]"
+pip install -e ".[dev,analytics,web,aws]"
 ruff check .
 ruff format --check .
 pytest
@@ -1027,6 +1106,11 @@ Database tests create a temporary schema, work only inside it, and drop it after
 they do not modify existing tables in the configured database. The role needs permission
 to create schemas in that database (the database owner has it).
 
+S3 tests use moto's in-memory S3 (no network, no AWS account). The backup round trip
+(`pg_dump`, then `pg_restore` into a second database) creates and drops two temporary
+databases, so it runs only when the login may create databases and the PostgreSQL 17 client
+tools are available; otherwise it is skipped, unless `JOBMARKET_REQUIRE_PG_TOOLS=1` (CI).
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes and pull requests to `main`: it starts a
@@ -1034,5 +1118,32 @@ PostgreSQL 17 service container, installs the package, runs `ruff` and `pytest` 
 `JOBMARKET_REQUIRE_DB=1`, runs `jobmarket check-db`, applies the migrations twice to
 confirm the second run changes nothing, loads the board registry, runs the history
 scenarios, runs the history integrity checks, and builds the analytics models with their
-data tests. Collection tests use a scripted HTTP
+data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
+
+A second job checks the deployment in `deploy/`: it builds the Docker image, starts the
+Compose stack with throwaway passwords, runs the first-start commands, requests pages over
+HTTPS from Caddy (with its local certificate for `localhost`), checks that only Caddy
+publishes ports, and makes a backup inside the container. It never contacts AWS.
+
+## Deployment
+
+`deploy/` holds everything for one server (EC2 t3.micro, Amazon Linux 2023) and no
+secrets:
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | one image for the website and the command-line jobs (Python 3.11, PostgreSQL 17 client tools) |
+| `docker-compose.yml` | `db` (PostgreSQL 17, no published port, data in a volume), `web` (gunicorn, read-only filesystem, analytics and private logins only), `caddy` (ports 80 and 443, Let's Encrypt), and `jobs` for running commands by hand |
+| `Caddyfile` | HTTPS for `SITE_DOMAIN`, HTTP redirected to HTTPS |
+| `postgres-init/10-jobmarket.sh` | on the first start: the three logins and the database owned by the non-superuser owner login |
+| `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
+| `aws/` | IAM role policy (S3 prefixes only, no delete), EC2 trust policy, bucket policy (HTTPS only), lifecycle rules (30 days) |
+| `RUNBOOK.md` | ordered steps from an empty AWS account to the running site, updates, rollback, recovery |
+| `SIZING.md` | memory measurements and the 1 GiB estimate |
+
+All containers restart unless stopped, and Docker starts at boot. Visitors reach only
+Caddy: there is no SSH (administration uses AWS Systems Manager Session Manager), and the
+database is not exposed. Public pages read through the read-only login; nothing a visitor
+does starts a collection, an AI call, or a change to job data (signing in records sign-in
+attempts and sessions in the private schema).

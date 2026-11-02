@@ -1,11 +1,11 @@
-"""The job-search website: search results and job detail pages, server-rendered with Flask
-templates and a small script for tabs, evidence, and scroll restoration, plus the owner's
-private pages after signing in (jobmarket.web.auth).
+"""The job-search website: search results, job detail pages, and the reports page,
+server-rendered with Flask templates and a small script for tabs, evidence, and scroll
+restoration, plus the owner's private pages after signing in (jobmarket.web.auth).
 
 Public pages only read: they use the read-only analytics login in read-only sessions.
 Private pages use the private login, which can reach only the private schema. Browsing never
-calls a source, the model, or dbt. The site is meant to run locally (`jobmarket web`, bound
-to 127.0.0.1).
+calls a source, the model, or dbt. Locally it runs with `jobmarket web` (bound to
+127.0.0.1); on a server, with gunicorn behind a reverse proxy (jobmarket.web.wsgi, deploy/).
 """
 
 from urllib.parse import parse_qsl
@@ -14,7 +14,7 @@ import psycopg
 from flask import Flask, abort, g, render_template, request
 from werkzeug.datastructures import MultiDict
 
-from jobmarket import db, search, workspace
+from jobmarket import db, reports, search, workspace
 from jobmarket.web import auth, private_pages
 from jobmarket.web import format as fmt
 from jobmarket.web.config import WebConfig, load_web_config
@@ -78,6 +78,7 @@ def create_app(config: WebConfig | None = None) -> Flask:
             "fmt": fmt,
             "now": now,
             "S": search,
+            "R": reports,
         }
 
     def results_for(args) -> tuple[search.SearchResult, search.Choices]:
@@ -107,6 +108,13 @@ def create_app(config: WebConfig | None = None) -> Flask:
             "edu_status": workspace.EDUCATION_STATUS,
         }
 
+    @app.get("/healthz")
+    def health():
+        # For container health checks: the app answers and its database login works.
+        conn().execute("SELECT 1")
+        return "ok\n", 200, {"Content-Type": "text/plain; charset=utf-8",
+                             "Cache-Control": "no-store"}  # fmt: skip
+
     @app.get("/")
     def results():
         result, choices = results_for(request.args)
@@ -129,6 +137,18 @@ def create_app(config: WebConfig | None = None) -> Flask:
                 if g.get("owner") else None)  # fmt: skip
         return render_template("detail.html", page=page, browse=browse, back=browse.params,
                                mine=mine)  # fmt: skip
+
+    @app.get("/reports")
+    def reports_page():
+        population = request.args.get("population", "kept")
+        try:
+            data = reports.load_reports(conn(), population, config.reporting_schema)
+        except reports.ReportsUnavailable:
+            data = None
+        # The live collection time, to say when the reports are behind job search.
+        status = search.site_status(conn(), g.now, config.serving_schema)
+        return render_template("reports.html", r=data, status=status,
+                               population=data.population if data else "kept")  # fmt: skip
 
     @app.errorhandler(404)
     def not_found(_exc):

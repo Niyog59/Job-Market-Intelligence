@@ -1,0 +1,14 @@
+# Build context for deploy/Dockerfile: only what the image needs. Secrets, local data,
+# and private files must never enter an image layer.
+*
+!pyproject.toml
+!README.md
+!src/
+!analytics/
+!config/
+analytics/target/
+analytics/logs/
+analytics/dbt_packages/
+**/__pycache__/
+**/*.py[cod]
+**/.DS_Store

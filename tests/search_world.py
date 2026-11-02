@@ -184,6 +184,7 @@ def world(db_settings, tmp_path_factory):
 
     w = World()
     w.conn, w.schema, w.source = conn, analytics.schema("serving"), schema
+    w.analytics = analytics  # tests that need more models (reports) build them on top
     w.ids = {int(k): v for k, v in ids.items()}
     w.choices = load_choices(conn, w.schema)
     yield w

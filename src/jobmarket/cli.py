@@ -1132,6 +1132,74 @@ def _analytics(settings: Settings, args) -> int:
     return EXIT_OK if outcome.success else EXIT_FAILURE
 
 
+def _s3_store():
+    from jobmarket.s3store import S3Store, load_s3_config
+
+    return S3Store(load_s3_config())
+
+
+def _backup(settings: Settings, args) -> int:
+    from dataclasses import replace
+
+    from jobmarket import backup
+    from jobmarket.s3store import S3Unavailable
+
+    try:
+        if args.backup_command == "create":
+            directory = backup.create_backup(settings, Path(args.dir), system_clock())
+            manifest = backup.verify_backup(directory)
+            for part, info in manifest["parts"].items():
+                print(f"  {part:9} {info['file']:15} {info['bytes']:>12,} bytes")
+            print(f"Backup written to {directory} ({manifest['migrations']['applied']} "
+                  "migrations applied).")  # fmt: skip
+            if args.upload:
+                keys = backup.upload_backup(_s3_store(), directory)
+                print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys).")
+        elif args.backup_command == "upload":
+            keys = backup.upload_backup(_s3_store(), Path(args.directory))
+            for key in keys:
+                print(f"  {key}")
+            print(f"Uploaded {len(keys)} files to S3 (encrypted with S3-managed keys).")
+        elif args.backup_command == "list":
+            found = backup.list_backups(_s3_store())
+            for stamp, parts in found.items():
+                print(f"  {stamp}  {', '.join(parts)}")
+            print(f"{len(found)} backup(s) in S3.")
+        elif args.backup_command == "fetch":
+            directory = backup.fetch_backup(_s3_store(), args.stamp, Path(args.dir))
+            print(f"Downloaded and verified {directory}.")
+        elif args.backup_command == "verify":
+            manifest = backup.verify_backup(Path(args.directory))
+            print(f"Backup {manifest['stamp']} is complete and matches its checksums.")
+        else:
+            target = replace(settings, db_name=args.database)
+            result = backup.restore_backup(target, Path(args.directory))
+            print(f"Restored into {result.database}: {result.postings:,} postings, "
+                  f"{result.owner_accounts} owner account(s), {result.migrations_applied} "
+                  f"migrations (backup recorded {result.migrations_expected}).")  # fmt: skip
+            print("Next, with DB_NAME set to this database: jobmarket migrate; jobmarket "
+                  "analytics grant; jobmarket private grant; jobmarket private check-access; "
+                  "jobmarket analytics build.")  # fmt: skip
+    except (backup.BackupError, S3Unavailable) as exc:
+        print(f"Backup error: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _sync_raw(settings: Settings, args) -> int:
+    from jobmarket.connectors import SOURCE_SYSTEMS
+    from jobmarket.s3store import S3Unavailable, sync_raw
+
+    try:
+        result = sync_raw(_s3_store(), raw_dir(), SOURCE_SYSTEMS)
+    except S3Unavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_FAILURE
+    print(f"Uploaded {result.uploaded} raw response file(s) to S3; "
+          f"{result.already_present} were already there.")  # fmt: skip
+    return EXIT_OK
+
+
 def _refingerprint(settings: Settings, args) -> int:
     with db.connect(settings, autocommit=True) as conn:
         result = refingerprint_versions(conn, system_clock())
@@ -1328,6 +1396,25 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--board", metavar="TOKEN")
     history.add_argument("--job", metavar="SOURCE_ID", help="the source's job id")
 
+    bk = commands.add_parser("backup", help="database backups (local, S3) and restores")
+    bk_cmds = bk.add_subparsers(dest="backup_command", required=True)
+    bk_create = bk_cmds.add_parser("create", help="dump the public and private schemas")
+    bk_create.add_argument("--dir", default="data/backups", help="parent directory")
+    bk_create.add_argument("--upload", action="store_true", help="then upload it to S3")
+    bk_upload = bk_cmds.add_parser("upload", help="upload an existing backup directory to S3")
+    bk_upload.add_argument("directory")
+    bk_cmds.add_parser("list", help="backups stored in S3")
+    bk_fetch = bk_cmds.add_parser("fetch", help="download one backup from S3 and verify it")
+    bk_fetch.add_argument("stamp", help="the backup's name, like 20261101T060000Z")
+    bk_fetch.add_argument("--dir", default="data/backups", help="parent directory")
+    bk_verify = bk_cmds.add_parser("verify", help="check a backup directory's checksums")
+    bk_verify.add_argument("directory")
+    bk_restore = bk_cmds.add_parser("restore", help="restore into a new, empty database")
+    bk_restore.add_argument("directory")
+    bk_restore.add_argument("--database", required=True, help="the empty target database")
+
+    commands.add_parser("sync-raw", help="upload raw responses not yet in S3")
+
     commands.add_parser(
         "refingerprint",
         help="evaluate stored versions under the current normalization rules",
@@ -1401,6 +1488,8 @@ HANDLERS = {
     "web": _web,
     "owner": _owner,
     "private": _private,
+    "backup": _backup,
+    "sync-raw": _sync_raw,
 }
 
 
@@ -1420,6 +1509,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILURE
     except RegistryError as exc:
         print(f"Registry error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
     except psycopg.Error as exc:
         print(f"Database error for {_describe(settings)}: {exc}".rstrip(), file=sys.stderr)

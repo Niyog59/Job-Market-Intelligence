@@ -73,3 +73,9 @@ models:
     columns:
       - name: population
         data_tests: [unique, not_null]
+
+  - name: rpt_build_info
+    description: "Grain: exactly one row. When the reporting build ran, the newest complete collection, and the newest AI extraction it saw."
+    columns:
+      - name: built_at
+        data_tests: [not_null]
