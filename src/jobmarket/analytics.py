@@ -9,7 +9,7 @@ build runs as the jobmarket_analytics login, which can only read ingestion table
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import psycopg
@@ -121,3 +121,138 @@ def read_only_check(conn: psycopg.Connection, source_schema: str = "public") -> 
         "SELECT has_schema_privilege(%s, %s, 'CREATE')", (ANALYTICS_ROLE, source_schema)
     ).fetchone()[0]
     return checks
+
+
+# --- Building and publishing (scheduled runs) ----------------------------------------------
+
+LAYERS = (
+    "analytics_staging",
+    "analytics_intermediate",
+    "analytics_reporting",
+    "analytics_serving",
+)
+SHADOW = "next__"  # where a new build is made and tested
+RETIRED = "old__"  # the previous build, for the moment of the swap
+PUBLISH_LOCK_KEY = 4_815_162_345
+# How long dropping an old or leftover build may wait for readers still using it. Waiting
+# longer would queue new website queries behind the DROP; giving up only leaves the old
+# schemas for the next run to remove.
+DROP_LOCK_TIMEOUT = "30s"
+
+
+class PublishBusy(Exception):
+    """Another build-and-publish is running."""
+
+
+@dataclass
+class PublishResult:
+    published: bool
+    failures: list[str]
+    built_at: object = None  # rpt_build_info.built_at of the published build
+    retired_left: list[str] = field(default_factory=list)  # old schemas still in use
+
+
+def _schemas(prefix: str, kind: str) -> list[str]:
+    return [f"{prefix}{kind}{layer}" for layer in LAYERS]
+
+
+def _drop(conn: psycopg.Connection, names: list[str], lock_timeout: str) -> list[str]:
+    """Drop schemas that exist; return those that could not be dropped in time."""
+    left = []
+    for name in names:
+        try:
+            with conn.transaction():
+                conn.execute("SELECT set_config('lock_timeout', %s, true)", (lock_timeout,))
+                conn.execute(
+                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(name))
+                )
+        except psycopg.errors.LockNotAvailable:
+            left.append(name)
+    return left
+
+
+def validate_build(conn: psycopg.Connection, prefix: str) -> list[str]:
+    """Checks a new build must pass before it may replace the live one (beyond dbt's own
+    data tests): every schema exists, the build record has exactly one row, and the views
+    job search reads can be queried."""
+    problems = []
+    for name in _schemas(prefix, SHADOW):
+        if conn.execute("SELECT to_regnamespace(%s)", (name,)).fetchone()[0] is None:
+            problems.append(f"schema {name} was not built")
+    if problems:
+        return problems
+    reporting, serving = (sql.Identifier(f"{prefix}{SHADOW}{layer}") for layer in LAYERS[2:])
+    rows = conn.execute(
+        sql.SQL("SELECT count(*) FROM {}.rpt_build_info").format(reporting)
+    ).fetchone()[0]
+    if rows != 1:
+        problems.append(f"rpt_build_info has {rows} rows, expected 1")
+    for view in ("srv_postings", "srv_boards"):
+        try:
+            with conn.transaction():
+                conn.execute(sql.SQL("SELECT 1 FROM {}.{} LIMIT 1").format(
+                    serving, sql.Identifier(view)))  # fmt: skip
+        except psycopg.Error as exc:
+            problems.append(f"{view} cannot be read: {exc}".strip())
+    return problems
+
+
+def build_and_publish(
+    conn: psycopg.Connection,
+    target: str = "analytics",
+    source_schema: str = "public",
+    prefix: str = "",
+    lock_timeout: str = DROP_LOCK_TIMEOUT,
+) -> PublishResult:
+    """Rebuild every analytics schema in shadow schemas, test and validate the result, and
+    only then replace the live schemas with it in one transaction.
+
+    conn must be autocommit and logged in as the owner of the analytics schemas (the login
+    dbt builds as). Until the swap commits, visitors keep reading the previous build; a
+    failed build or validation leaves the live schemas exactly as they were and drops the
+    shadow copy. Renaming a schema keeps every view pointing at the same objects, so the
+    swapped-in views read the swapped-in tables.
+
+    The swap only renames schemas, which takes no lock that a reader holds, so it never
+    waits for website queries. The previous build is dropped afterwards; if a reader still
+    uses it, it is left in place (retired_left) and removed by the next run.
+    """
+    if not conn.execute("SELECT pg_try_advisory_lock(%s)", (PUBLISH_LOCK_KEY,)).fetchone()[0]:
+        raise PublishBusy("another report build is running")
+    shadow, retired, live = (_schemas(prefix, SHADOW), _schemas(prefix, RETIRED),
+                             _schemas(prefix, ""))  # fmt: skip
+    try:
+        # Leftovers of an interrupted or busy earlier attempt.
+        busy = _drop(conn, shadow + retired, lock_timeout)
+        if busy:
+            return PublishResult(False, [f"an earlier build is still in use: {', '.join(busy)}"])
+        outcome = run_dbt(
+            ["build"],
+            target=target,
+            variables={"source_schema": source_schema, "schema_prefix": f"{prefix}{SHADOW}"},
+            quiet=True,
+        )
+        failures = list(outcome.failures)
+        if outcome.success:
+            failures += validate_build(conn, prefix)
+        elif not failures:
+            failures.append("dbt build failed")
+        if failures:
+            _drop(conn, shadow, lock_timeout)
+            return PublishResult(False, failures)
+        with conn.transaction():
+            for current, old in zip(live, retired, strict=True):
+                if conn.execute("SELECT to_regnamespace(%s)", (current,)).fetchone()[0]:
+                    conn.execute(sql.SQL("ALTER SCHEMA {} RENAME TO {}").format(
+                        sql.Identifier(current), sql.Identifier(old)))  # fmt: skip
+            for new, current in zip(shadow, live, strict=True):
+                conn.execute(sql.SQL("ALTER SCHEMA {} RENAME TO {}").format(
+                    sql.Identifier(new), sql.Identifier(current)))  # fmt: skip
+        retired_left = _drop(conn, retired, lock_timeout)
+        built_at = conn.execute(
+            sql.SQL("SELECT built_at FROM {}.rpt_build_info").format(
+                sql.Identifier(f"{prefix}analytics_reporting"))
+        ).fetchone()[0]  # fmt: skip
+        return PublishResult(True, [], built_at, retired_left)
+    finally:
+        conn.execute("SELECT pg_advisory_unlock(%s)", (PUBLISH_LOCK_KEY,))

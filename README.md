@@ -165,6 +165,7 @@ Optional settings:
 | `jobmarket extract disagreements [--limit N]` | Listings where the AI and the screening rules disagree |
 | `jobmarket eval prepare --selection FILE` / `eval run --split S [--final]` / `eval report --split S [--final] [--cases]` | Evaluate extraction against labelled cases |
 | `jobmarket analytics build [--select S]` / `test` / `docs` | Build and test the dbt analytics models; generate their documentation |
+| `jobmarket analytics publish` | Build and test in shadow schemas, then replace the live analytics schemas in one step |
 | `jobmarket analytics grant` / `check-access` | Give the analytics login read-only access; verify it |
 | `jobmarket owner create --username U` / `reset-password` / `status` / `sign-out-all` | The single owner account (passwords at a hidden prompt) |
 | `jobmarket private grant` / `check-access` | Give the private login the private schema only; verify which logins reach private data |
@@ -507,9 +508,23 @@ ingestion schema, and on a normal install it runs as a separate login,
 **Build.** `jobmarket analytics build` runs `dbt build` (models and all data tests);
 `--select reporting` limits it. `jobmarket analytics test` runs only the tests, and
 `jobmarket analytics docs` generates dbt documentation with the dependency graph (`cd
-analytics && dbt docs serve --profiles-dir .`). The same commands are the entry point for
-later scheduling. Running dbt directly works too:
-`cd analytics && dbt build --profiles-dir .`.
+analytics && dbt docs serve --profiles-dir .`). Running dbt directly works too:
+`cd analytics && dbt build --profiles-dir .`. `analytics build` rebuilds the live schemas in
+place, so during a build (or after a failed one) job search and reports can be missing:
+use it for development.
+
+**Publish (servers and scheduled runs).** `jobmarket analytics publish` builds every model
+into shadow schemas (`next__analytics_*`) and runs all data tests there, then checks that
+each schema exists, `rpt_build_info` has exactly one row, and the job-search views can be
+read. Only then does it rename the live schemas away and the shadow schemas into place, in
+one transaction. Visitors therefore see either the previous build or the new one, never a
+mix. The previous build is dropped afterwards; a reader still using it is not waited on
+for more than 30 seconds, and leftovers are removed by the next run. A failed build or
+check publishes nothing: the website keeps the last good reports with their build time,
+the Reports page says the latest rebuild failed, newly collected data stays in the
+ingestion tables, and the failure is recorded (one alert, one recovery notice later; see
+Scheduled operation). Before the first publish, the Reports page says "Reports not ready
+yet". Only one publish runs at a time.
 
 ### Counting rules
 

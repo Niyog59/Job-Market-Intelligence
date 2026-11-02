@@ -25,8 +25,8 @@
 <main id="main" class="page reports">
 {% if r is none %}
   <p class="notice">
-    The reports have not been built yet. They are created by the analytics build
-    (<code>jobmarket analytics build</code>); job search works without them.
+    <strong>Reports not ready yet.</strong> They appear after the first successful analytics
+    build has been checked and published. Job search already shows every collected listing.
   </p>
 {% else %}
   {% set b = r.build %}
@@ -47,6 +47,12 @@
     details (AI extraction) up to {{ fmt.when(b.latest_extraction) }}.
     Reports change only when the analytics are rebuilt; collection runs only when started by hand.
   </p>
+  {% if failed_at %}
+  <p class="banner warn" role="status">
+    The latest report rebuild ({{ fmt.when(failed_at) }}) did not pass its checks. These are
+    the last good reports; job search is not affected.
+  </p>
+  {% endif %}
   {% if status.last_complete_collection and (b.latest_complete_collection is none
         or status.last_complete_collection > b.latest_complete_collection) %}
   <p class="banner warn" role="status">

@@ -1,6 +1,7 @@
 """Command-line entry point: ``jobmarket <command>``."""
 
 import argparse
+import os
 import sys
 import time
 from collections.abc import Sequence
@@ -1113,6 +1114,8 @@ def _analytics(settings: Settings, args) -> int:
             return EXIT_FAILURE
         print("Read-only on ingestion tables, as intended.")
         return EXIT_OK
+    if command == "publish":
+        return _analytics_publish(settings, args)
     dbt_args = {"build": ["build"], "test": ["test"], "docs": ["docs", "generate"]}[command]
     if command == "build" and args.select:
         # Run only tests whose parents are all selected, so a partial build does not test
@@ -1197,6 +1200,46 @@ def _sync_raw(settings: Settings, args) -> int:
         return EXIT_FAILURE
     print(f"Uploaded {result.uploaded} raw response file(s) to S3; "
           f"{result.already_present} were already there.")  # fmt: skip
+    return EXIT_OK
+
+
+def _analytics_publish(settings: Settings, args) -> int:
+    """Build in shadow schemas, validate, publish atomically, and record the outcome (which
+    alerts on the first failure and sends one recovery notice after it)."""
+    from dataclasses import replace
+
+    from jobmarket import analytics, operations
+
+    target = getattr(args, "target", "analytics")
+    builder = settings
+    if target == "analytics":
+        login = os.environ.get("ANALYTICS_DB_USER", "").strip() or analytics.ANALYTICS_ROLE
+        builder = replace(settings, db_user=login,
+                          db_password=os.environ.get("ANALYTICS_DB_PASSWORD", ""))  # fmt: skip
+    started = system_clock()
+    try:
+        with db.connect(builder, autocommit=True) as conn:
+            result = analytics.build_and_publish(conn, target=target)
+    except analytics.PublishBusy as exc:
+        print(f"Not started: {exc}.", file=sys.stderr)
+        return EXIT_BUSY
+    except analytics.AnalyticsUnavailable as exc:
+        result = analytics.PublishResult(False, [str(exc)])
+    finished = system_clock()
+    with db.connect(settings, autocommit=True) as conn:
+        if result.published:
+            operations.record_step(conn, "report_publish", started, finished, "succeeded",
+                                   {"built_at": result.built_at.isoformat()})  # fmt: skip
+        else:
+            operations.record_step(conn, "report_publish", started, finished, "failed",
+                                   {"failures": result.failures[:20]},
+                                   "; ".join(result.failures)[:2000] or "build failed")  # fmt: skip
+    if not result.published:
+        for failure in result.failures:
+            print(f"  {failure}", file=sys.stderr)
+        print("Not published: the website keeps the previous reports.", file=sys.stderr)
+        return EXIT_FAILURE
+    print(f"Published reports built {_when(result.built_at)}.")
     return EXIT_OK
 
 
@@ -1357,11 +1400,14 @@ def build_parser() -> argparse.ArgumentParser:
     an_cmds = an.add_subparsers(dest="analytics_command", required=True)
     an_build = an_cmds.add_parser("build", help="rebuild and test every analytics model")
     an_build.add_argument("--select", metavar="SELECTOR", help="dbt selector, e.g. reporting")
+    an_publish = an_cmds.add_parser(
+        "publish", help="build and test in shadow schemas, then replace the live ones at once"
+    )
     an_cmds.add_parser("test", help="run the analytics data tests only")
     an_cmds.add_parser("docs", help="generate dbt documentation and the dependency graph")
     an_cmds.add_parser("grant", help="give the analytics login read-only access (owner)")
     an_cmds.add_parser("check-access", help="show what the analytics login may do")
-    for cmd in (an_build,):
+    for cmd in (an_build, an_publish):
         cmd.add_argument(
             "--target",
             default="analytics",

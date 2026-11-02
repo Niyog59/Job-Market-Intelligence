@@ -111,7 +111,8 @@ def test_a_newer_collection_than_the_build_is_announced(world, db_settings, repo
 def test_before_the_first_build(world, db_settings):
     response, html = page(world, db_settings, "no_such_reporting_schema")
     assert response.status_code == 200
-    assert "The reports have not been built yet" in html
+    assert "Reports not ready yet." in html
+    assert "0 of" not in html  # no misleading zeros
     assert 'href="/"' in html  # job search still works
 
 
@@ -120,3 +121,22 @@ def test_reports_are_linked_and_public(world, db_settings, reporting):
     assert 'href="/reports"' in results
     _, html = page(world, db_settings, reporting)
     assert "Sign in" in html and "Sign out" not in html
+
+
+def test_a_failed_rebuild_is_labeled_and_the_last_good_reports_stay(world, db_settings, reporting):
+    from datetime import UTC, datetime
+
+    from jobmarket.operations import record_step
+
+    _, before = page(world, db_settings, reporting)
+    assert "did not pass its checks" not in before
+    later = datetime(2099, 1, 1, tzinfo=UTC)  # after any build time
+    record_step(world.conn, "report_publish", later, later, "failed", error="dbt test failed")
+    try:
+        _, html = page(world, db_settings, reporting)
+    finally:
+        world.conn.execute("DELETE FROM pipeline_step_runs")
+        world.conn.execute("DELETE FROM ops_incidents")
+        world.conn.execute("DELETE FROM notifications")
+    assert "did not pass its checks. These are the last good reports" in html
+    assert "Reports built" in html

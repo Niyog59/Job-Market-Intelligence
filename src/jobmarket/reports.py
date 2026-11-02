@@ -208,3 +208,18 @@ def load_reports(
         health=health,
         boards=boards,
     )
+
+
+def failed_rebuild_since(conn: psycopg.Connection, built_at) -> datetime | None:
+    """When the most recent report rebuild failed, if it failed after the published build
+    was made (the page then says it shows the last good reports). None if there is no
+    failure since, or the pipeline record does not exist (before migration 0014)."""
+    if conn.execute("SELECT to_regclass('pipeline_step_runs')").fetchone()[0] is None:
+        return None
+    row = conn.execute(
+        "SELECT finished_at, status FROM pipeline_step_runs WHERE step = 'report_publish' "
+        "ORDER BY finished_at DESC, step_run_id DESC LIMIT 1"
+    ).fetchone()
+    if row and row[1] == "failed" and (built_at is None or row[0] > built_at):
+        return row[0]
+    return None
