@@ -96,6 +96,56 @@ jobs:
       - name: Analytics models build and pass their tests
         run: jobmarket analytics build --target owner
 
+  spark:
+    # The PySpark rebuild of three reporting models must equal dbt's tables row for row.
+    # A job of its own, so the test job does not wait for Java and the PySpark download.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: jobmarket
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: job_market_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jobmarket -d job_market_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: job_market_ci
+      DB_USER: jobmarket
+      DB_PASSWORD: ci-only-password
+      JOBMARKET_REQUIRE_DB: "1"
+      JOBMARKET_REQUIRE_SPARK: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install
+        run: pip install -e ".[dev,analytics,spark]"
+
+      - name: Spark and dbt give the same tables
+        run: pytest -v tests/test_spark_parity.py
+
   airflow:
     # The Airflow DAGs (deploy/airflow): they import, keep noon and 9 PM local time across
     # daylight saving, make one catch-up run after downtime, and run every step in order

@@ -177,6 +177,8 @@ Optional settings:
 | `jobmarket backup prune --keep N` | Keep the newest N verified local backups; delete older ones only if confirmed in S3 |
 | `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
 | `jobmarket tableau sync [--dry-run]` | Copy the published dashboard tables to the Google Sheet behind Tableau Public |
+| `jobmarket spark export [--dir D]` | Write three reporting models' inputs, and dbt's results over them, to Parquet from one database snapshot |
+| `jobmarket spark parity [--dir D]` | Rebuild those models in PySpark and compare them with dbt's results row for row |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -627,6 +629,29 @@ Text search uses `posting_search_vector(title, description_text)`, an indexed fu
 the ingestion schema (migration 0011); `srv_postings.search_vector` calls it, so searches
 through the view use the index. Selecting that column for every listing computes every
 vector, so search queries name the columns they need.
+
+### PySpark comparison
+
+Three reporting models are also written in PySpark (`src/jobmarket/spark_models.py`), to
+measure Spark against PostgreSQL and dbt on this data: `rpt_skill_demand` (including the
+unpacking of the JSON skill arrays), `rpt_jobs_current`, and `rpt_weekly_jobs`. dbt stays the
+pipeline: nothing scheduled, and nothing in the server image, uses Spark.
+
+1. Install `pip install -e ".[analytics,spark]"` and Java 17 or 21 (`java -version`).
+2. `jobmarket spark export` reads the models' inputs from `analytics_staging` and
+   `analytics_intermediate` through the read-only analytics login and writes them to
+   `data/spark/inputs/` as Parquet. In the same database snapshot it runs dbt's compiled SQL
+   of the three models and writes the results to `data/spark/dbt/`. `data/` is never
+   committed.
+3. `jobmarket spark parity` rebuilds the models with Spark in local mode from `inputs/` and
+   compares each with `dbt/`: the same columns in the same order and the same rows, each
+   row as many times. Numbers must be equal exactly; the only rounding is the model's own
+   (`share_of_extracted`, one decimal place). Any difference exits with `1`.
+
+The reference is dbt's SQL run in the export's snapshot, not the published tables. Those were
+built at the last publication, while the views they read change with every collection (and
+a week becomes complete at midnight), so comparing the two would show differences that
+have nothing to do with Spark.
 
 ## Job search
 
@@ -1171,7 +1196,9 @@ ruff format --check .
 pytest
 ```
 
-Analytics and website tests are skipped when dbt or Flask is not installed. Tests marked `db` need a reachable database configured through the `DB_*` variables.
+Analytics and website tests are skipped when dbt or Flask is not installed. The Spark tests
+(`tests/test_spark_parity.py`) need the `spark` extra and Java, and are skipped without them
+unless `JOBMARKET_REQUIRE_SPARK=1` (CI's `spark` job). Tests marked `db` need a reachable database configured through the `DB_*` variables.
 Without one they are skipped locally. Set `JOBMARKET_REQUIRE_DB=1` to make a missing
 database a failure instead (CI does this).
 
@@ -1204,6 +1231,10 @@ confirm the second run changes nothing, loads the board registry, runs the histo
 scenarios, runs the history integrity checks, and builds the analytics models with their
 data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
+
+The `spark` job installs Java 21 and the `spark` extra and runs the Spark parity tests against
+a PostgreSQL 17 service. It runs beside the `test` job, so the main tests do not wait for
+the PySpark download.
 
 The `airflow` job installs Airflow 3.3.2 with its official constraints and runs the DAG
 tests in `deploy/airflow/tests`.
