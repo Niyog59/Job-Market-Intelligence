@@ -80,6 +80,14 @@ def test_evening_run_does_every_step_in_order(stubs):
     assert calls(stubs)[9].startswith(cleanup)
 
 
+def test_the_logical_date_decides_when_the_run_starts_after_midnight(stubs):
+    # `airflow dags test DAG DATE` (the CI deploy job) sets run_after to the moment it starts,
+    # not to DATE. The 21:00 slot tested at 01:00 is still the evening run.
+    dag_run = load().collection.test(run_after=EVENING.add(hours=4), logical_date=EVENING)
+    states = {ti.task_id: str(ti.state) for ti in dag_run.get_task_instances()}
+    assert set(states.values()) == {"success"}
+
+
 def test_noon_run_skips_the_evening_only_steps(stubs):
     states = run(load().collection, NOON)
     skipped = {task for task, state in states.items() if state == "skipped"}

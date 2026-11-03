@@ -93,8 +93,8 @@ def test_retry_check_every_15_minutes_and_ai_hourly_at_half_past(module, monkeyp
 
 
 class Run:
-    def __init__(self, when):
-        self.run_after = when
+    def __init__(self, run_after, logical_date=None):
+        self.run_after, self.logical_date = run_after, logical_date
 
 
 def test_evening_runs_are_recognized_in_local_time(module):
@@ -103,6 +103,14 @@ def test_evening_runs_are_recognized_in_local_time(module):
     # 21:00 Chicago is 02:00 or 03:00 UTC the next day; the local hour decides.
     assert module.is_evening(Run(pendulum.datetime(2026, 7, 2, 2, tz="UTC")))
     assert module.is_evening(Run(pendulum.datetime(2026, 12, 2, 3, tz="UTC")))
+
+
+def test_the_scheduled_slot_decides_not_the_start_time(module):
+    # A scheduled or tested run of the 21:00 slot that starts after midnight.
+    assert module.is_evening(Run(local(2026, 11, 3, 0, 37), logical_date=local(2026, 11, 2, 21)))
+    assert not module.is_evening(Run(local(2026, 11, 2, 18), logical_date=local(2026, 11, 2, 12)))
+    # A manual run without a logical date: the time it was started.
+    assert module.is_evening(Run(local(2026, 11, 2, 19)))
 
 
 def test_evening_only_commands_skip_at_noon(module):
