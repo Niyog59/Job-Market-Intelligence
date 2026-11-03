@@ -28,6 +28,7 @@ class DbtOutcome:
     success: bool
     command: list[str]
     failures: list[str]
+    compiled: dict[str, str] = field(default_factory=dict)  # model name -> SQL, from compile
 
 
 def run_dbt(
@@ -57,14 +58,16 @@ def run_dbt(
         command.insert(0, "--quiet")
     os.environ.setdefault("DBT_SEND_ANONYMOUS_USAGE_STATS", "false")
     result = dbtRunner().invoke(command)
-    failures = []
+    failures, compiled = [], {}
     for item in getattr(result.result, "results", None) or []:
         status = str(getattr(item, "status", "")).lower()
         if status in ("error", "fail", "runtime error"):
             failures.append(f"{item.node.name}: {status} {getattr(item, 'message', '') or ''}")
+        if getattr(item.node, "compiled_code", None):
+            compiled[item.node.name] = item.node.compiled_code
     if result.exception is not None:
         failures.append(f"dbt: {result.exception}")
-    return DbtOutcome(bool(result.success), command, failures)
+    return DbtOutcome(bool(result.success), command, failures, compiled)
 
 
 GRANTS = (

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from collections.abc import Sequence
@@ -1347,16 +1348,10 @@ def _sync_raw(settings: Settings, args) -> int:
 def _analytics_publish(settings: Settings, args) -> int:
     """Build in shadow schemas, validate, publish atomically, and record the outcome (which
     alerts on the first failure and sends one recovery notice after it)."""
-    from dataclasses import replace
-
     from jobmarket import analytics, operations
 
     target = getattr(args, "target", "analytics")
-    builder = settings
-    if target == "analytics":
-        login = os.environ.get("ANALYTICS_DB_USER", "").strip() or analytics.ANALYTICS_ROLE
-        builder = replace(settings, db_user=login,
-                          db_password=os.environ.get("ANALYTICS_DB_PASSWORD", ""))  # fmt: skip
+    builder = _analytics_login(settings) if target == "analytics" else settings
     started = system_clock()
     try:
         with db.connect(builder, autocommit=True) as conn:
@@ -1381,6 +1376,77 @@ def _analytics_publish(settings: Settings, args) -> int:
         print("Not published: the website keeps the previous reports.", file=sys.stderr)
         return EXIT_FAILURE
     print(f"Published reports built {_when(result.built_at)}.")
+    return EXIT_OK
+
+
+def _analytics_login(settings: Settings) -> Settings:
+    """The read-only analytics login (ANALYTICS_DB_USER and ANALYTICS_DB_PASSWORD)."""
+    from dataclasses import replace
+
+    from jobmarket.analytics import ANALYTICS_ROLE
+
+    login = os.environ.get("ANALYTICS_DB_USER", "").strip() or ANALYTICS_ROLE
+    return replace(settings, db_user=login, db_password=os.environ.get("ANALYTICS_DB_PASSWORD", ""))
+
+
+def _spark(settings: Settings, args) -> int:
+    directory = Path(args.dir)
+    if args.spark_command == "export":
+        return _spark_export(settings, directory)
+    try:
+        from jobmarket import spark_models
+    except ImportError:
+        print('Spark commands need PySpark: pip install -e ".[spark]"', file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    if shutil.which("java") is None and not os.environ.get("JAVA_HOME"):
+        print("Spark needs Java 17 or 21 on PATH or in JAVA_HOME.", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    if not (directory / "export.json").exists():
+        print(f"No export in {directory}: run `jobmarket spark export` first.", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    spark = spark_models.local_session()
+    rebuilt = spark_models.build(spark_models.read_inputs(spark, str(directory)))
+    expected = spark_models.read_dbt(spark, str(directory))
+    matched = True
+    for model in spark_models.MODELS:
+        found = spark_models.differences(rebuilt[model], expected[model])
+        verdict = "different" if found else "match"
+        print(
+            f"  {model:18} dbt {expected[model].count():>9,} rows, "
+            f"spark {rebuilt[model].count():>9,} rows: {verdict}"
+        )
+        for line in found:
+            print(f"    {line}")
+        matched = matched and not found
+    if not matched:
+        print("Spark and dbt differ.", file=sys.stderr)
+        return EXIT_FAILURE
+    print("All three models match dbt row for row.")
+    return EXIT_OK
+
+
+def _spark_export(settings: Settings, directory: Path) -> int:
+    from jobmarket.analytics import AnalyticsUnavailable
+
+    try:
+        from jobmarket import spark_export
+    except ImportError:
+        print('The export needs PyArrow: pip install -e ".[analytics,spark]"', file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    try:
+        reference = spark_export.reference_sql()
+    except (AnalyticsUnavailable, spark_export.ExportError) as exc:
+        print(f"Not exported: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    with db.connect(_analytics_login(settings)) as conn:
+        summary = spark_export.export(conn, directory, reference)
+    for relative, info in summary["files"].items():
+        print(
+            f"  {relative:38} {info['rows']:>10,} rows {info['bytes'] / 1e6:>9.2f} MB "
+            f"{info['seconds']:>8.2f} s"
+        )
+    snapshot = datetime.fromisoformat(summary["snapshot"])
+    print(f"Exported the database as of {_when(snapshot)} to {directory}.")
     return EXIT_OK
 
 
@@ -1623,6 +1689,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="show what would be sent, without contacting Google"
     )
 
+    sp = commands.add_parser("spark", help="three reporting models rebuilt in PySpark")
+    sp_cmds = sp.add_subparsers(dest="spark_command", required=True)
+    sp_export = sp_cmds.add_parser(
+        "export", help="write the models' inputs and dbt's results to Parquet (one snapshot)"
+    )
+    sp_parity = sp_cmds.add_parser("parity", help="rebuild the models in Spark, compare with dbt")
+    for cmd in (sp_export, sp_parity):
+        cmd.add_argument("--dir", default="data/spark", help="export directory")
+
     summ = commands.add_parser("summary", help="the daily summary email")
     summ_cmds = summ.add_subparsers(dest="summary_command", required=True)
     summ_send = summ_cmds.add_parser(
@@ -1707,6 +1782,7 @@ HANDLERS = {
     "sync-raw": _sync_raw,
     "summary": _summary,
     "tableau": _tableau,
+    "spark": _spark,
 }
 
 
