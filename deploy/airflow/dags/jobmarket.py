@@ -25,7 +25,8 @@ Scheduling rules:
   Google Sheet behind the Tableau Public dashboards (decision 2026-11-02: every run).
 - The evening run also backs up, prunes local backups, sends the daily summary, and cleans
   Airflow's own history. A run is "evening" when it was scheduled at 17:00 Chicago time or
-  later (the 21:00 slot, or a manual run in the evening).
+  later (the 21:00 slot, even if it starts after midnight, or a manual run started in the
+  evening).
 
 Decisions (Niyog, 2026-11-01): retry check every 15 minutes; AI hourly, up to 20 per run;
 keep 3 local backups and 30 days of Airflow history; the time limits below.
@@ -63,7 +64,11 @@ AI_BATCH_SIZE = 20
 
 def is_evening(dag_run) -> bool:
     """Whether a run belongs to the evening slot, by its scheduled time in Chicago."""
-    return pendulum.instance(dag_run.run_after).in_tz(TIMEZONE).hour >= EVENING_FROM_HOUR
+    # A scheduled run's logical date is its cron slot (run_after is the same time). A run
+    # started late keeps its slot: `airflow dags test DAG DATE` sets run_after to the moment
+    # it starts, not to DATE. A manual run without a logical date counts from its start.
+    when = dag_run.logical_date or dag_run.run_after
+    return pendulum.instance(when).in_tz(TIMEZONE).hour >= EVENING_FROM_HOUR
 
 
 def evening_only(command: str) -> str:
