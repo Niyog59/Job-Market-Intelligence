@@ -84,31 +84,37 @@ class ExportError(Exception):
     pass
 
 
-def reference_sql(target: str = "analytics", variables: dict | None = None) -> dict[str, str]:
-    """dbt's compiled SQL of the three models (what `dbt run` would create the tables from)."""
+def reference_sql(
+    target: str = "analytics", variables: dict | None = None, models: tuple = MODELS
+) -> dict[str, str]:
+    """dbt's compiled SQL of the models (what `dbt run` would create the tables from)."""
     # Without --log-level none, compile prints one model's SQL to the terminal.
     outcome = run_dbt(
-        ["compile", "--select", *MODELS, "--log-level", "none"],
+        ["compile", "--select", *models, "--log-level", "none"],
         target=target,
         variables=variables,
         quiet=True,
     )
-    missing = [name for name in MODELS if name not in outcome.compiled]
+    missing = [name for name in models if name not in outcome.compiled]
     if not outcome.success or missing:
         raise ExportError("; ".join(outcome.failures) or f"dbt did not compile {missing}")
-    return {name: outcome.compiled[name] for name in MODELS}
+    return {name: outcome.compiled[name] for name in models}
+
+
+def columns(name: str, json_as_text: bool = True) -> sql.Composed:
+    """The select list of one input."""
+    return sql.SQL(", ").join(
+        sql.SQL("{}::text AS {}").format(sql.Identifier(c), sql.Identifier(c))
+        if json_as_text and c in JSON_COLUMNS
+        else sql.Identifier(c)
+        for c in INPUTS[name][1]
+    )
 
 
 def input_query(name: str, prefix: str = "") -> sql.Composed:
-    layer, columns = INPUTS[name]
-    select = [
-        sql.SQL("{}::text AS {}").format(sql.Identifier(c), sql.Identifier(c))
-        if c in JSON_COLUMNS
-        else sql.Identifier(c)
-        for c in columns
-    ]
+    layer = INPUTS[name][0]
     return sql.SQL("SELECT {} FROM {}.{}").format(
-        sql.SQL(", ").join(select), sql.Identifier(f"{prefix}{layer}"), sql.Identifier(name)
+        columns(name), sql.Identifier(f"{prefix}{layer}"), sql.Identifier(name)
     )
 
 

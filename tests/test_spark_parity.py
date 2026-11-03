@@ -2,26 +2,14 @@
 tables row for row, over the synthetic history in search_world (J1 to J8)."""
 
 import json
-import os
-import shutil
 import subprocess
 import sys
 from datetime import date
 
 import pytest
+from spark_harness import require_spark
 
-try:
-    import pyspark  # noqa: F401
-except ImportError:
-    missing = "PySpark is not installed (pip install -e '.[spark]')"
-else:
-    java = shutil.which("java") or os.environ.get("JAVA_HOME")
-    missing = None if java else "Spark needs Java 17 or 21"
-if missing:
-    # The CI job for these tests sets this, so a broken install cannot pass as skipped.
-    if os.environ.get("JOBMARKET_REQUIRE_SPARK") == "1":
-        pytest.fail(f"JOBMARKET_REQUIRE_SPARK=1 but {missing}", pytrace=False)
-    pytest.skip(missing, allow_module_level=True)
+require_spark()
 
 import pyarrow.parquet as pq  # noqa: E402  (after the skips: both come with the spark extra)
 from psycopg import sql  # noqa: E402

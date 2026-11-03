@@ -143,8 +143,8 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,analytics,spark]"
 
-      - name: Spark and dbt give the same tables
-        run: pytest -v tests/test_spark_parity.py
+      - name: Spark and dbt give the same tables; the benchmark measures every part
+        run: pytest -v tests/test_spark_parity.py tests/test_spark_benchmark.py
 
   airflow:
     # The Airflow DAGs (deploy/airflow): they import, keep noon and 9 PM local time across
