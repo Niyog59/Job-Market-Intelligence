@@ -64,3 +64,27 @@ models:
       - name: mention_kind
         data_tests:
           - accepted_values: {arguments: {values: ['individual', 'alternative']}}
+
+  - name: int_genai_mentions
+    description: "Grain: one row per posting version: the generative-AI terms (macro genai_terms, version 1) its title and description mention, with the employer's own name removed first."
+    columns:
+      - name: version_id
+        data_tests: [unique, not_null]
+      - name: genai_mention
+        data_tests: [not_null]
+
+  - name: int_job_attributes
+    description: "Grain: one row per AI extraction result: role_group (Data > AI/ML > Software > Other), level_ai, level_years, minimum_degree, metro, city."
+    columns:
+      - name: result_id
+        data_tests: [unique, not_null]
+      - name: role_group
+        data_tests:
+          - accepted_values: {arguments: {values: ['Data', 'AI/ML', 'Software', 'Other']}}
+      - name: level_ai
+        data_tests:
+          - accepted_values: {arguments: {values: ['Junior', 'Mid', 'Senior+', 'Unclear']}}
+      - name: level_years
+        data_tests:
+          - accepted_values: {arguments: {values: ['0-2 years', '3-4 years', '5+ years', 'Not stated']}}
+

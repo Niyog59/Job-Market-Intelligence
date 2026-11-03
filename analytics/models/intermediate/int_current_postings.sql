@@ -1,7 +1,11 @@
--- One row per posting known today (today's provisional row of int_posting_days), with its
--- employer, content, screening, and AI-extracted fields. Fields from the AI are null when
--- the posting's current content has no extraction yet (extracted = false); such postings
--- still count in inventory.
+-- One row per posting known on the latest day int_posting_days holds (today when the build
+-- ran), with its employer, content, screening, and AI-extracted fields. Fields from the AI
+-- are null when the posting's current content has no extraction yet (extracted = false);
+-- such postings still count in inventory.
+--
+-- The day comes from int_posting_days (a table, built up to the build's "today"), not from
+-- the clock: reading this view after midnight, before the next build, still returns the
+-- last built day instead of nothing.
 select
     pd.posting_id,
     pd.report_day,
@@ -40,10 +44,10 @@ select
     r.derived -> 'role_categories' as role_categories,
     r.normalized as extraction
 from {{ ref('int_posting_days') }} pd
-join {{ ref('int_reporting_days') }} d on d.report_day = pd.report_day and not d.is_complete
 join {{ ref('stg_postings') }} p on p.posting_id = pd.posting_id
 join {{ ref('stg_boards') }} b on b.board_id = pd.board_id
 join {{ ref('stg_employers') }} e on e.employer_id = b.employer_id
 left join {{ ref('stg_posting_versions') }} v on v.version_id = pd.version_id
 left join {{ ref('stg_screenings') }} s on s.posting_id = pd.posting_id
 left join {{ ref('stg_extraction_results') }} r on r.result_id = pd.extraction_result_id
+where pd.report_day = (select max(report_day) from {{ ref('int_posting_days') }})

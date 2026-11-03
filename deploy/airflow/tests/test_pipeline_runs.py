@@ -65,18 +65,19 @@ NOON = pendulum.datetime(2026, 11, 2, 12, tz="America/Chicago")
 def test_evening_run_does_every_step_in_order(stubs):
     states = run(load().collection, EVENING)
     assert set(states.values()) == {"success"}
-    assert calls(stubs)[:8] == [
+    assert calls(stubs)[:9] == [
         "collect --scheduled",
         "backup create --upload",
         "backup prune --keep 3",
         "sync-raw",
         "cleanup-raw --require-s3",
         "analytics publish",
+        "tableau sync",
         "summary send",
         "notifications --send",
     ]
     cleanup = "airflow db clean --yes --skip-archive --clean-before-timestamp 20"
-    assert calls(stubs)[8].startswith(cleanup)
+    assert calls(stubs)[9].startswith(cleanup)
 
 
 def test_noon_run_skips_the_evening_only_steps(stubs):
@@ -84,7 +85,8 @@ def test_noon_run_skips_the_evening_only_steps(stubs):
     skipped = {task for task, state in states.items() if state == "skipped"}
     assert skipped == {"backup", "backup_prune", "daily_summary", "airflow_history_cleanup"}
     assert calls(stubs) == ["collect --scheduled", "sync-raw", "cleanup-raw --require-s3",
-                            "analytics publish", "notifications --send"]  # fmt: skip
+                            "analytics publish", "tableau sync",
+                            "notifications --send"]  # fmt: skip
 
 
 def test_a_failed_collection_still_backs_up_publishes_and_reports(stubs, monkeypatch):
@@ -120,3 +122,17 @@ def test_ai_batch_is_bounded_and_skips_until_configured(stubs, monkeypatch):
     assert calls(stubs) == ["extract run --limit 20"]
     monkeypatch.setenv("STUB_EXIT_extract", "2")  # no Gemini key or limits yet
     assert set(run(load().ai, NOON).values()) == {"skipped"}
+
+
+def test_the_sheet_is_updated_only_after_a_successful_publication(stubs, monkeypatch):
+    monkeypatch.setenv("STUB_EXIT_analytics", "1")  # the reports failed their checks
+    states = run(load().collection, EVENING)
+    assert states["publish_reports"] == "failed"
+    assert states["sheets_sync"] == "upstream_failed"  # the Sheet keeps the last good data
+    assert states["daily_summary"] == "success"
+
+
+def test_sheet_sync_skips_until_configured(stubs, monkeypatch):
+    monkeypatch.setenv("STUB_EXIT_tableau", "2")
+    states = run(load().collection, EVENING)
+    assert states["sheets_sync"] == "skipped" and states["daily_summary"] == "success"

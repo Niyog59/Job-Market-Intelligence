@@ -21,6 +21,8 @@ Scheduling rules:
   collection, reports, or backups for longer than one bounded batch.
 - Steps after collection use trigger_rule all_done: a failed collection, backup, or raw
   upload never stops report publication, the summary, or email.
+- After a successful report publication, the published dashboard tables are copied to the
+  Google Sheet behind the Tableau Public dashboards (decision 2026-11-02: every run).
 - The evening run also backs up, prunes local backups, sends the daily summary, and cleans
   Airflow's own history. A run is "evening" when it was scheduled at 17:00 Chicago time or
   later (the 21:00 slot, or a manual run in the evening).
@@ -52,6 +54,7 @@ AI_BATCH_LIMIT = timedelta(minutes=20)
 REPORT_LIMIT = timedelta(minutes=20)
 BACKUP_LIMIT = timedelta(minutes=20)
 SUMMARY_LIMIT = timedelta(minutes=10)
+SHEETS_LIMIT = timedelta(minutes=10)  # Niyog, 2026-11-02
 
 KEEP_LOCAL_BACKUPS = 3
 AIRFLOW_HISTORY_DAYS = 30
@@ -107,6 +110,10 @@ with DAG(
                        **after)  # fmt: skip
     publish = task("publish_reports", "jobmarket analytics publish", REPORT_LIMIT,
                    skip_on_exit_code=[SKIP, BUSY], **after)  # fmt: skip
+    # Only after a successful publication (the default trigger rule), so the dashboard Sheet
+    # never receives reports that failed their checks; skipped until the Sheet is configured.
+    sheets_sync = task("sheets_sync", "jobmarket tableau sync", SHEETS_LIMIT,
+                       skip_on_exit_code=[SKIP, NOT_CONFIGURED], priority_weight=10)  # fmt: skip
     summary = task("daily_summary", evening_only("jobmarket summary send"), SUMMARY_LIMIT,
                    **after)  # fmt: skip
     notify = task("send_email", "jobmarket notifications --send", SUMMARY_LIMIT, **after)
@@ -130,8 +137,8 @@ with DAG(
         BACKUP_LIMIT,
         **after,
     )
-    (collect >> backup >> prune >> raw_sync >> raw_cleanup >> publish >> summary >> notify
-     >> cleanup_airflow)  # fmt: skip
+    (collect >> backup >> prune >> raw_sync >> raw_cleanup >> publish >> sheets_sync >> summary
+     >> notify >> cleanup_airflow)  # fmt: skip
 
 
 with DAG(

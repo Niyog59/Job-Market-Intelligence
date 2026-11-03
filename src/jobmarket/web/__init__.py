@@ -11,19 +11,21 @@ calls a source, the model, or dbt. Locally it runs with `jobmarket web` (bound t
 from urllib.parse import parse_qsl
 
 import psycopg
-from flask import Flask, abort, g, render_template, request
+from flask import Flask, abort, g, redirect, render_template, request, url_for
 from werkzeug.datastructures import MultiDict
 
 from jobmarket import db, reports, search, workspace
-from jobmarket.web import auth, private_pages
+from jobmarket.web import auth, insights, private_pages
 from jobmarket.web import format as fmt
 from jobmarket.web.config import WebConfig, load_web_config
 from jobmarket.web.pages import job_page
 
-# Strict policy: everything (scripts, styles, fonts) is served by the site itself.
+# Strict policy: everything (scripts, styles, fonts) is served by the site itself. The only
+# outside content is the Tableau Public dashboards on Market insights, each in its own frame.
 CONTENT_SECURITY_POLICY = (
     "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
-    "img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    "img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; "
+    f"frame-src {insights.TABLEAU_HOST}"
 )
 
 
@@ -122,8 +124,10 @@ def create_app(config: WebConfig | None = None) -> Flask:
         popular = search.popular_skills(conn(), result.params.population, config.serving_schema)
         marks = (private_pages.row_marks(config, conn, private_conn, result.rows)
                  if g.get("owner") else {})  # fmt: skip
+        headline = insights.headline(conn(), config.reporting_schema)
         return render_template("results.html", result=result, choices=choices, status=status,
-                               popular=popular, marks=marks, visit=g.get("visit"))  # fmt: skip
+                               popular=popular, marks=marks, visit=g.get("visit"),
+                               headline=headline)  # fmt: skip
 
     @app.get("/jobs/<int:posting_id>")
     def detail(posting_id: int):
@@ -150,6 +154,19 @@ def create_app(config: WebConfig | None = None) -> Flask:
         failed_at = reports.failed_rebuild_since(conn(), data.build.built_at if data else None)
         return render_template("reports.html", r=data, status=status, failed_at=failed_at,
                                population=data.population if data else "kept")  # fmt: skip
+
+    @app.get("/insights")
+    def insights_page():
+        dashboard = insights.BY_SLUG.get(request.args.get("d", "main"))
+        if dashboard is None:
+            return redirect(url_for("insights_page"))
+        return render_template(
+            "insights.html", dashboard=dashboard, dashboards=insights.DASHBOARDS,
+            embed=insights.embed_url(config.tableau, dashboard),
+            open_url=insights.view_url(config.tableau, dashboard),
+            profile=config.tableau.profile,
+            headline=insights.headline(conn(), config.reporting_schema),
+        )  # fmt: skip
 
     @app.errorhandler(404)
     def not_found(_exc):

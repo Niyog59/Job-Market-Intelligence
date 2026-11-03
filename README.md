@@ -176,6 +176,7 @@ Optional settings:
 | `jobmarket backup upload DIR` / `list` / `fetch STAMP` | Copy a backup to S3 and confirm it; list the backups in S3; download and verify one |
 | `jobmarket backup prune --keep N` | Keep the newest N verified local backups; delete older ones only if confirmed in S3 |
 | `jobmarket sync-raw` | Upload raw responses that are not in S3 yet |
+| `jobmarket tableau sync [--dry-run]` | Copy the published dashboard tables to the Google Sheet behind Tableau Public |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -587,6 +588,27 @@ answers later re-normalized in Python show their current clean-up
 | `rpt_board_freshness` | board: latest scan, last complete collection and its age, baseline, hold |
 | `rpt_extraction_coverage` | population: extracted, queued, failed, skipped |
 | `rpt_build_info` | one row: when the build ran, and the newest complete collection and extraction it saw |
+| `rpt_jobs_current` | distinct current job (duplicates merged), kept and listed: employer, title, metro, role group, level by both rules, minimum degree, eligibility statements, generative-AI mention, discovery week |
+| `rpt_job_skills` | current job x skill x requirement level, with the job's filter fields |
+| `rpt_job_genai_terms` | current job x generative-AI term it mentions, with the job's filter fields |
+| `rpt_skill_pairs` | skill pair x role group: current jobs that require or prefer both |
+| `rpt_weekly_jobs` | week x level rule x level x role group x metro: new jobs (initial imports excluded), jobs open at the week's end, generative-AI mentions |
+| `rpt_weekly_skills` | week x skill x role group: new jobs requiring the skill |
+
+**Dashboard definitions** (`int_job_attributes`, `int_genai_mentions`):
+- **Role group:** one per job, by priority Data (data analysis, BI, data and analytics
+  engineering) > AI/ML (ML, data science) > Software (software, backend, full stack) > Other.
+- **Level, two rules:** `level_ai` is Junior (early career, entry, internship), Mid, Senior+
+  (senior and above), or Unclear, from the AI's seniority and early-career answers.
+  `level_years` uses the smallest required overall minimum: 0-2, 3-4, 5+ years, or Not stated.
+- **Minimum degree:** the lowest degree listed as required, or "Degree preferred only" or
+  "Not stated".
+- **Weeks:** Monday to Sunday, America/Chicago. **New jobs** exclude initial imports of newly
+  added boards.
+- **Generative-AI mention:** the title or description matches a term in
+  `analytics/macros/genai_terms.sql` (version 1), with the employer's own name removed first.
+  A bare "AI" is not a term, because it appears in company names and boilerplate. Changing
+  the list changes every week's numbers from the next build on.
 
 Populations default to `retained` for headline numbers; `all` covers every collected
 listing. Rebuilds are idempotent: the same stored data gives the same rows.
@@ -674,6 +696,7 @@ The site shows whatever was last collected and extracted: run `jobmarket collect
 | `/` | search results; all search state is in the query string (see Job search) |
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
 | `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
+| `/insights` | Market insights: the Tableau Public dashboards; `?d=<dashboard>` picks one (see Dashboard data) |
 | `/healthz` | `ok` when the app and its database login work (for container health checks) |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable
@@ -709,9 +732,10 @@ computes nothing beyond the dbt models.
 **Security.** Pages run as the read-only login in read-only sessions. Descriptions are
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
-strict Content-Security-Policy (scripts, styles, and fonts from the site only), `nosniff`,
-a `same-origin` referrer policy (other sites receive no referrer), and frame denial. Roboto is served locally (SIL Open Font License,
-`web/static/fonts/OFL.txt`).
+strict Content-Security-Policy (scripts, styles, and fonts from the site only; frames only
+from `https://public.tableau.com`, for the dashboards), `nosniff`, a `same-origin` referrer
+policy (other sites receive no referrer), and frame denial (no other site may frame these
+pages). Roboto is served locally (SIL Open Font License, `web/static/fonts/OFL.txt`).
 
 **On a server.** `jobmarket web` uses Flask's development server and is for this computer
 only. A server runs `gunicorn jobmarket.web.wsgi:app` behind a reverse proxy that
@@ -1194,6 +1218,45 @@ The `deploy` job checks the deployment in `deploy/`:
   ports (the Airflow UI only on 127.0.0.1).
 - It records container memory with `docker stats` in the job summary.
 - It never contacts AWS, a job board (none are loaded), Gemini, or an email server.
+
+## Dashboard data (Tableau Public)
+
+The Tableau Public dashboards read a Google Sheet, because Tableau Public cannot connect to the
+database. `jobmarket tableau sync` copies the published dashboard tables to that Sheet, one tab
+each: `about` (build time and the "data collected through ..." caption every chart shows),
+`jobs`, `job_skills`, `genai_terms`, `skill_pairs`, `weekly_jobs`, `weekly_skills`,
+`daily_activity`, `eligibility`, and `pipeline_health`.
+
+- Only published reporting tables are read, through the read-only analytics login, so
+  nothing from the private workspace can reach the Sheet.
+- All tabs are replaced in one Google `batchUpdate` request, which applies all or nothing:
+  the Sheet holds one complete publication, the previous one if an update fails.
+- Dates are sent as Sheets dates, so Tableau reads them as dates.
+- The scheduled run updates the Sheet after every successful publication (Airflow task
+  `sheets_sync`, 10-minute limit, skipped until `JOBMARKET_SHEETS_ID` and
+  `JOBMARKET_SHEETS_KEY_FILE` are set); a failed publication never reaches the Sheet. The
+  daily summary says when the Sheet was last updated.
+- `--dry-run` shows the tabs and their sizes without contacting Google. Tests use a fake
+  Sheets API.
+- Setup (Google project, service account, Sheet, key file): `deploy/RUNBOOK.md` section T.
+
+**Market insights page.** `/insights` embeds the published dashboards: the main one, "What
+are employers asking for?", first, and the others under "See more dashboards"
+(`src/jobmarket/web/insights.py` lists each dashboard's question and business objective).
+Each dashboard is framed from its Tableau Public address,
+`https://public.tableau.com/views/<workbook>/<view>`, so the workbook's dashboard names must
+match the view names there (`docs/tableau/BUILD_GUIDE.md`). Set
+`JOBMARKET_TABLEAU_WORKBOOK` (and optionally `JOBMARKET_TABLEAU_PROFILE`) once the workbook
+is published; until then the page shows the headline numbers and says the dashboards are on
+their way. Under each dashboard the page states the collection and build time of the
+published reports.
+
+The job-search page links to it with a short summary from the published `rpt_jobs_current`:
+the junior and senior shares among jobs with a clear level, and the share mentioning
+generative AI. Before the first publication, or when the published reports predate these
+tables, the link appears without numbers and job search is unaffected.
+
+Dashboard designs, the data dictionary, and the build steps: `docs/tableau/`.
 
 ## Deployment
 

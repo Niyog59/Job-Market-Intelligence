@@ -476,6 +476,67 @@ nothing runs twice. Without Airflow, start one job at a time (memory).
 
 ---
 
+## T. Dashboard data Sheet (Google, for Tableau Public)
+
+The pipeline copies the published dashboard tables to a Google Sheet after every report
+publication; Tableau Public re-reads that Sheet about once a day. These steps create the
+Sheet and a "service account" (a robot Google account the server uses) that may edit only
+that Sheet. All free; no billing account is needed.
+
+**T1. Create a Google Cloud project and turn on the Sheets API.**
+- Where: https://console.cloud.google.com in your browser, signed in to your Google account.
+- Values: project name `job-market-dashboards`. Then APIs & Services > Library > "Google
+  Sheets API" > Enable.
+- Check: APIs & Services > Enabled APIs lists Google Sheets API.
+
+**T2. Create the service account and its key.**
+- Where: IAM & Admin > Service Accounts > Create service account.
+- Values: name `jobmarket-sheets`; skip the optional role and user steps (it needs no project
+  role). Open it > Keys > Add key > Create new key > JSON. A `.json` file downloads.
+- Check: the account's email ends in `iam.gserviceaccount.com`. The JSON file is a secret:
+  never commit, email, or paste it anywhere public.
+
+**T3. Create the Sheet and share it with the service account only.**
+- Where: https://sheets.google.com > Blank spreadsheet, named
+  `Job Market Intelligence - dashboard data`.
+- Values: Share > add the service account's email as **Editor** (untick "Notify"). Copy the
+  spreadsheet id: the part of the address between `/d/` and `/edit`.
+- Check: Share lists you (owner) and the service account (editor), nobody else.
+
+**T4. Put the key on the server and point the pipeline at the Sheet.**
+- Where: the server, in `~/Job-Market-Intelligence/deploy`.
+- What: `nano secrets/google-sheets.json`, paste the whole JSON file's text, save. Then make it
+  readable only by the containers' user (10001):
+  `sudo chown 10001:10001 secrets/google-sheets.json && sudo chmod 400 secrets/google-sheets.json`.
+- Values: in `.env`, set `JOBMARKET_SHEETS_ID=` the id from T3 and
+  `JOBMARKET_SHEETS_KEY_FILE=/app/secrets/google-sheets.json`; then
+  `docker compose up -d airflow-scheduler` (reloads the settings).
+- Check: `docker compose run --rm jobs jobmarket tableau sync --dry-run` lists the tabs and
+  their sizes; `docker compose run --rm jobs jobmarket tableau sync` prints "Updated the
+  dashboard Sheet", and the Sheet now has tabs `about`, `jobs`, `job_skills`, and more.
+
+From then on every publication updates the Sheet (Airflow task `sheets_sync`), and the daily
+summary says when it last did. If an update fails, the Sheet keeps the previous complete
+data. To stop sharing data with Google, delete the Sheet or remove the service account's
+access, and remove `JOBMARKET_SHEETS_ID` from `.env`.
+
+**T5. Show the published dashboards on the site.**
+- Where: Tableau Public, after building and publishing the workbook from the Sheet
+  (`docs/tableau/BUILD_GUIDE.md`); then the server, in `~/Job-Market-Intelligence/deploy`.
+- Values: open the main dashboard on Tableau Public; its address is
+  `https://public.tableau.com/views/NAME/WhatEmployersAskFor`. In `.env`, set
+  `JOBMARKET_TABLEAU_WORKBOOK=NAME` and, optionally, `JOBMARKET_TABLEAU_PROFILE=` your
+  profile address. Then `docker compose up -d web`.
+- Check: `https://YOURNAME.duckdns.org/insights` shows the main dashboard, each card under
+  "See more dashboards" opens its own dashboard, and the job-search page links to it.
+
+**Before the server exists:** the same sync works from your Mac (in the project folder, with
+the key file somewhere outside the project):
+`JOBMARKET_SHEETS_ID=... JOBMARKET_SHEETS_KEY_FILE=/path/to/key.json .venv/bin/jobmarket tableau sync`,
+after `jobmarket migrate` and `jobmarket analytics publish`.
+
+---
+
 ## H. Updating to a new version
 
 1. Back up first: `docker compose run --rm jobs jobmarket backup create --upload`.
@@ -585,4 +646,6 @@ Not done yet, and only you can do it in AWS:
 - [ ] G0 instance size decision (budget); resize only after approving it
 - [ ] G1 to G3 Airflow started, UI reached privately, first evening run and summary email
 - [ ] G6 heartbeat and uptime monitors (optional)
+- [ ] T1 to T4 dashboard Sheet: Google project, service account, Sheet shared, key on the server
+- [ ] T5 workbook published on Tableau Public and its name set for the Market insights page
 - [ ] Record real memory use in `deploy/SIZING.md` after a few days of schedules

@@ -1290,6 +1290,42 @@ def _summary(settings: Settings, args) -> int:
     return EXIT_FAILURE if sent.failed or problem else EXIT_OK
 
 
+def _tableau(settings: Settings, args) -> int:
+    """Copy the published dashboard tables to the Google Sheet behind Tableau Public."""
+    from jobmarket import sheets
+    from jobmarket.web.config import load_web_config
+
+    started = system_clock()
+    reader = load_web_config().settings  # the read-only analytics login
+    if args.dry_run:
+        with db.connect(reader) as conn:
+            conn.read_only = True
+            tables = sheets.read_tables(conn)
+        for table in tables:
+            print(f"  {table.name:16} {len(table.rows):>7,} rows x {len(table.columns)} columns")
+        print("Dry run: nothing was sent to Google.")
+        return EXIT_OK
+    try:
+        config = sheets.load_sheets_config()
+    except sheets.SheetsNotConfigured as exc:
+        print(f"Not synced: {exc}.", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    try:
+        with db.connect(reader) as conn:
+            conn.read_only = True
+            result = sheets.sync(conn, sheets.SheetsApi(config))
+    except (sheets.SheetsError, psycopg.Error) as exc:
+        print(f"Sheet not updated (it keeps the previous data): {exc}", file=sys.stderr)
+        _record(settings, "sheets_sync", started, "failed", error=str(exc)[:2000])
+        return EXIT_FAILURE
+    for name, count in result.tabs.items():
+        print(f"  {name:16} {count:>7,} rows")
+    print(f"Updated the dashboard Sheet ({result.cells:,} cells).")
+    _record(settings, "sheets_sync", started, "succeeded",
+            {"tabs": result.tabs, "cells": result.cells})  # fmt: skip
+    return EXIT_OK
+
+
 def _sync_raw(settings: Settings, args) -> int:
     from jobmarket.connectors import SOURCE_SYSTEMS
     from jobmarket.s3store import S3Unavailable, sync_raw
@@ -1578,6 +1614,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("sync-raw", help="upload raw responses not yet in S3")
 
+    tab = commands.add_parser("tableau", help="data for the Tableau Public dashboards")
+    tab_cmds = tab.add_subparsers(dest="tableau_command", required=True)
+    tab_sync = tab_cmds.add_parser(
+        "sync", help="copy the published dashboard tables to the Google Sheet (all at once)"
+    )
+    tab_sync.add_argument(
+        "--dry-run", action="store_true", help="show what would be sent, without contacting Google"
+    )
+
     summ = commands.add_parser("summary", help="the daily summary email")
     summ_cmds = summ.add_subparsers(dest="summary_command", required=True)
     summ_send = summ_cmds.add_parser(
@@ -1661,6 +1706,7 @@ HANDLERS = {
     "backup": _backup,
     "sync-raw": _sync_raw,
     "summary": _summary,
+    "tableau": _tableau,
 }
 
 

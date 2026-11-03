@@ -7,6 +7,9 @@ Two database logins, never the ingestion owner:
   PRIVATE_DB_PASSWORD), which can use only the private schema.
 Host, port, and database come from the DB_* variables.
 
+JOBMARKET_TABLEAU_WORKBOOK and JOBMARKET_TABLEAU_PROFILE point the Market insights page at the
+published Tableau Public workbook (jobmarket.web.insights).
+
 WEB_COOKIE_SECURE (default true) marks the sign-in cookie Secure with the __Host- prefix.
 Chrome and Firefox accept Secure cookies from http://127.0.0.1 and http://localhost; set it to
 "false" only for a browser that does not (the cookie then loses the prefix as well).
@@ -22,6 +25,7 @@ from jobmarket.config import Settings, load_settings
 from jobmarket.private_db import PRIVATE_ROLE
 from jobmarket.reports import REPORTING_SCHEMA
 from jobmarket.search import SERVING_SCHEMA
+from jobmarket.web.insights import TableauConfig, load_tableau_config
 
 
 def _now() -> datetime:
@@ -40,6 +44,7 @@ class WebConfig:
     # the login's default search path.
     source_schema: str | None = None
     cookie_secure: bool = True
+    tableau: TableauConfig = TableauConfig(None, None)
     clock: Callable[[], datetime] = field(default=_now)
 
 
@@ -58,4 +63,5 @@ def load_web_config(environ: Mapping[str, str] | None = None) -> WebConfig:
             else None
         ),
         cookie_secure=env.get("WEB_COOKIE_SECURE", "true").strip().lower() != "false",
+        tableau=load_tableau_config(env),
     )

@@ -15,3 +15,7 @@ dist/
 
 # Raw source responses (kept 4 days locally, never committed)
 data/
+
+# Server secrets mounted into containers (Google service account key). Only the README is kept.
+deploy/secrets/*
+!deploy/secrets/README.md

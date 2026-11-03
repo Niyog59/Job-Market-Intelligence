@@ -51,3 +51,10 @@ def test_everything_restarts_after_a_reboot(services):
     for name in ("db", "web", "caddy", "airflow-scheduler", "airflow-dag-processor",
                  "airflow-api"):  # fmt: skip
         assert services[name]["restart"] == "unless-stopped", name
+
+
+def test_the_sheet_key_is_mounted_read_only_where_tasks_run(services):
+    for name in ("airflow-scheduler", "jobs"):
+        assert "./secrets:/app/secrets:ro" in services[name]["volumes"], name
+    for name in ("web", "airflow-api", "airflow-dag-processor", "caddy", "db"):
+        assert "./secrets:/app/secrets:ro" not in (services[name].get("volumes") or []), name

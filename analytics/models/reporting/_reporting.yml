@@ -79,3 +79,53 @@ models:
     columns:
       - name: built_at
         data_tests: [not_null]
+
+  - name: rpt_jobs_current
+    description: "Grain: one row per distinct current job (duplicates merged), listed and kept. Feeds the Tableau dashboards and the homepage numbers."
+    columns:
+      - name: job_key
+        data_tests: [unique, not_null]
+      - name: role_group
+        data_tests:
+          - accepted_values: {arguments: {values: ['Data', 'AI/ML', 'Software', 'Other', 'Not extracted']}}
+      - name: level_ai
+        data_tests:
+          - accepted_values: {arguments: {values: ['Junior', 'Mid', 'Senior+', 'Unclear', 'Not extracted']}}
+      - name: level_years
+        data_tests:
+          - accepted_values: {arguments: {values: ['0-2 years', '3-4 years', '5+ years', 'Not stated', 'Not extracted']}}
+      - name: cohort
+        data_tests:
+          - accepted_values: {arguments: {values: ['initial_import', 'discovered']}}
+      - name: genai_mention
+        data_tests: [not_null]
+
+  - name: rpt_job_skills
+    description: "Grain: one row per current job per skill per requirement level, with the job's filter fields repeated."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['job_key', 'skill', 'requirement']}}
+
+  - name: rpt_job_genai_terms
+    description: "Grain: one row per current job per generative-AI term its title or description mentions (macro genai_terms)."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['job_key', 'term']}}
+
+  - name: rpt_skill_pairs
+    description: "Grain: one row per skill pair (skill_a < skill_b) per role group: current jobs that require or prefer both."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['skill_a', 'skill_b', 'role_group']}}
+
+  - name: rpt_weekly_jobs
+    description: "Grain: one row per week (Monday start, America/Chicago) per level rule per level per role group per metro: new jobs (initial imports excluded) and jobs open at the week's end, with generative-AI mentions."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['week_start', 'level_rule', 'level', 'role_group', 'metro']}}
+    columns:
+      - name: level_rule
+        data_tests:
+          - accepted_values: {arguments: {values: ['ai', 'years']}}
+
+  - name: rpt_weekly_skills
+    description: "Grain: one row per week per skill per role group: new kept jobs that week requiring the skill."
+    data_tests:
+      - unique_combination: {arguments: {columns: ['week_start', 'skill', 'role_group']}}
+

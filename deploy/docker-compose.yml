@@ -105,6 +105,9 @@ services:
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
       PRIVATE_DB_PASSWORD: ${PRIVATE_DB_PASSWORD}
       WEB_TRUST_PROXY: "1"
+      # The published Tableau Public workbook for Market insights (empty until published).
+      JOBMARKET_TABLEAU_WORKBOOK: ${JOBMARKET_TABLEAU_WORKBOOK:-}
+      JOBMARKET_TABLEAU_PROFILE: ${JOBMARKET_TABLEAU_PROFILE:-}
       GUNICORN_CMD_ARGS: ${GUNICORN_CMD_ARGS:---workers 1 --threads 4}
     read_only: true
     tmpfs:
@@ -154,6 +157,8 @@ services:
     volumes:
       - appdata:/app/data
       - airflowdata:/app/airflow
+      # The Google service account key for the dashboard Sheet (git-ignored; README inside).
+      - ./secrets:/app/secrets:ro
 
   airflow-dag-processor:
     <<: *airflow
@@ -190,6 +195,7 @@ services:
       POSTGRES_PASSWORD: ""  # the superuser password is not needed here
     volumes:
       - appdata:/app/data
+      - ./secrets:/app/secrets:ro
 
 volumes:
   pgdata:
