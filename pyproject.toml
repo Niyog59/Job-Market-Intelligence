@@ -31,6 +31,14 @@ analytics = [
     "dbt-core==1.11.16",
     "dbt-postgres==1.11.0",
 ]
+# Three reporting models rebuilt in PySpark and compared with dbt (jobmarket spark ...). Needs
+# Java 17 or 21. The export also needs the analytics extra (it compiles the dbt models). The
+# website, the server image, and the scheduled pipeline never use it. Pinned: upgraded
+# deliberately.
+spark = [
+    "pyarrow>=18,<27",
+    "pyspark==4.2.0",
+]
 # The job-search website (jobmarket web; gunicorn on a server) and the owner account
 # (Argon2id password hashing).
 web = [
