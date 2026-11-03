@@ -15,7 +15,11 @@ SCALES = [1, 3]
 
 @pytest.fixture(scope="module")
 def measured(world, db_settings, tmp_path_factory):
-    world.analytics.build("--select", "+rpt_skill_demand", "+rpt_jobs_current", "+rpt_weekly_jobs")
+    # One model at a time: these rebuild views the shared history already built, and dbt
+    # replacing two of them at once can deadlock on the views that depend on both.
+    world.analytics.build(
+        "--select", "+rpt_skill_demand", "+rpt_jobs_current", "+rpt_weekly_jobs", "--threads", "1"
+    )
     return spark_benchmark.benchmark(
         db_settings,
         tmp_path_factory.mktemp("benchmark"),

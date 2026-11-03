@@ -41,7 +41,11 @@ def exported(world, db_settings, tmp_path_factory):
             f'UPDATE "{source}".source_postings SET first_discovered_at = %s WHERE posting_id = %s',
             (at(when), world.ids[number]),
         )
-    world.analytics.build("--select", "+rpt_skill_demand", "+rpt_jobs_current", "+rpt_weekly_jobs")
+    # One model at a time: these rebuild views the shared history already built, and dbt
+    # replacing two of them at once can deadlock on the views that depend on both.
+    world.analytics.build(
+        "--select", "+rpt_skill_demand", "+rpt_jobs_current", "+rpt_weekly_jobs", "--threads", "1"
+    )
     directory = tmp_path_factory.mktemp("spark")
     prefix = world.analytics.prefix
     reference = spark_export.reference_sql(
