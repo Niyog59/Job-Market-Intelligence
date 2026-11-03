@@ -8,6 +8,9 @@ so the JSON skill arrays are unpacked here rather than exported already unpacked
 This module imports nothing but PySpark, so a Databricks notebook can import it as it is.
 """
 
+import statistics
+import time
+
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
@@ -358,6 +361,32 @@ def weekly_jobs(t: dict[str, DataFrame]) -> DataFrame:
             ),
         )
     )
+
+
+def stats(values: list[float]) -> dict:
+    return {
+        "median": round(statistics.median(values), 3),
+        "min": round(min(values), 3),
+        "max": round(max(values), 3),
+        "runs": [round(v, 3) for v in values],
+    }
+
+
+def timed_run(spark: SparkSession, directory: str, output: str) -> dict:
+    """Seconds to scan every column of every input, then to compute each model from the
+    Parquet files and write it to <output>/<model>.parquet. Nothing is cached (serverless
+    Databricks does not allow it), so computing a model reads its inputs again."""
+    started = time.perf_counter()
+    for name in INPUTS:
+        df = spark.read.parquet(f"{directory}/inputs/{name}.parquet")
+        df.agg(*[F.count(c) for c in df.columns]).collect()
+    read = time.perf_counter() - started
+    models = {}
+    for name, df in build(read_inputs(spark, directory)).items():
+        started = time.perf_counter()
+        df.write.mode("overwrite").parquet(f"{output}/{name}.parquet")
+        models[name] = time.perf_counter() - started
+    return {"read": read, "models": models}
 
 
 def differences(actual: DataFrame, expected: DataFrame, sample: int = 5) -> list[str]:

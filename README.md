@@ -179,6 +179,7 @@ Optional settings:
 | `jobmarket tableau sync [--dry-run]` | Copy the published dashboard tables to the Google Sheet behind Tableau Public |
 | `jobmarket spark export [--dir D]` | Write three reporting models' inputs, and dbt's results over them, to Parquet from one database snapshot |
 | `jobmarket spark parity [--dir D]` | Rebuild those models in PySpark and compare them with dbt's results row for row |
+| `jobmarket spark benchmark [--runs N] [--scales 1,10,100]` | Time PostgreSQL, dbt, and Spark local mode on the same inputs; write `docs/spark/results/benchmark.json` |
 | `jobmarket web [--host H] [--port P]` | Run the job-search website on this computer (default http://127.0.0.1:8000/) |
 | `jobmarket listing POSTING_ID [--html]` | One listing as a detail page would show it: safe description, links, freshness |
 | `jobmarket refingerprint` | Evaluate stored versions under the current normalization rules; report rule effects |
@@ -647,11 +648,15 @@ pipeline: nothing scheduled, and nothing in the server image, uses Spark.
    compares each with `dbt/`: the same columns in the same order and the same rows, each
    row as many times. Numbers must be equal exactly; the only rounding is the model's own
    (`share_of_extracted`, one decimal place). Any difference exits with `1`.
+4. `jobmarket spark benchmark` times PostgreSQL, dbt, and Spark on the same inputs, at today's
+   size and copied 10 and 100 times. For Databricks, see `docs/spark/DATABRICKS.md`.
 
 The reference is dbt's SQL run in the export's snapshot, not the published tables. Those were
 built at the last publication, while the views they read change with every collection (and
 a week becomes complete at midnight), so comparing the two would show differences that
 have nothing to do with Spark.
+
+The method, the measurements, and the decision: [docs/spark/README.md](docs/spark/README.md).
 
 ## Job search
 
@@ -1197,7 +1202,7 @@ pytest
 ```
 
 Analytics and website tests are skipped when dbt or Flask is not installed. The Spark tests
-(`tests/test_spark_parity.py`) need the `spark` extra and Java, and are skipped without them
+(`tests/test_spark_*.py`) need the `spark` extra and Java, and are skipped without them
 unless `JOBMARKET_REQUIRE_SPARK=1` (CI's `spark` job). Tests marked `db` need a reachable database configured through the `DB_*` variables.
 Without one they are skipped locally. Set `JOBMARKET_REQUIRE_DB=1` to make a missing
 database a failure instead (CI does this).
@@ -1232,7 +1237,7 @@ scenarios, runs the history integrity checks, and builds the analytics models wi
 data tests. It installs the PostgreSQL 17 client tools so the backup round trip runs. Collection tests use a scripted HTTP
 transport; CI never contacts Greenhouse or Lever.
 
-The `spark` job installs Java 21 and the `spark` extra and runs the Spark parity tests against
+The `spark` job installs Java 21 and the `spark` extra and runs the Spark parity and benchmark tests against
 a PostgreSQL 17 service. It runs beside the `test` job, so the main tests do not wait for
 the PySpark download.
 

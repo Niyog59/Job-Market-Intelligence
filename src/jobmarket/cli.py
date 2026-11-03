@@ -1,6 +1,7 @@
 """Command-line entry point: ``jobmarket <command>``."""
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -1401,6 +1402,8 @@ def _spark(settings: Settings, args) -> int:
     if shutil.which("java") is None and not os.environ.get("JAVA_HOME"):
         print("Spark needs Java 17 or 21 on PATH or in JAVA_HOME.", file=sys.stderr)
         return EXIT_CONFIG_ERROR
+    if args.spark_command == "benchmark":
+        return _spark_benchmark(settings, args)
     if not (directory / "export.json").exists():
         print(f"No export in {directory}: run `jobmarket spark export` first.", file=sys.stderr)
         return EXIT_CONFIG_ERROR
@@ -1422,6 +1425,34 @@ def _spark(settings: Settings, args) -> int:
         print("Spark and dbt differ.", file=sys.stderr)
         return EXIT_FAILURE
     print("All three models match dbt row for row.")
+    return EXIT_OK
+
+
+def _spark_benchmark(settings: Settings, args) -> int:
+    from jobmarket.analytics import AnalyticsUnavailable
+
+    try:
+        from jobmarket import spark_benchmark
+    except ImportError:
+        print('The benchmark needs dbt: pip install -e ".[analytics,spark]"', file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    scales = [int(value) for value in args.scales.split(",")]
+    try:
+        result = spark_benchmark.benchmark(
+            _analytics_login(settings), Path(args.dir), args.runs, scales
+        )
+    except (AnalyticsUnavailable, spark_benchmark.spark_export.ExportError) as exc:
+        print(f"Not measured: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n")
+    print(spark_benchmark.summary(result))
+    print(f"Results written to {output}.")
+    different = [s for s, r in result["scales"].items() if any(r["parity"].values())]
+    if different:
+        print(f"Spark and PostgreSQL differ at scale {', '.join(different)}.", file=sys.stderr)
+        return EXIT_FAILURE
     return EXIT_OK
 
 
@@ -1695,7 +1726,15 @@ def build_parser() -> argparse.ArgumentParser:
         "export", help="write the models' inputs and dbt's results to Parquet (one snapshot)"
     )
     sp_parity = sp_cmds.add_parser("parity", help="rebuild the models in Spark, compare with dbt")
-    for cmd in (sp_export, sp_parity):
+    sp_bench = sp_cmds.add_parser(
+        "benchmark", help="time PostgreSQL, dbt, and Spark on the same inputs (several minutes)"
+    )
+    sp_bench.add_argument("--runs", type=int, default=5, help="runs per measurement")
+    sp_bench.add_argument(
+        "--scales", default="1,10,100", help="copies of the data to measure, comma separated"
+    )
+    sp_bench.add_argument("--output", default="docs/spark/results/benchmark.json")
+    for cmd in (sp_export, sp_parity, sp_bench):
         cmd.add_argument("--dir", default="data/spark", help="export directory")
 
     summ = commands.add_parser("summary", help="the daily summary email")
