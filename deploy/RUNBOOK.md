@@ -158,7 +158,12 @@ then; that is expected.
 
 **D2. Work as `ec2-user`.**
 - Where: the Session Manager shell. Run: `sudo su - ec2-user`
-- Check: `whoami` prints `ec2-user`. Start every later session with this command.
+- Check: `whoami` prints `ec2-user`. Start every later session with this command, then
+  `cd ~/Job-Market-Intelligence/deploy` (after E4).
+- Paste `sudo su - ec2-user` on its own and press Enter before the next command: a line
+  pasted together with it is lost while the user switches.
+- The browser shell can leave `nano` as a blank screen. If that happens, press Ctrl+X (then
+  N if asked to save) and make the change with the commands given in that step instead.
 
 ---
 
@@ -242,8 +247,12 @@ nano .env
   - Email lines: fill them in step E6, or leave them for now.
   - Save with Ctrl+O, Enter; exit with Ctrl+X. These are new secrets for the server: do
     not reuse the ones from your Mac.
-- Check: `grep -c CHANGE_ME .env` prints `0` (after E6), and `docker compose config
-  --quiet` prints nothing. Keep a copy of the secrets in your password manager.
+- Without `nano`: `sed -i 's/^SITE_DOMAIN=.*/SITE_DOMAIN=YOURDOMAIN.dev/' .env` sets a
+  value, and the same pattern works for every line here.
+- Check: `grep '^SITE_DOMAIN' .env` shows your domain (Caddy requests the certificate for
+  exactly this name in F4), `grep -c CHANGE_ME .env` prints `0` (after E6), and
+  `docker compose config --quiet` prints nothing. Keep a copy of the secrets in your
+  password manager.
 
 **E6. Let the server send email (Gmail app password).**
 - Where: your browser, signed in to the Gmail account that will send the messages.
@@ -431,13 +440,16 @@ docker compose ps
 
 **G2. Open the Airflow UI privately.** It listens only on the server's own address, so you
 reach it through a tunnel from your Mac:
-- While SSH is still open (before F8): `ssh -L 8080:127.0.0.1:8080 ec2-user@ELASTIC_IP`
-  (with your usual key), then open http://localhost:8080 on your Mac.
+- While SSH is still open (before F8), with the key pair file from the instance's creation
+  (once: `chmod 400` it, since SSH refuses a key other users can read):
+  `ssh -i ~/.ssh/YOUR-KEY.pem -o ServerAliveInterval=30 -L 8080:127.0.0.1:8080 ec2-user@ELASTIC_IP`,
+  then open http://localhost:8080 on your Mac. The tunnel lasts only while that command
+  runs; after the Mac sleeps, run it again.
 - With Session Manager (needs the AWS CLI and its Session Manager plugin on your Mac):
   `aws ssm start-session --target i-YOURINSTANCEID --region us-east-2 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'`,
   then open http://localhost:8080.
-- Sign in as `admin`; the password is in the server's
-  `docker compose exec airflow-api cat /app/airflow/simple_auth_manager_passwords.json.generated`.
+- Sign in as `admin` with the generated password, printed on its own by
+  `docker compose exec airflow-api python -c "import json; print(json.load(open('/app/airflow/simple_auth_manager_passwords.json.generated'))['admin'])"`.
 - Check: three DAGs (`jobmarket_collection`, `jobmarket_retries`, `jobmarket_extraction`),
   no import errors, and the catch-up runs green or skipped (skipped is normal: a noon run
   skips the evening-only steps, and AI skips until Gemini is configured).
@@ -459,8 +471,20 @@ docker compose exec airflow-scheduler airflow dags trigger jobmarket_collection
 
 A run triggered after 17:00 Chicago time counts as an evening run (backup and summary).
 Gemini extraction runs only when `GEMINI_API_KEY` and the `JOBMARKET_AI_*` limits are set
-in `.env` (then `docker compose up -d airflow-scheduler` to reload it); until then that DAG
-skips.
+in `.env`; until then that DAG skips. To set them, replace RPM, TPM, and DAILY below with
+your account's limits (the values in your Mac's `.env`; README "Requirement extraction"),
+and read the key at a hidden prompt, so it never appears on screen or in the shell history:
+
+```bash
+sed -i -e 's/^# *JOBMARKET_AI_RPM=.*/JOBMARKET_AI_RPM=RPM/' -e 's/^# *JOBMARKET_AI_TPM=.*/JOBMARKET_AI_TPM=TPM/' -e 's/^# *JOBMARKET_AI_DAILY_LIMIT=.*/JOBMARKET_AI_DAILY_LIMIT=DAILY/' .env
+read -rs -p "Gemini key: " K; echo; sed -i "s|^# *GEMINI_API_KEY=.*|GEMINI_API_KEY=$K|" .env; unset K
+docker compose up -d airflow-scheduler
+docker compose exec airflow-scheduler jobmarket extract status
+```
+
+- Check: `extract status` shows the active configuration and no "Paused until" line; the
+  next :30 run of `jobmarket_extraction` is green. Use one machine for extraction: the Mac
+  and the server share the same key's free daily limit.
 
 **G5. Running jobs by hand.** Works with or without Airflow, from
 `~/Job-Market-Intelligence/deploy`. If Airflow is running, a job it is running at the same
@@ -623,6 +647,10 @@ are gone by design.
 | Symptom | Check |
 |---|---|
 | No certificate, browser warns | `dig +short YOURDOMAIN.dev` equals the Elastic IP; B6 allows TCP 80 and 443; `docker compose logs caddy` |
+| Caddy log: `rejectedIdentifier` for a name that is not yours (such as `change_me...`) | `SITE_DOMAIN` in `.env` still holds the placeholder. Set it (E5), then `docker compose up -d caddy`; `restart` keeps the old setting |
+| `ssh`: `Permission denied (publickey)` | Pass the key pair file with `-i`; `chmod 400` it first (G2) |
+| Airflow sign-in says invalid credentials | Copy only the password, not the JSON around it (G2 prints it on its own) |
+| Airflow task pink (skipped) | Normal for evening-only steps in a noon run, for `sheets_sync` until the Sheet exists, and for `extract` until Gemini is configured; otherwise its log says why (another job held the lock, or a quota pause) |
 | Site shows "Database not reachable" | `docker compose ps` (is `db` healthy?); `docker compose logs db` |
 | Site shows "Search data is being rebuilt", or Reports says "Reports not ready yet" | `docker compose run --rm jobs jobmarket analytics publish` |
 | Reports page says the latest rebuild did not pass its checks | The alert email (or `jobmarket notifications --full`) has the error; the site keeps the last good reports. Fix, then `analytics publish` |
