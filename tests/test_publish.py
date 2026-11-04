@@ -46,6 +46,18 @@ def test_publish_replaces_every_layer_and_leaves_no_shadow(owner, world):
     assert status.listings > 0
 
 
+def test_published_tables_have_planner_statistics(owner, world):
+    assert publish(owner, world).published
+    # reltuples is -1 until a table has been analyzed or vacuumed.
+    never_analyzed = owner.execute(
+        "SELECT n.nspname || '.' || c.relname FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relkind = 'r' AND n.nspname LIKE %s AND c.reltuples < 0",
+        (f"{world.source}_analytics_%",),
+    ).fetchall()
+    assert never_analyzed == []
+
+
 def test_a_failed_build_keeps_the_live_reports_and_job_search(owner, world, monkeypatch):
     assert publish(owner, world).published
     before = built_at(owner, world)
