@@ -3,9 +3,50 @@
 Job discovery for data analyst, data engineer, and backend roles, built from permitted
 public listings on official company career pages and applicant tracking systems.
 
+**Live:** https://jobobservatory.dev
+
+## Start here
+
+Twice a day the pipeline collects data, analytics, software, and ML jobs from 51 employer
+job boards on Greenhouse and Lever, keeps the ones in Dallas-Fort Worth, Greater Houston, or
+remote and open to Texas, and records every change to every listing. Gemini reads new
+postings and extracts their requirements, dbt builds the reports, and a Flask website serves
+job search, the reports, and a private workspace for tracking applications.
+
+```mermaid
+flowchart LR
+    boards["Greenhouse and Lever<br/>public job board APIs"] --> collector["Collector<br/>(Python)"]
+    collector --> db[("PostgreSQL 17<br/>listings, history,<br/>availability")]
+    db <--> ai["Gemini extraction<br/>(quotes checked)"]
+    db --> dbt["dbt reports<br/>(checked, then published)"]
+    dbt --> site["Flask website<br/>behind Caddy HTTPS"]
+    dbt --> sheet["Google Sheet"] --> tableau["Tableau Public"]
+    collector -. raw responses .-> s3[("S3")]
+    db -. nightly backups .-> s3
+    airflow["Airflow"] -. schedules .-> collector
+```
+
+Three things worth a look:
+
+- **History you can trust.** Each listing keeps a version for every meaningful change. A
+  job is marked unavailable only on trustworthy evidence, a board where many jobs vanish
+  at once is put on hold instead of hiding them, and nothing is deleted.
+  ([Availability](#availability), [Posting history](#posting-history))
+- **AI answers are checked, not trusted.** Gemini's JSON is validated, every quoted piece of
+  evidence must appear in the posting, and the rule-based screen still decides which jobs
+  are kept. ([Requirement extraction](#requirement-extraction))
+- **Run like a small production system, on one server.** Docker Compose on EC2, Airflow
+  for collection, retries, and AI batches, reports rebuilt in shadow schemas and swapped in
+  only after their checks pass, nightly backups to S3, and email alerts. PySpark and
+  Databricks were measured against PostgreSQL and lost at this size, so the pipeline stays
+  on dbt. ([Deployment](#deployment), [PySpark comparison](#pyspark-comparison))
+
+Stack: Python 3.11, PostgreSQL 17, dbt, Flask, Apache Airflow 3, Docker Compose, Caddy,
+AWS (EC2, S3, IAM, Session Manager), Cloudflare DNS, Gemini, GitHub Actions.
+
 ## Status
 
-Early development, focused on Dallas-Fort Worth and Greater Houston. What exists today:
+Live since 2026-11-04, focused on Dallas-Fort Worth and Greater Houston. What exists today:
 
 - Registries of researched job boards on two applicant tracking systems:
   `config/greenhouse_boards.toml` (57 Greenhouse boards, 21 enabled) and
@@ -33,11 +74,11 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   are retained; disagreements with the AI are listed for review.
 - Content history for every listing, retained or not, and a display-safe listing form
   (sanitized description, original links, freshness, availability).
-- A local job-search website (`jobmarket web`): search with filters and shareable URLs,
-  duplicate groups shown once, archived jobs kept separate, and a detail page with the
-  extracted requirements, their source quotes, and the full description, plus a read-only
-  Reports page over the reporting tables. It reads the database through a read-only login
-  and never calls a source or the model.
+- A job-search website (`jobmarket web` on a computer, live on the server): search with
+  filters and shareable URLs, duplicate groups shown once, archived jobs kept separate, and
+  a detail page with the extracted requirements, their source quotes, and the full
+  description, plus a read-only Reports page over the reporting tables. It reads the
+  database through a read-only login and never calls a source or the model.
 - A private workspace for one owner account: an editable profile, saved jobs, application
   tracking with history, "new since last visit", and explainable comparisons of each job's
   requirements with the profile (Matched, Gap, or Needs review, with quotes; no score).
@@ -47,22 +88,15 @@ Early development, focused on Dallas-Fort Worth and Greater Houston. What exists
   Every source record keeps its own history and availability.
 - Unit, database, and end-to-end collection tests, and a GitHub Actions workflow that
   runs them against PostgreSQL 17.
+- Hosting on one AWS EC2 t3.small (2 GiB) with Docker Compose: PostgreSQL, gunicorn, Caddy
+  with a Let's Encrypt certificate, and Airflow, which runs the collection, retry, and AI
+  schedules. Backups and raw responses go to S3, email goes through Gmail, and
+  administration uses Session Manager (`deploy/`).
 
 Not yet in place:
 
-- **Running scheduling.** Airflow schedules (collection at noon and 9 PM America/Chicago,
-  retry checks, hourly AI batches, evening backups and the daily summary) are built and
-  tested in CI and in a local run with the real data, but not running anywhere: on this
-  computer nothing runs automatically, and the server is not deployed.
-- **Email delivery.** Alerts, recovery notices, and the daily summary go through the
-  `notifications` outbox and SMTP; the Gmail setup is documented, but no account is
-  configured yet, so no email is sent.
-- **Hosting.** Deployment to one AWS EC2 server is prepared but not done: a Docker
-  Compose stack (PostgreSQL, gunicorn, Caddy with HTTPS, Airflow), backups to S3, IAM
-  policy examples, and a step-by-step runbook (`deploy/`). It has been tested in CI and
-  locally, never on AWS. The full stack with Airflow needs more than the current 1 GiB
-  instance (`deploy/SIZING.md`). Until it is deployed, the website runs only on this
-  computer.
+- **Dashboards.** The Market insights page shows its headline numbers, but the Tableau
+  Public workbook it embeds is not published yet.
 - **Measured extraction accuracy.** Extraction is checked for shape and quoted evidence.
   It has been compared with labels on 30 listings, but those labels are drafts that a
   person has not reviewed yet, so the comparison shows agreement, not accuracy.
