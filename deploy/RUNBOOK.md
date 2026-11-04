@@ -1,6 +1,6 @@
 # Deployment runbook: one EC2 server
 
-This puts the public job-search demo online at `https://<name>.duckdns.org` on one EC2
+This puts the public job-search demo online at `https://YOURDOMAIN.dev` on one EC2
 instance (Amazon Linux 2023, 20 GiB disk, region us-east-2):
 
 - **Docker Compose** runs PostgreSQL (`db`), the website (`web`, gunicorn), Caddy
@@ -31,13 +31,13 @@ Never paste a password, key, or the contents of `.env` into a chat, an issue, or
 **A1. Collect what you need.**
 - An AWS console login for the account that owns the instance.
 - The instance ID (EC2 > Instances, looks like `i-0abc...`) and its region, us-east-2.
-- A DuckDNS account (free; sign in at https://www.duckdns.org with GitHub or Google).
+- A domain registered at Cloudflare (step C1), for example `yourproduct.dev`.
 - On your Mac: this repository with the latest `main`, and PostgreSQL 17 at
   `/Library/PostgreSQL/17/bin` (only to copy your existing data, step F3).
 
 **A2. Decide the names.** Write them down; later steps use them.
 - Bucket name, globally unique, lowercase, for example `jobmarket-yourname-data`.
-- DuckDNS name, for example `jobsdemo` (the site becomes `jobsdemo.duckdns.org`).
+- The domain, for example `yourproduct.dev`. The site lives at the domain itself.
 
 ---
 
@@ -105,7 +105,8 @@ Never paste a password, key, or the contents of `.env` into a chat, an issue, or
 **B7. Give the instance a fixed public address.**
 - Where: EC2 > Elastic IPs > Allocate Elastic IP address > Allocate; then select it >
   Actions > Associate Elastic IP address > your instance.
-- What: keeps the same IPv4 address across stops and starts, so DuckDNS stays correct.
+- What: keeps the same IPv4 address across stops and starts, so the domain's DNS record
+  stays correct.
 - Cost: AWS charges for every public IPv4 address (about $0.005 per hour, about $3.60 a
   month), Elastic or not; your credits cover it. A stopped instance with an Elastic IP is
   still charged for the address.
@@ -116,17 +117,31 @@ with an email alert, so you hear about charges early.
 
 ---
 
-## C. DuckDNS (in your browser)
+## C. Domain and DNS at Cloudflare (in your browser)
 
-**C1. Point your name at the server.**
-- Where: https://www.duckdns.org after signing in.
-- Values: your name from A2 > add domain; then in its "current ip" field type the Elastic
-  IP from B7 > update ip.
-- Check, on your Mac (Terminal): `dig +short YOURNAME.duckdns.org` prints the Elastic IP.
-  It can take a few minutes.
+**C1. Register the domain.**
+- Where: https://dash.cloudflare.com > Domain Registration > Register Domains.
+- What: buys the domain; Cloudflare then also answers its DNS (the lookups that turn the
+  name into the server's address).
+- Values: the domain from A2. Turn on auto-renew so it does not lapse.
+- Check: the domain appears under Websites with the status "Active".
 
-Keep the DuckDNS token private; this setup never needs it on the server because the
-Elastic IP does not change.
+**C2. Point the domain at the server.**
+- Where: Cloudflare > your domain > DNS > Records > Add record.
+- Values: Type `A`, Name `@` (the domain itself), IPv4 address = the Elastic IP from B7,
+  Proxy status **DNS only** (grey cloud, not orange). Save.
+- Why DNS only: Caddy on the server gets the HTTPS certificate from Let's Encrypt itself,
+  which needs visitors and Let's Encrypt to reach the server directly on ports 80 and 443.
+  With the orange cloud, Cloudflare would sit in between and its default "Flexible" mode
+  talks plain HTTP to the server, which loops with Caddy's redirect to HTTPS.
+- Do not add a `www` record: the certificate covers the domain only, so `www.` would show
+  a certificate warning.
+- Check, on your Mac (Terminal): `dig +short YOURDOMAIN.dev` prints the Elastic IP. It can
+  take a few minutes.
+
+`.dev` domains only open over HTTPS in browsers (the whole `.dev` ending is on the browsers'
+HTTPS-only list). Caddy provides HTTPS in F4, so the site shows nothing in a browser until
+then; that is expected.
 
 ---
 
@@ -223,7 +238,7 @@ nano .env
     `DB_PASSWORD`, `ANALYTICS_DB_PASSWORD`, `PRIVATE_DB_PASSWORD`, `AIRFLOW_DB_PASSWORD`,
     and `AIRFLOW_JWT_SECRET` (a different one each).
   - Paste the last line (ends with `=`) into `AIRFLOW_FERNET_KEY`.
-  - Set `SITE_DOMAIN` to `YOURNAME.duckdns.org` and `JOBMARKET_S3_BUCKET` to your bucket.
+  - Set `SITE_DOMAIN` to `YOURDOMAIN.dev` and `JOBMARKET_S3_BUCKET` to your bucket.
   - Email lines: fill them in step E6, or leave them for now.
   - Save with Ctrl+O, Enter; exit with Ctrl+X. These are new secrets for the server: do
     not reuse the ones from your Mac.
@@ -337,13 +352,13 @@ docker compose logs caddy | grep -i "certificate obtained"
   not, see Troubleshooting.
 
 **F5. Check the site from your Mac.**
-- Browser: `https://YOURNAME.duckdns.org` shows Job search with a padlock and the "Last
+- Browser: `https://YOURDOMAIN.dev` shows Job search with a padlock and the "Last
   complete collection" time; `/reports` shows the reports with their build time.
-- Browser, signed out: `https://YOURNAME.duckdns.org/profile` sends you to Sign in. Sign in
+- Browser, signed out: `https://YOURDOMAIN.dev/profile` sends you to Sign in. Sign in
   with your owner account; Profile, Saved jobs, and Applications work; Sign out.
 - Mac Terminal:
-  - `curl -sI http://YOURNAME.duckdns.org | head -1` shows `308` (HTTP goes to HTTPS).
-  - `nc -vz -w 5 YOURNAME.duckdns.org 5432` fails or times out (the database is closed).
+  - `curl -sI http://YOURDOMAIN.dev | head -1` shows `308` (HTTP goes to HTTPS).
+  - `nc -vz -w 5 YOURDOMAIN.dev 5432` fails or times out (the database is closed).
 
 **F6. Check that everything comes back after a restart.**
 - Where: EC2 > Instances > Instance state > Reboot. Wait 2 minutes, reconnect (D1, D2),
@@ -366,7 +381,7 @@ docker compose run --rm jobs jobmarket backup create --upload
 - Where: EC2 > Instances > yours > Security tab > the security group > Edit inbound rules.
 - What: delete the SSH rule (TCP 22). Keep the 80 and 443 rules. Keep your key pair file:
   if SSH is ever needed again, adding the rule back restores access.
-- Check: from your Mac, `nc -vz -w 5 YOURNAME.duckdns.org 22` fails or times out; then open
+- Check: from your Mac, `nc -vz -w 5 YOURDOMAIN.dev 22` fails or times out; then open
   one more Session Manager session to confirm you can still get in.
 
 ---
@@ -471,7 +486,7 @@ nothing runs twice. Without Airflow, start one job at a time (memory).
   `JOBMARKET_HEARTBEAT_URL` (it identifies your check: keep it private), then
   `docker compose up -d airflow-scheduler`. The evening summary step requests it.
 - Uptime, so you hear when the site is down: a free UptimeRobot HTTP(s) monitor for
-  `https://YOURNAME.duckdns.org/healthz`, expecting the word `ok`.
+  `https://YOURDOMAIN.dev/healthz`, expecting the word `ok`.
 - Check: both services show the first successful check.
 
 ---
@@ -527,7 +542,7 @@ access, and remove `JOBMARKET_SHEETS_ID` from `.env`.
   `https://public.tableau.com/views/NAME/WhatEmployersAskFor`. In `.env`, set
   `JOBMARKET_TABLEAU_WORKBOOK=NAME` and, optionally, `JOBMARKET_TABLEAU_PROFILE=` your
   profile address. Then `docker compose up -d web`.
-- Check: `https://YOURNAME.duckdns.org/insights` shows the main dashboard, each card under
+- Check: `https://YOURDOMAIN.dev/insights` shows the main dashboard, each card under
   "See more dashboards" opens its own dashboard, and the job-search page links to it.
 
 **Before the server exists:** the same sync works from your Mac (in the project folder, with
@@ -596,7 +611,7 @@ database; the newer `Job_Market` database is kept until you decide to remove it.
 ## J. Rebuilding after losing the server
 
 On a new Amazon Linux 2023 instance: B5 to B7 (role, security group, Elastic IP; update
-DuckDNS if the IP changed), D, E, F1, F2, then F3 Option 1 steps 3 to 5 with the newest
+the Cloudflare A record if the IP changed), D, E, F1, F2, then F3 Option 1 steps 3 to 5 with the newest
 STAMP from `backup list`, then F4 to F8, then G1 if the instance has 2 GiB or more. Give the new instance an SSH rule and keep it
 until Session Manager works there too (F8). Raw responses and backups older than 30 days
 are gone by design.
@@ -607,7 +622,7 @@ are gone by design.
 
 | Symptom | Check |
 |---|---|
-| No certificate, browser warns | `dig +short YOURNAME.duckdns.org` equals the Elastic IP; B6 allows TCP 80 and 443; `docker compose logs caddy` |
+| No certificate, browser warns | `dig +short YOURDOMAIN.dev` equals the Elastic IP; B6 allows TCP 80 and 443; `docker compose logs caddy` |
 | Site shows "Database not reachable" | `docker compose ps` (is `db` healthy?); `docker compose logs db` |
 | Site shows "Search data is being rebuilt", or Reports says "Reports not ready yet" | `docker compose run --rm jobs jobmarket analytics publish` |
 | Reports page says the latest rebuild did not pass its checks | The alert email (or `jobmarket notifications --full`) has the error; the site keeps the last good reports. Fix, then `analytics publish` |
@@ -638,7 +653,8 @@ Not done yet, and only you can do it in AWS:
 - [ ] B6 security group: 80 and 443 added, existing SSH rule kept, nothing for 5432
 - [ ] B7 Elastic IP associated
 - [ ] B8 budget alert (optional)
-- [ ] C1 DuckDNS name pointing to the Elastic IP
+- [ ] C1 domain registered at Cloudflare
+- [ ] C2 A record (DNS only) pointing to the Elastic IP
 - [ ] E1 to E5 server preparation (swap, Docker, plugins, code, `.env`)
 - [ ] F1 to F7 first start, checks, restart test, first S3 backup
 - [ ] F8 SSH rule removed, only after Session Manager worked in D1 and after the F6 reboot
