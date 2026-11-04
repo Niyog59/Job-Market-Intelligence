@@ -203,6 +203,15 @@ def validate_build(conn: psycopg.Connection, prefix: str) -> list[str]:
     return problems
 
 
+def _analyze(conn: psycopg.Connection, schemas: list[str]) -> None:
+    """Collect planner statistics for every table in the given schemas."""
+    tables = conn.execute(
+        "SELECT schemaname, tablename FROM pg_tables WHERE schemaname = ANY(%s)", (schemas,)
+    ).fetchall()
+    for schema, table in tables:
+        conn.execute(sql.SQL("ANALYZE {}.{}").format(sql.Identifier(schema), sql.Identifier(table)))
+
+
 def build_and_publish(
     conn: psycopg.Connection,
     target: str = "analytics",
@@ -246,6 +255,11 @@ def build_and_publish(
         if failures:
             _drop(conn, shadow, lock_timeout)
             return PublishResult(False, failures)
+        # Freshly built tables have no statistics until autovacuum gets to them, which can
+        # take a minute. Queries planned in that window (the website's first requests, an
+        # export started right after publishing) can pick plans that run for minutes instead
+        # of seconds. The tables are small, so analyzing them before the swap costs little.
+        _analyze(conn, shadow)
         with conn.transaction():
             for current, old in zip(live, retired, strict=True):
                 if conn.execute("SELECT to_regnamespace(%s)", (current,)).fetchone()[0]:
