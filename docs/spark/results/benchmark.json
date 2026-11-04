@@ -1,0 +1,622 @@
+{
+  "measured_at": "2026-11-04T03:05:25+00:00",
+  "runs": 5,
+  "machine": {
+    "system": "macOS-15.3-arm64-arm-64bit",
+    "processor": "arm64",
+    "cpus": 8,
+    "python": "3.11.5",
+    "cpu": "Apple M1",
+    "memory_bytes": "8589934592",
+    "java": "openjdk version \"21.0.13.0.3\" 2026-10-24",
+    "pyspark": "4.2.0",
+    "pyarrow": "26.0.1",
+    "dbt": "1.11.16"
+  },
+  "postgres_server": "PostgreSQL 17.2 on x86_64-apple-darwin23.6.0, compiled by Apple clang version 16.0.0 (clang-1600.0.26.4), 64-bit",
+  "real_size": {
+    "export_from_views": {
+      "median": 7.68,
+      "min": 7.318,
+      "max": 8.061,
+      "runs": [
+        7.68,
+        7.62,
+        7.704,
+        8.061,
+        7.318
+      ]
+    },
+    "dbt_run": {
+      "wall": {
+        "median": 11.574,
+        "min": 10.613,
+        "max": 13.256,
+        "runs": [
+          13.024,
+          13.256,
+          10.613,
+          11.076,
+          11.574
+        ]
+      },
+      "models": {
+        "rpt_skill_demand": {
+          "median": 0.178,
+          "min": 0.145,
+          "max": 0.202,
+          "runs": [
+            0.178,
+            0.2,
+            0.145,
+            0.16,
+            0.202
+          ]
+        },
+        "rpt_jobs_current": {
+          "median": 8.936,
+          "min": 7.806,
+          "max": 10.692,
+          "runs": [
+            10.224,
+            10.692,
+            7.806,
+            8.24,
+            8.936
+          ]
+        },
+        "rpt_weekly_jobs": {
+          "median": 8.052,
+          "min": 7.511,
+          "max": 9.122,
+          "runs": [
+            7.511,
+            7.697,
+            8.052,
+            8.391,
+            9.122
+          ]
+        }
+      },
+      "models_total": {
+        "median": 17.912,
+        "min": 16.003,
+        "max": 18.589,
+        "runs": [
+          17.912,
+          18.589,
+          16.003,
+          16.791,
+          18.259
+        ]
+      }
+    }
+  },
+  "scales": {
+    "1": {
+      "rows": {
+        "int_current_postings": 5380,
+        "int_job_attributes": 452,
+        "int_genai_mentions": 5352,
+        "int_posting_days": 49721,
+        "int_reporting_days": 10,
+        "stg_boards": 100,
+        "stg_posting_versions": 5352
+      },
+      "postgres_bytes": 8527872,
+      "parquet_bytes": 956787,
+      "output_rows": {
+        "rpt_skill_demand": 1673,
+        "rpt_jobs_current": 152,
+        "rpt_weekly_jobs": 148
+      },
+      "parity": {
+        "rpt_skill_demand": [],
+        "rpt_jobs_current": [],
+        "rpt_weekly_jobs": []
+      },
+      "postgres": {
+        "models": {
+          "rpt_skill_demand": {
+            "median": 0.025,
+            "min": 0.025,
+            "max": 0.027,
+            "runs": [
+              0.027,
+              0.025,
+              0.025,
+              0.025,
+              0.026
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 0.004,
+            "min": 0.004,
+            "max": 0.004,
+            "runs": [
+              0.004,
+              0.004,
+              0.004,
+              0.004,
+              0.004
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 0.01,
+            "min": 0.01,
+            "max": 0.011,
+            "runs": [
+              0.011,
+              0.01,
+              0.01,
+              0.01,
+              0.01
+            ]
+          }
+        },
+        "total": {
+          "median": 0.04,
+          "min": 0.039,
+          "max": 0.042,
+          "runs": [
+            0.042,
+            0.04,
+            0.039,
+            0.039,
+            0.041
+          ]
+        }
+      },
+      "export": {
+        "median": 0.212,
+        "min": 0.182,
+        "max": 0.291,
+        "runs": [
+          0.291,
+          0.263,
+          0.212,
+          0.2,
+          0.182
+        ]
+      },
+      "spark": {
+        "startup": {
+          "median": 3.78,
+          "min": 3.469,
+          "max": 3.87,
+          "runs": [
+            3.833,
+            3.469,
+            3.87,
+            3.78,
+            3.637
+          ]
+        },
+        "read": {
+          "median": 3.592,
+          "min": 3.41,
+          "max": 3.913,
+          "runs": [
+            3.516,
+            3.41,
+            3.706,
+            3.913,
+            3.592
+          ]
+        },
+        "models": {
+          "rpt_skill_demand": {
+            "median": 1.834,
+            "min": 1.742,
+            "max": 2.154,
+            "runs": [
+              1.834,
+              2.154,
+              2.003,
+              1.781,
+              1.742
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 0.846,
+            "min": 0.734,
+            "max": 0.901,
+            "runs": [
+              0.734,
+              0.743,
+              0.901,
+              0.901,
+              0.846
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 1.78,
+            "min": 1.722,
+            "max": 2.053,
+            "runs": [
+              1.751,
+              1.722,
+              2.053,
+              2.05,
+              1.78
+            ]
+          }
+        },
+        "models_total": {
+          "median": 4.619,
+          "min": 4.32,
+          "max": 4.957,
+          "runs": [
+            4.32,
+            4.619,
+            4.957,
+            4.732,
+            4.368
+          ]
+        },
+        "with_export_and_startup": {
+          "median": 8.443,
+          "min": 8.187,
+          "max": 9.04,
+          "runs": [
+            8.443,
+            8.351,
+            9.04,
+            8.712,
+            8.187
+          ]
+        }
+      }
+    },
+    "10": {
+      "rows": {
+        "int_current_postings": 53800,
+        "int_job_attributes": 4520,
+        "int_genai_mentions": 53520,
+        "int_posting_days": 497210,
+        "int_reporting_days": 10,
+        "stg_boards": 1000,
+        "stg_posting_versions": 53520
+      },
+      "postgres_bytes": 73678848,
+      "parquet_bytes": 10919368,
+      "output_rows": {
+        "rpt_skill_demand": 1673,
+        "rpt_jobs_current": 1520,
+        "rpt_weekly_jobs": 148
+      },
+      "parity": {
+        "rpt_skill_demand": [],
+        "rpt_jobs_current": [],
+        "rpt_weekly_jobs": []
+      },
+      "postgres": {
+        "models": {
+          "rpt_skill_demand": {
+            "median": 0.235,
+            "min": 0.228,
+            "max": 0.243,
+            "runs": [
+              0.235,
+              0.231,
+              0.228,
+              0.237,
+              0.243
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 0.026,
+            "min": 0.026,
+            "max": 0.028,
+            "runs": [
+              0.028,
+              0.026,
+              0.026,
+              0.027,
+              0.026
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 0.088,
+            "min": 0.086,
+            "max": 0.095,
+            "runs": [
+              0.088,
+              0.087,
+              0.086,
+              0.095,
+              0.094
+            ]
+          }
+        },
+        "total": {
+          "median": 0.351,
+          "min": 0.34,
+          "max": 0.363,
+          "runs": [
+            0.351,
+            0.344,
+            0.34,
+            0.359,
+            0.363
+          ]
+        }
+      },
+      "export": {
+        "median": 2.359,
+        "min": 2.163,
+        "max": 3.032,
+        "runs": [
+          2.359,
+          3.032,
+          2.245,
+          2.564,
+          2.163
+        ]
+      },
+      "spark": {
+        "startup": {
+          "median": 3.244,
+          "min": 2.869,
+          "max": 4.211,
+          "runs": [
+            4.211,
+            3.294,
+            2.869,
+            3.244,
+            3.205
+          ]
+        },
+        "read": {
+          "median": 3.433,
+          "min": 3.323,
+          "max": 4.209,
+          "runs": [
+            4.209,
+            3.429,
+            3.323,
+            3.673,
+            3.433
+          ]
+        },
+        "models": {
+          "rpt_skill_demand": {
+            "median": 2.139,
+            "min": 2.007,
+            "max": 3.174,
+            "runs": [
+              3.174,
+              2.139,
+              2.047,
+              2.217,
+              2.007
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 0.756,
+            "min": 0.714,
+            "max": 435.215,
+            "runs": [
+              435.215,
+              0.78,
+              0.756,
+              0.714,
+              0.738
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 1.712,
+            "min": 1.457,
+            "max": 2.209,
+            "runs": [
+              1.63,
+              1.712,
+              2.209,
+              1.972,
+              1.457
+            ]
+          }
+        },
+        "models_total": {
+          "median": 4.902,
+          "min": 4.202,
+          "max": 440.02,
+          "runs": [
+            440.02,
+            4.631,
+            5.012,
+            4.902,
+            4.202
+          ]
+        },
+        "with_export_and_startup": {
+          "median": 10.71,
+          "min": 9.57,
+          "max": 446.59,
+          "runs": [
+            446.59,
+            10.958,
+            10.126,
+            10.71,
+            9.57
+          ]
+        }
+      }
+    },
+    "100": {
+      "rows": {
+        "int_current_postings": 538000,
+        "int_job_attributes": 45200,
+        "int_genai_mentions": 535200,
+        "int_posting_days": 4972100,
+        "int_reporting_days": 10,
+        "stg_boards": 10000,
+        "stg_posting_versions": 535200
+      },
+      "postgres_bytes": 734576640,
+      "parquet_bytes": 108897834,
+      "output_rows": {
+        "rpt_skill_demand": 1673,
+        "rpt_jobs_current": 15200,
+        "rpt_weekly_jobs": 148
+      },
+      "parity": {
+        "rpt_skill_demand": [],
+        "rpt_jobs_current": [],
+        "rpt_weekly_jobs": []
+      },
+      "postgres": {
+        "models": {
+          "rpt_skill_demand": {
+            "median": 3.039,
+            "min": 2.746,
+            "max": 3.455,
+            "runs": [
+              3.455,
+              3.139,
+              3.039,
+              2.892,
+              2.746
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 0.771,
+            "min": 0.499,
+            "max": 2.561,
+            "runs": [
+              0.626,
+              0.913,
+              0.771,
+              2.561,
+              0.499
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 1.154,
+            "min": 1.099,
+            "max": 1.481,
+            "runs": [
+              1.099,
+              1.481,
+              1.24,
+              1.154,
+              1.131
+            ]
+          }
+        },
+        "total": {
+          "median": 5.18,
+          "min": 4.376,
+          "max": 6.607,
+          "runs": [
+            5.18,
+            5.533,
+            5.05,
+            6.607,
+            4.376
+          ]
+        }
+      },
+      "export": {
+        "median": 20.954,
+        "min": 20.682,
+        "max": 22.06,
+        "runs": [
+          20.682,
+          20.686,
+          21.331,
+          20.954,
+          22.06
+        ]
+      },
+      "spark": {
+        "startup": {
+          "median": 3.368,
+          "min": 3.276,
+          "max": 3.712,
+          "runs": [
+            3.712,
+            3.331,
+            3.276,
+            3.579,
+            3.368
+          ]
+        },
+        "read": {
+          "median": 5.207,
+          "min": 4.668,
+          "max": 5.295,
+          "runs": [
+            5.207,
+            4.668,
+            4.801,
+            5.295,
+            5.281
+          ]
+        },
+        "models": {
+          "rpt_skill_demand": {
+            "median": 6.007,
+            "min": 5.151,
+            "max": 9.555,
+            "runs": [
+              6.007,
+              5.873,
+              5.151,
+              9.555,
+              6.499
+            ]
+          },
+          "rpt_jobs_current": {
+            "median": 2.615,
+            "min": 2.196,
+            "max": 2.95,
+            "runs": [
+              2.95,
+              2.352,
+              2.196,
+              2.676,
+              2.615
+            ]
+          },
+          "rpt_weekly_jobs": {
+            "median": 3.713,
+            "min": 3.286,
+            "max": 4.443,
+            "runs": [
+              3.827,
+              3.567,
+              4.443,
+              3.713,
+              3.286
+            ]
+          }
+        },
+        "models_total": {
+          "median": 12.4,
+          "min": 11.79,
+          "max": 15.944,
+          "runs": [
+            12.784,
+            11.791,
+            11.79,
+            15.944,
+            12.4
+          ]
+        },
+        "with_export_and_startup": {
+          "median": 37.178,
+          "min": 35.807,
+          "max": 40.478,
+          "runs": [
+            37.178,
+            35.807,
+            36.397,
+            40.478,
+            37.828
+          ]
+        }
+      }
+    }
+  }
+}

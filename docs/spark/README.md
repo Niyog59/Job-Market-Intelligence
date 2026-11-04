@@ -1,9 +1,8 @@
 # PySpark and Databricks against PostgreSQL and dbt
 
-> **Status: waiting for measurements.** The code, the parity tests, and the method are done.
-> Every value marked *not measured yet* comes from `docs/spark/results/benchmark.json` (local
-> run) and `docs/spark/results/databricks.json` (Databricks run) once those exist. No number in
-> this page is estimated.
+> **Status:** measured locally on 2026-11-03 (`docs/spark/results/benchmark.json`). The
+> Databricks run is still to do; its values are marked *not measured yet* and will come from
+> `docs/spark/results/databricks.json`. No number in this page is estimated.
 
 ## The question
 
@@ -17,12 +16,12 @@ row for row against dbt, and timed against PostgreSQL on the same inputs.
 
 | | Value |
 |---|---|
-| Machine (local run) | *not measured yet* (`machine` in benchmark.json) |
-| PostgreSQL | *not measured yet* (`postgres_server`) |
-| Python, PySpark, Java | *not measured yet* (PySpark pinned to 4.2.0) |
+| Machine (local run) | MacBook with Apple M1, 8 cores, 8 GB of memory, macOS 15.3 |
+| PostgreSQL | 17.2, an x86_64 build, so it runs under Rosetta on this ARM Mac |
+| Python, PySpark, Java | 3.11.5, PySpark 4.2.0 (PyArrow 26.0.1), OpenJDK 21.0.13 |
 | dbt | 1.11.16 with dbt-postgres 1.11.0 |
 | Databricks | Free Edition, serverless compute, Spark *not measured yet* |
-| Data at today's size | *not measured yet*: input rows, Parquet MB, PostgreSQL MB |
+| Data at today's size | 66,367 input rows: 0.96 MB as Parquet, 8.53 MB in PostgreSQL |
 
 ## What was rebuilt
 
@@ -52,8 +51,8 @@ place).
 | Where | Result |
 |---|---|
 | Tests on the synthetic history (CI job `spark`), including a discovery late on a Sunday evening in Chicago (already Monday in UTC) | identical, all three models |
-| Real data, local mode (`jobmarket spark parity`) | *not measured yet* |
-| Real data, every benchmark scale (Spark against PostgreSQL) | *not measured yet* (`parity` per scale) |
+| Real data, local mode (`jobmarket spark parity`) | identical: 1,673, 152, and 148 rows |
+| Real data, every benchmark scale (Spark against PostgreSQL) | identical at 1x, 10x, and 100x |
 | Real data, Databricks | *not measured yet* |
 
 ## How it was measured
@@ -78,21 +77,26 @@ with the fastest and slowest):
 
 ## Timings
 
-Seconds, medians of 5 runs. *Not measured yet.*
+Seconds, medians of 5 runs. The fastest and slowest runs are in `benchmark.json`.
 
 | Part | 1x | 10x | 100x |
 |---|---|---|---|
-| Input rows | | | |
-| PostgreSQL: three models | | | |
-| Export to Parquet | | | |
-| Spark: session startup | | | |
-| Spark: read every input column | | | |
-| Spark: three models | | | |
-| Spark: export + startup + three models | | | |
-| Same result as PostgreSQL | | | |
+| Input rows | 66,367 | 663,580 | 6,635,710 |
+| Size in PostgreSQL | 8.5 MB | 73.7 MB | 734.6 MB |
+| PostgreSQL: three models | **0.040** | **0.351** | **5.180** |
+| Export to Parquet | 0.212 | 2.359 | 20.954 |
+| Spark: session startup | 3.780 | 3.244 | 3.368 |
+| Spark: read every input column | 3.592 | 3.433 | 5.207 |
+| Spark: three models | 4.619 | 4.902 | 12.400 |
+| Spark: export + startup + three models | 8.443 | 10.710 | 37.178 |
+| Same result as PostgreSQL | yes | yes | yes |
 
-At today's size: `dbt run` of the three models *not measured yet* (dbt's own model timings
-*not measured yet*); `jobmarket spark export` *not measured yet*.
+At today's size, `dbt run` of the three models takes 11.6 s and `jobmarket spark export`
+7.7 s. Both are much slower than the 0.04 s above because they start from the live dbt views,
+not from ready inputs. Inside that dbt run, the two models that read `int_genai_mentions` (keyword
+matching over every description) take 8.9 s and 8.1 s, against 0.18 s for `rpt_skill_demand`,
+which does not read it. The cost is upstream of the reporting step, and the export pays it
+too, before Spark starts.
 
 Databricks Free Edition (today's size): read *not measured yet*, three models *not measured
 yet*. Serverless compute is already running when the notebook starts, so it has no startup
@@ -100,12 +104,25 @@ time to report, and its machine size is not shown.
 
 ## Decision
 
-*To be written from the measurements above.*
+Stay with PostgreSQL and dbt.
+
+- At today's size PostgreSQL computes the three models in 0.04 s. Spark needs 3.8 s just to
+  start its JVM and session, then 4.6 s for the models alone, more than a hundred times
+  PostgreSQL's time. At this size nearly all of Spark's time is fixed overhead.
+- PostgreSQL stays faster at every measured scale, including 100 times today's data (6.6
+  million input rows): 5.2 s against Spark's 12.4 s for the models alone, or 37.2 s once the
+  export and startup that the Spark path needs are counted.
+- Spark gives the same answer, row for row, so the choice is about cost and simplicity, not
+  correctness. Keeping one engine also means one database to run, back up, and secure.
 
 ## What would change the decision
 
-*To be written from the measurements above:* the scale at which Spark's time drops below
-PostgreSQL's, if any of the measured scales reaches it.
+No measured scale reached a crossover. The trend points at one further out: from 1x to 100x
+PostgreSQL's time grew from 0.04 s to 5.2 s, while Spark's model time grew from 4.6 s to
+12.4 s. Somewhere above 100 times today's data Spark might win on this machine, but that was
+not measured, and the export to Parquet (21 s at 100x) would still sit in front of it unless
+the data lived in a Spark-native store to begin with. Not tested either: running a JVM next to
+PostgreSQL and Airflow on the planned 2 GiB server (`deploy/SIZING.md`).
 
 Moving engines would not mean rewriting the models in PySpark: dbt has adapters for
 Databricks (`dbt-databricks`) and Snowflake (`dbt-snowflake`), so the models could stay SQL in
