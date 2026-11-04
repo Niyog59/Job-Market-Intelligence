@@ -1,0 +1,82 @@
+{
+  "measured_at": "2026-11-04T04:27:08+00:00",
+  "spark": "4.2.0",
+  "compute": "serverless",
+  "runs": 5,
+  "rows": {
+    "int_current_postings": 5380,
+    "int_job_attributes": 452,
+    "int_genai_mentions": 5352,
+    "int_posting_days": 49721,
+    "int_reporting_days": 10,
+    "stg_boards": 100,
+    "stg_posting_versions": 5352
+  },
+  "parity": {
+    "rpt_skill_demand": [],
+    "rpt_jobs_current": [],
+    "rpt_weekly_jobs": []
+  },
+  "read": {
+    "median": 6.918,
+    "min": 6.134,
+    "max": 7.156,
+    "runs": [
+      7.156,
+      6.918,
+      7.027,
+      6.547,
+      6.134
+    ]
+  },
+  "models": {
+    "rpt_skill_demand": {
+      "median": 2.646,
+      "min": 2.461,
+      "max": 3.192,
+      "runs": [
+        3.192,
+        2.646,
+        2.556,
+        2.77,
+        2.461
+      ]
+    },
+    "rpt_jobs_current": {
+      "median": 3.294,
+      "min": 3.151,
+      "max": 3.488,
+      "runs": [
+        3.488,
+        3.294,
+        3.338,
+        3.151,
+        3.17
+      ]
+    },
+    "rpt_weekly_jobs": {
+      "median": 5.006,
+      "min": 4.8,
+      "max": 5.215,
+      "runs": [
+        5.121,
+        5.006,
+        5.215,
+        4.933,
+        4.8
+      ]
+    }
+  },
+  "models_total": {
+    "median": 10.946,
+    "min": 10.431,
+    "max": 11.801,
+    "runs": [
+      11.801,
+      10.946,
+      11.108,
+      10.854,
+      10.431
+    ]
+  }
+}
