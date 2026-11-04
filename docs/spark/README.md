@@ -1,8 +1,8 @@
 # PySpark and Databricks against PostgreSQL and dbt
 
-> **Status:** measured locally on 2026-11-03 (`docs/spark/results/benchmark.json`). The
-> Databricks run is still to do; its values are marked *not measured yet* and will come from
-> `docs/spark/results/databricks.json`. No number in this page is estimated.
+> **Status:** measured on 2026-11-03, locally (`docs/spark/results/benchmark.json`) and on
+> Databricks Free Edition (`docs/spark/results/databricks.json`). No number in this page is
+> estimated.
 
 ## The question
 
@@ -20,7 +20,7 @@ row for row against dbt, and timed against PostgreSQL on the same inputs.
 | PostgreSQL | 17.2, an x86_64 build, so it runs under Rosetta on this ARM Mac |
 | Python, PySpark, Java | 3.11.5, PySpark 4.2.0 (PyArrow 26.0.1), OpenJDK 21.0.13 |
 | dbt | 1.11.16 with dbt-postgres 1.11.0 |
-| Databricks | Free Edition, serverless compute, Spark *not measured yet* |
+| Databricks | Free Edition, serverless compute, Spark 4.2.0 |
 | Data at today's size | 66,367 input rows: 0.96 MB as Parquet, 8.53 MB in PostgreSQL |
 
 ## What was rebuilt
@@ -53,7 +53,7 @@ place).
 | Tests on the synthetic history (CI job `spark`), including a discovery late on a Sunday evening in Chicago (already Monday in UTC) | identical, all three models |
 | Real data, local mode (`jobmarket spark parity`) | identical: 1,673, 152, and 148 rows |
 | Real data, every benchmark scale (Spark against PostgreSQL) | identical at 1x, 10x, and 100x |
-| Real data, Databricks | *not measured yet* |
+| Real data, Databricks | identical, all three models |
 
 ## How it was measured
 
@@ -98,9 +98,11 @@ matching over every description) take 8.9 s and 8.1 s, against 0.18 s for `rpt_s
 which does not read it. The cost is upstream of the reporting step, and the export pays it
 too, before Spark starts.
 
-Databricks Free Edition (today's size): read *not measured yet*, three models *not measured
-yet*. Serverless compute is already running when the notebook starts, so it has no startup
-time to report, and its machine size is not shown.
+Databricks Free Edition, today's size, 5 runs: reading every input column 6.9 s, the three
+models 10.9 s (2.6 s, 3.3 s, and 5.0 s). That is slower than Spark in local mode on the Mac
+(3.6 s and 4.6 s) and far slower than PostgreSQL's 0.04 s. Serverless compute is already
+running when the notebook starts, so there is no startup time to report. Its machine size is
+not shown, and these timings do not say where the extra time over local mode goes.
 
 ## Decision
 
@@ -112,7 +114,8 @@ Stay with PostgreSQL and dbt.
 - PostgreSQL stays faster at every measured scale, including 100 times today's data (6.6
   million input rows): 5.2 s against Spark's 12.4 s for the models alone, or 37.2 s once the
   export and startup that the Spark path needs are counted.
-- Spark gives the same answer, row for row, so the choice is about cost and simplicity, not
+- Databricks did not change that: the same models took 10.9 s on Free Edition serverless.
+- Spark gives the same answer, row for row, locally and on Databricks, so the choice is about cost and simplicity, not
   correctness. Keeping one engine also means one database to run, back up, and secure.
 
 ## What would change the decision

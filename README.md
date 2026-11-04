@@ -658,8 +658,9 @@ have nothing to do with Spark.
 
 Result, measured on an M1 Mac: PostgreSQL was faster at every size tried, from today's data
 (0.04 s against 4.6 s for Spark's models, plus 3.8 s of Spark startup) to 100 times today's
-data (5.2 s against 12.4 s), and Spark's results matched dbt's row for row throughout. The
-pipeline stays on PostgreSQL and dbt. The method, every measurement, and what would change
+data (5.2 s against 12.4 s). On Databricks Free Edition the same models took 10.9 s at
+today's size. Spark's results matched dbt's row for row throughout. The pipeline stays on
+PostgreSQL and dbt. The method, every measurement, and what would change
 the decision: [docs/spark/README.md](docs/spark/README.md).
 
 ## Job search
