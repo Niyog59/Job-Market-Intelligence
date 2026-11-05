@@ -12,7 +12,10 @@ Environments:
   2026-11-04, as it stood on 2026-11-03.
 - **CI**: GitHub Actions on commit `d21bc89` (run 41943829850, 2026-11-05 UTC).
 
-## Snapshot of 2026-11-04
+## Historical snapshot: 2026-11-04
+
+These values were measured on 2026-11-04 and are not updated. Current job counts, coverage,
+and pipeline health are on the live [Reports page](https://jobobservatory.dev/reports).
 
 | Metric | Value | Definition | Source | Environment |
 |---|---|---|---|---|
@@ -30,14 +33,16 @@ Environments:
 | Scheduled-run success over a period | not available yet | share of scheduled runs whose steps succeeded | needs at least a week of production runs | production started 2026-11-04 |
 | Backup freshness | backup `20261105T030322Z`, 19,690,966 bytes, confirmed in S3 at 21:03 CST on 2026-11-04 | the newest backup with S3 confirmation | daily summary email | production |
 | Restore verification | the production database was created on 2026-11-04 by restoring the Mac's backup `20261104T050246Z` (checksums verified, one transaction per part); CI restores the pipeline's own backup on every run | a backup restored into an empty database | `jobmarket backup restore`; CI `deploy` job | production and CI |
-| Automated tests | 598 passed in the `test` job (the two Spark test modules are skipped there); 17 passed in the `spark` job; 25 passed in the `airflow` job; dbt build PASS=172 | pytest and dbt results | CI run 41943829850 | CI |
+| Automated tests | 598 passed in the `test` job (the two Spark test modules are skipped there); 17 passed in the `spark` job; 25 passed in the `airflow` job; `dbt build` passed every node (46 models, 125 data tests, and one run hook) | pytest and dbt results | CI run 41943829850 | CI |
 | Automated tests, local | 597 passed, 1 skipped (the backup round trip, because the local login may not create databases); Spark tests 17 passed with Java 21 | pytest results | `pytest` | Mac, 2026-11-04 |
 | dbt models | 46: 18 staging, 10 intermediate, 16 reporting, 2 serving | `.sql` files under `analytics/models/` | repository | repository |
+| dbt data tests | 125 | tests defined on models and sources | `dbt` manifest | repository |
 | Hosting cost | about $20.58 a month, estimated | t3.small, 20 GiB gp3 disk, one public IPv4, S3, at the AWS list price of 2026-10-29, before credits | [SIZING.md](../deploy/SIZING.md) | estimate; billed cost not measured |
 | Extraction accuracy | not measured | agreement with human-reviewed labels | the 30 evaluation cases have draft labels, not reviewed yet | not available |
 
-Coverage is not accuracy: it says a listing has structured details whose quotes were found
-in the posting, not that the details are right.
+Coverage is not accuracy. It counts listings that have an extraction result, including
+results kept with warnings because some quotes were not found in the posting. It does not
+say the details are right.
 
 ## Queries
 
