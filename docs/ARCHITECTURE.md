@@ -32,7 +32,6 @@ flowchart TB
     dbt --> web
     dbt --> sheet
     sheet --> tab
-    tab -. embedded in /insights .-> web
     pg -. nightly backup .-> s3
 ```
 
@@ -92,7 +91,9 @@ per version. The test
 checks this.
 
 Raw responses are kept separately: every page a scan received is saved with its SHA-256, so
-a scan can be replayed later under its original collection time. See
+a scan can be replayed under its original collection time while its raw pages are still on
+the server (4 days; S3 keeps copies for 30 days, but replay does not read from S3). The
+posting history in the three tables above is permanent. See
 [Posting history](COLLECTION.md#posting-history).
 
 ## Live views and published snapshots

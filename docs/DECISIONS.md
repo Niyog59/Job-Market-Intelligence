@@ -27,8 +27,9 @@ what it costs, and what would make me revisit it. Back to the [README](../README
   meaningful versions, and observations separately, plus the raw pages.
 - **Choice.** Identities, versions only for meaningful changes, one observation per sighting,
   and every raw page saved with its checksum ([data model](ARCHITECTURE.md#identity-versions-and-observations)).
-- **Benefit.** History stays small but complete; a scan can be replayed under its original
-  time after a rule change; the reports can rebuild what was known on any past day.
+- **Benefit.** History stays small but complete, and the reports can rebuild what was known
+  on any past day. A recent scan can be replayed under its original time after a rule change,
+  while its raw pages are still on the server.
 - **Cost.** More tables and more care with ordering: an older response processed late must
   never overwrite newer state, which needed its own tests
   ([`test_history.py`](../tests/test_history.py)). Raw pages cost storage, so they are kept
@@ -139,7 +140,8 @@ what it costs, and what would make me revisit it. Back to the [README](../README
   (not possible: it cannot reach a private database); Tableau Public reading a Google Sheet.
 - **Choice.** After each successful publication, the dashboard tables are written to a Google
   Sheet in one all-or-nothing request, by a service account that can edit only that Sheet.
-  Tableau Public reads the Sheet, and the website embeds the dashboards.
+  Tableau Public reads the Sheet, and the website will embed the dashboards once the workbook
+  is published (the Sheet updates already run; the workbook is in progress).
 - **Benefit.** Free, refreshed without manual steps, and only published report data ever
   leaves the server.
 - **Cost.** Tableau Public refreshes about once a day, so dashboards can lag the reports, and
