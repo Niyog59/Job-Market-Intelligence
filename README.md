@@ -1,12 +1,26 @@
 # Job Observatory
 
-A job pipeline and search site for data, analytics, and software roles in Dallas-Fort Worth
-and Greater Houston. The repository is named Job Market Intelligence.
+[![CI](https://github.com/Niyog59/Job-Market-Intelligence/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Niyog59/Job-Market-Intelligence/actions/workflows/ci.yml)
 
-**Live site:** https://jobobservatory.dev · **Dashboards:** [not published yet](#live-website-and-tableau-visualizations) ·
-**Reviewing the code?** [Start here](docs/START_HERE.md)
+A data engineering project that collects employer job listings, tracks changes over time,
+and turns job descriptions into searchable requirements and market analysis.
 
-## Why I built it
+Built with Python, PostgreSQL, dbt, Airflow, Docker, and AWS, with a Flask application for
+job search and Tableau for visualization.
+
+[Live site](https://jobobservatory.dev) · [Pipeline](#how-the-pipeline-works) · [Analysis](#application-and-analysis) · [Decisions](#key-decisions) · [Run locally](#run-it-locally)
+
+| Part | Tools |
+|---|---|
+| Collection and extraction | Python, Greenhouse and Lever APIs, Gemini |
+| Storage and transformations | PostgreSQL, dbt |
+| Scheduling and deployment | Airflow, Docker Compose, AWS EC2 |
+| Backups and checks | AWS S3, GitHub Actions |
+| Application and visualization | Flask; Tableau (data feed running, workbook in progress) |
+| Performance experiment, not in production | PySpark, Databricks |
+
+<details>
+<summary><strong>Why I built it</strong></summary>
 
 I wanted an easier way to find jobs that fit me. I was checking different company websites
 and reading through listings to understand the role, location, and experience requirements.
@@ -15,93 +29,35 @@ I built Job Observatory to bring those listings into one place. It collects jobs
 company boards, keeps track of changes, and extracts the requirements so I can search them
 more easily.
 
-Once the listings were in one place, I could also look at them as data. The analytical side
-of the project asks which skills employers list most often, how much experience they
-expect, and how junior openings differ from senior ones. The reports on the site answer
-them today, and Tableau dashboards built from the same published tables will add the
-visual side.
+Once I had the data, I also wanted to understand what employers were asking for and how
+requirements differed across roles.
 
-## Live website and Tableau visualizations
+</details>
 
-The site at https://jobobservatory.dev has four public parts:
-
-- **Job search** (`/`): search and filter the kept jobs by role, level, location, work
-  arrangement, skills, and experience.
-- **Job pages** (`/jobs/<id>`): the extracted requirements, each with "View source
-  evidence" showing the sentence it came from, next to the full description.
-- **Reports** (`/reports`): the published reporting tables, with the time they were built
-  and the collection they include.
-- **Market insights** (`/insights`): headline numbers now, and the embedded Tableau
-  dashboards once the workbook is published.
-
-![A job page on the live site: the job overview on the left, and the requirements extracted from the description on the right, with a View source evidence button for each requirement.](docs/images/job-page.png)
-
-> **Unfinished: the Tableau workbook.** The dashboards are designed
-> ([docs/tableau/DASHBOARDS.md](docs/tableau/DASHBOARDS.md)) and their data is published
-> twice a day, but the workbook is not on Tableau Public yet. When it is, its public link and
-> a dashboard screenshot go here, and `/insights` embeds it.
-
-The dashboards are meant to answer:
-
-- Which skills appear most often, counted by jobs or by employers?
-- How do the requirements of data roles differ from those of software roles?
-- What is the mix of junior, mid-level, and senior openings, and how does it change week by
-  week within the tracked employers?
-- Where do generative-AI terms appear in descriptions, inside and outside AI/ML roles?
-- How much experience and which degrees do employers ask for?
-
-How the data reaches Tableau: after each scheduled collection, `jobmarket analytics publish`
-rebuilds the dbt reporting tables; when that succeeds, `jobmarket tableau sync` writes the
-dashboard tables to a Google Sheet in one request; Tableau Public re-reads the Sheet about
-once a day. Every chart carries a "data collected through ..." caption from the
-publication it came from, and the Reports page shows the same build time. Details:
-[docs/ANALYTICS.md](docs/ANALYTICS.md#dashboard-data-tableau-public).
-
-## What it does
-
-- Collects every listing from 51 employer boards on Greenhouse and Lever, twice a day (noon
-  and 9 PM America/Chicago), through their public job board APIs.
-- Keeps the jobs that match my role families and are in DFW, Houston, or remote and open to
-  Texas, using rules I can read and test.
-- Stores every meaningful version of each listing and every time it was seen, so the site
-  can say when a job was discovered, when it changed, and when it was last seen.
-- Marks a job as possibly unavailable, assumed inactive, or closed only on evidence from
-  complete scans or the job's own page, and groups the same opening posted twice.
-- Sends new or changed listings to Gemini to extract skills, experience, degree, level, and
-  work arrangement, and checks every quoted piece of evidence against the posting.
-- Builds reporting tables with dbt and publishes them only after their tests pass.
-- Gives me a private workspace behind sign-in for a profile, saved jobs, application
-  tracking, and a comparison of each job's requirements with my profile.
-
-## Project snapshot, 2026-11-04
-
-| | Value |
+| The pipeline | The analysis |
 |---|---|
-| Employer boards collected | 51 (21 Greenhouse, 30 Lever) |
-| Kept jobs listed | 166 postings, 147 distinct openings after duplicate grouping |
-| All listings collected and still listed | 5,345 |
-| Kept jobs with extracted requirements | 165 of 166 (99.4%) |
-| All listings with extracted requirements | 485 of 5,345 (9.1%); the rest wait in a free-tier queue |
-| First scheduled evening run on the server | collection, backup confirmed in S3, publication, Sheet update, and summary email finished by 21:04 |
-| Tests in CI | 598 in the main job, 17 Spark, 25 Airflow; dbt build with 172 models and tests |
-| Hosting | about $20.58 a month at list price before credits (estimate) |
-| Extraction accuracy | not measured yet |
-
-Every number, with its definition, source, and environment: [docs/METRICS.md](docs/METRICS.md).
+| [Architecture and data flow](docs/ARCHITECTURE.md) | [Tableau visualizations](docs/tableau/DASHBOARDS.md) |
+| [Collection, history, and duplicate handling](docs/COLLECTION.md) | [Skills and experience requirements](docs/tableau/DASHBOARDS.md#1-what-are-employers-asking-for-main-view-whatemployersaskfor) |
+| [dbt transformations and publication](docs/ANALYTICS.md) | [Junior and senior opening patterns](docs/tableau/DASHBOARDS.md#2-junior-vs-senior-hiring-view-juniorvssenior) |
+| [Scheduling, tests, and recovery](docs/OPERATIONS.md) | [Metric definitions, coverage, and limitations](docs/ANALYTICS.md#counting-rules) |
 
 ## How the pipeline works
 
 ```mermaid
 flowchart TB
-    boards["Greenhouse and Lever<br/>public job board APIs"]
+    boards["Greenhouse and Lever<br/>job board APIs"]
     subgraph ec2["One EC2 server, Docker Compose"]
-        direction TB
-        af["Airflow<br/>runs each step on schedule"]
-        col["Collector<br/>fetch, validate, screen"]
-        pg[("PostgreSQL<br/>postings, versions, observations")]
-        ex["Extraction queue<br/>validate answers, check quotes"]
-        dbt["dbt<br/>staging, intermediate, reporting, serving"]
-        web["Flask website behind Caddy"]
+        af["Airflow<br/>schedules each step"]
+        subgraph flow["Data flow"]
+            direction TB
+            col["Collector<br/>fetch, validate, screen"]
+            pg[("PostgreSQL<br/>postings, versions, observations")]
+            ex["Extraction<br/>validate answers, check quotes"]
+            dbt["dbt models and tests"]
+            srv["Serving views<br/>live, for job search"]
+            rpt["Reporting tables<br/>published snapshot"]
+            web["Flask website<br/>behind Caddy"]
+        end
     end
     gem["Gemini API"]
     s3[("S3<br/>raw pages and backups")]
@@ -109,125 +65,159 @@ flowchart TB
     tab["Tableau Public"]
 
     boards --> col
-    af -.-> col
     col --> pg
-    col -.-> s3
     pg <--> ex
     ex <--> gem
     pg --> dbt
-    dbt --> web
-    dbt --> sheet
+    dbt --> srv
+    dbt --> rpt
+    srv --> web
+    rpt --> web
+    rpt --> sheet
     sheet --> tab
-    tab -. embedded in /insights .-> web
+    col -. raw pages .-> s3
     pg -. nightly backup .-> s3
+    af -. schedules .-> flow
 ```
 
-1. **Collect.** A small connector per provider reads each board page by page. The collector
-   saves every raw page, decides whether the read was complete, partial, or failed, and
-   screens each job with rules.
-2. **Store history.** PostgreSQL keeps three things apart: the posting's identity (source,
-   board, and the source's job id), its content versions (a new one only for a meaningful
-   change), and observations (each time a scan saw it). Repeated sightings show the job is
-   still listed and drive the availability rules, without creating versions or AI requests.
-   The [architecture notes](docs/ARCHITECTURE.md#identity-versions-and-observations) walk
-   through an example.
-3. **Extract.** New versions join a queue. Gemini returns the requirements as JSON within the
-   free-tier limits; Python validates the answer and searches for every quote in the text that
-   was sent.
-4. **Model.** dbt builds staging and intermediate models, reporting tables, and serving views.
-   A publication builds everything in shadow schemas, runs the data tests, and swaps the
-   schemas in one transaction.
-5. **Serve.** Job search reads the live serving views. The Reports page, the Market insights
-   numbers, and the Google Sheet read the published reporting tables, which carry their build
-   time.
-6. **Operate.** Airflow runs collection at noon and 9 PM, a retry check every 15 minutes, and
-   an extraction batch every hour, one task at a time. The evening run also backs up to S3 and
-   emails me a daily summary.
+At noon and 9 PM (America/Chicago), Airflow collects 51 employer boards. The collector saves
+the raw pages and screens each job with rules. PostgreSQL stores a job's identity, its
+content versions, and each sighting separately, so a repeated sighting creates no new
+version and no AI request.
 
-More: [architecture and data model](docs/ARCHITECTURE.md).
+New versions are queued for extraction: Gemini returns requirements as JSON, and Python
+validates each answer and searches the posting for its quotes. Job search reads live dbt
+views. The Reports page and the Google Sheet read reporting tables that are rebuilt aside
+and swapped in only after their tests pass. The evening run also backs up to S3.
+More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Main engineering decisions
+## Measured results
 
-- **Official job board APIs only.** Greenhouse and Lever give complete, structured listings
-  per board, which is what lets a missing job mean something. Each board is enabled only
-  after I verified it belongs to the employer.
-- **Keep history and the raw pages.** Every meaningful version, every sighting, and every raw
-  response with its checksum, so I can rebuild what was known on any day and replay a scan
-  after changing a rule.
-- **Be slow to hide or merge jobs.** Only complete scans count; a job is assumed inactive
-  after three missed complete scans; a board where many jobs vanish at once goes on hold;
-  duplicates are grouped only on strong evidence.
-- **Rules decide, AI enriches.** Screening rules decide which jobs are kept. The model only
-  extracts requirements, and every answer is checked for its quotes.
-- **PostgreSQL and dbt.** The data already lives in PostgreSQL and the site reads the same
-  tables. I rebuilt three reporting models in PySpark and checked them row for row against
-  dbt; on prepared inputs PostgreSQL computed them in 0.04 s against 4.6 s for Spark local
-  mode (plus 3.8 s of Spark startup), and it stayed faster up to 100 times today's data, so I
-  kept dbt ([measurements](docs/spark/README.md)).
-- **Airflow, with its cost.** It gives run history, dependencies, and time zone handling, but
-  it is the largest memory user and the reason the server needs 2 GiB. cron would have worked
-  at this size.
-- **One server.** One EC2 t3.small with Docker Compose, Caddy, Session Manager instead of SSH,
-  and S3 for backups. Cheap and rebuildable from the runbook, with no high availability.
-- **Tableau through a Google Sheet.** Tableau Public cannot reach a private database, so the
-  published tables go to a Sheet that only the server's service account can edit.
+| Measurement | Result | When and where |
+|---|---|---|
+| Collection of all 51 boards | 133 s | 2026-11-03, Mac, real data |
+| Report publication (build, tests, statistics, swap) | 25 s | 2026-11-03, Mac |
+| First scheduled 9 PM run | every step, including the S3 backup, done by 21:04 | 2026-11-04, production |
+| Backup restore | production was built from a verified backup; CI restores one on every run | 2026-11-04, production; CI |
+| dbt project | 46 SQL models and 125 data tests, all passing in CI | current `main` |
 
-Each one with the options, costs, and what would make me revisit it:
-[docs/DECISIONS.md](docs/DECISIONS.md).
+Job counts and extraction coverage change with every collection; they are on the live
+[Reports page](https://jobobservatory.dev/reports), with definitions and a dated snapshot in
+[docs/METRICS.md](docs/METRICS.md).
+
+**PostgreSQL and dbt against Spark.** I rebuilt three reporting models in PySpark and timed
+both on the same prepared inputs (medians of 5 runs, M1 Mac). The 10x and 100x inputs are
+synthetic copies of the real data, used as a scale test.
+
+| | 1x (66,367 rows) | 10x | 100x (6.6 million rows) |
+|---|---|---|---|
+| PostgreSQL, the three models | 0.04 s | 0.35 s | 5.18 s |
+| Spark local mode, the three models | 4.62 s | 4.90 s | 12.40 s |
+| Spark session startup | 3.78 s | 3.24 s | 3.37 s |
+| Export to Parquet (Spark path only) | 0.21 s | 2.36 s | 20.95 s |
+
+These are transformation times, not pipeline runtimes (a full `dbt run` of the three models
+took 11.6 s at 1x, mostly upstream models). Spark matched dbt row for row at every size and
+on Databricks Free Edition. PostgreSQL was faster at every size I measured on this data, so
+the pipeline stays on dbt. Method: [docs/spark/README.md](docs/spark/README.md).
+
+## Application and analysis
+
+![A job page on the live site: the job overview on the left, and the requirements extracted from the description on the right, with a View source evidence button for each requirement.](docs/images/job-page.png)
+
+*A job page: each extracted requirement links to the sentence it came from, next to the full
+description.*
+
+The Tableau workbook is not published yet. Its data reaches the Google Sheet after every
+run, and the dashboard designs (skills, role differences, junior and senior mix, AI mentions,
+experience) are in [docs/tableau/DASHBOARDS.md](docs/tableau/DASHBOARDS.md).
+
+From the publication of 2026-11-04 (147 open jobs kept by the screening rules, at 29 tracked
+employers): of the jobs with a clear level, 10% were junior and 83% senior or above, and 27%
+mentioned a generative-AI term. This describes the tracked employers, not the whole market,
+and a mention of AI does not explain hiring.
+
+## Key decisions
+
+| Decision | Reason | Tradeoff |
+|---|---|---|
+| Official Greenhouse and Lever APIs only | complete listings per board, so a missing job means something | only employers on these two systems |
+| Separate identities, versions, and observations | small, complete history: when a job changed and when it was last seen | more tables; late data must not overwrite newer state |
+| Conservative absence and duplicate rules | a bad scan or a wrong merge cannot hide jobs | closed jobs stay visible longer; some duplicates wait for review |
+| PostgreSQL and dbt, after the Spark comparison | faster on this data, one engine to run and back up | single-machine scale |
+| Airflow | run history, dependencies, time zones | the largest memory user; why the server needs 2 GiB |
+| AI extraction with validation | rules decide which jobs are kept; answers are schema-checked and quotes searched for | answers with evidence problems are kept with warnings; accuracy not measured |
+
+The full reasoning, options, and settings: [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## What broke and how I fixed it
 
-**Slow queries right after a publication.** While benchmarking Spark on my Mac, an export
-started a few seconds after a publication ran one query for more than ten minutes. The
-cause: a publication creates new tables, and new tables have no planner statistics until
-autovacuum analyzes them, so PostgreSQL planned the query with default estimates. The
-website's first queries after each publication had the same exposure. The fix: the publish
-step now runs `ANALYZE` on every table of the new build before the swap
-([`analytics.py`](src/jobmarket/analytics.py), `_analyze`). I checked it by rerunning the
-export, which then finished in 22 seconds, and by a regression test that fails if any
-published table has never been analyzed
-([`test_published_tables_have_planner_statistics`](tests/test_publish.py)). This happened
-in development, not on the server.
+**Slow queries right after a publication**, fixed by running `ANALYZE` before the new tables
+are swapped in.
 
-**Evening runs that started after midnight.** The 9 PM run has extra duties: the backup, the
-summary email, and cleanup. The DAG decided whether a run was an evening run from its actual
-start time. `airflow dags test`, which the CI deploy job uses, sets that to the moment the
-test starts, so when CI happened to run after midnight in Chicago the 21:00 run was treated
-as a daytime run, skipped its evening steps, and failed the check of recorded steps. A real
-run delayed past midnight would have done the same. The fix: the evening duties now follow
-the run's scheduled slot (its logical date) and fall back to the start time only for manual
-runs ([`jobmarket.py`](deploy/airflow/dags/jobmarket.py), `is_evening`). Tests cover a
-21:00 run started after midnight
-([`test_schedule.py`](deploy/airflow/tests/test_schedule.py),
-[`test_pipeline_runs.py`](deploy/airflow/tests/test_pipeline_runs.py)), and the CI deploy job
-passes whatever time it runs. This was a CI failure, not a production incident.
+<details>
+<summary>Details</summary>
 
-**No HTTPS certificate on the first deployment.** When I first started the site on the
-server, it did not load over HTTPS. DNS and the open ports checked out, and the Caddy log
-showed Let's Encrypt refusing a certificate for `change_me.duckdns.org`: the server's
-settings file still had the placeholder domain from the example file. Setting the real
-domain and recreating the Caddy container fixed it (a plain restart keeps the old setting).
-I then changed the example file to ask for the domain, and added a check and a
-troubleshooting entry to the [runbook](deploy/RUNBOOK.md). This was during setup, before the
-site was public.
+- **What happened:** during the Spark benchmark on my Mac (development), an export started a
+  few seconds after a publication ran one query for more than ten minutes.
+- **Why:** a publication creates new tables, and new tables have no planner statistics until
+  autovacuum analyzes them, so PostgreSQL planned with default estimates. The website's first
+  queries after a publication had the same exposure.
+- **What changed:** the publish step runs `ANALYZE` on every table of the new build before the
+  swap ([`analytics.py`](src/jobmarket/analytics.py), `_analyze`).
+- **How I checked it:** the same export finished in 22 seconds once the tables had statistics,
+  and [`test_published_tables_have_planner_statistics`](tests/test_publish.py) fails if a
+  published table was never analyzed.
+
+</details>
+
+**Evening runs that started after midnight skipped their evening duties**, fixed by
+deciding from the scheduled slot instead of the start time.
+
+<details>
+<summary>Details</summary>
+
+- **What happened:** in CI, the deploy job's check of recorded steps failed because the
+  21:00 run had skipped its backup, prune, and summary steps.
+- **Why:** the DAG decided "evening" from the run's start time, and `airflow dags test` sets
+  that to the moment the test starts. That CI run started after midnight in Chicago. A real
+  run delayed past midnight would have done the same.
+- **What changed:** the evening duties follow the run's logical date (its scheduled slot), and
+  only manual runs without one use their start time
+  ([`jobmarket.py`](deploy/airflow/dags/jobmarket.py), `is_evening`).
+- **How I checked it:** tests cover a 21:00 run started after midnight
+  ([`test_schedule.py`](deploy/airflow/tests/test_schedule.py),
+  [`test_pipeline_runs.py`](deploy/airflow/tests/test_pipeline_runs.py)), and the deploy job
+  passes whatever time it runs. A CI failure, not a production incident.
+
+</details>
+
+**No HTTPS certificate on the first deployment**, fixed by setting the real domain in the
+server's settings.
+
+<details>
+<summary>Details</summary>
+
+- **What happened:** during the first setup on the server, before the site was public, it did
+  not load over HTTPS.
+- **Why:** the Caddy log showed Let's Encrypt refusing a certificate for
+  `change_me.duckdns.org`: the server's settings file still had the placeholder domain from
+  the example file.
+- **What changed:** I set the real domain and recreated the Caddy container (a plain restart
+  keeps the old setting). The example file now asks for the domain, and the
+  [runbook](deploy/RUNBOOK.md) checks it and lists the symptom under troubleshooting.
+- **How I checked it:** Caddy obtained the certificate, and HTTPS, the HTTP redirect, and the
+  closed database port were checked from outside the server.
+
+</details>
 
 ## Plans for more employers
 
-The next step is growing coverage toward roughly 300 to 400 employers, in measured stages
-rather than all at once.
-
-- **Verify each new board** the same way as the current ones: the employer's own careers page
-  has to reference it, and the employer has to hire in DFW or Houston.
-- **Add a source only when it is justified,** for example when enough target employers use a
-  system the pipeline does not read yet.
-- **Measure each stage:** collection success per board and the duration of each run,
-  publication time, and memory on the server, before adding the next group.
-- **Watch extraction capacity.** The free tier allows a fixed number of requests a day, so I
-  track the queue size and the age of the oldest pending listing, and keep new or changed kept
-  jobs first in the queue.
-- **Separate new boards from new openings.** A newly added board's existing jobs are already
-  counted as initial imports, not as new openings. Trend comparisons will also need a
-  consistent group of employers, so that adding boards does not look like hiring growth.
+- Grow to about 300 to 400 verified employers in stages.
+- Before each stage, check collection success, publication time, and the extraction backlog,
+  since the free AI tier handles a fixed number of listings a day.
+- Count a new board's existing jobs as initial imports, not new openings, and compare trends
+  over a consistent group of employers.
 
 ## Run it locally
 
@@ -237,56 +227,32 @@ You need Python 3.11 and PostgreSQL 17.
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,analytics,web]"
 cp .env.example .env              # database name, user, and password
-jobmarket check-db                # connects and runs SELECT 1
-jobmarket migrate                 # creates the schema
-jobmarket sources sync            # loads the board registry
+jobmarket check-db && jobmarket migrate && jobmarket sources sync
 jobmarket collect                 # scans every enabled board
 jobmarket analytics build         # builds the dbt models and runs their tests
 jobmarket web                     # http://127.0.0.1:8000/
+ruff check . && pytest            # tests; database tests skip without a database
 ```
 
-The analytics and website steps need a separate analytics login, and extraction needs a
-Gemini API key and the account's limits; see [docs/OPERATIONS.md](docs/OPERATIONS.md).
-
-Tests:
-
-```bash
-ruff check . && ruff format --check .
-pytest
-```
-
-Database tests skip without a reachable database (set `JOBMARKET_REQUIRE_DB=1` to make that a
-failure, as CI does). The Spark tests need the `spark` extra and Java 17 or 21, and the
-Airflow DAG tests need Airflow; CI runs both in their own jobs.
+The analytics login, the Gemini settings, and every other command:
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Limitations
 
-- **Extraction accuracy is not measured.** Coverage only says a listing has structured details
-  whose quotes were found in the text. The 30 evaluation cases have draft labels that a
-  person has not reviewed yet.
-- **51 boards are a sample.** The numbers describe these employers, not the whole market.
-- **The Tableau workbook is not published yet.**
-- **One server, no high availability.** If it fails, the site is down until it is rebuilt from
-  the runbook and an S3 backup, and up to a day of collected data can be lost.
-- **Memory on the server has not been recorded yet.** The 2 GiB size rests on measurements
-  taken before deployment ([SIZING.md](deploy/SIZING.md)).
-- **Monitoring is email only.** Heartbeat and uptime checks are prepared but not switched on.
-- **Backups are not immutable.** The server cannot delete them, but they can be overwritten or
-  removed by an administrator; S3 versioning or Object Lock is not set up.
+- Extraction accuracy is not measured. Coverage means a result exists, not that every quote
+  was found or that it is right; the 30 evaluation labels are not reviewed yet.
+- 51 boards are a sample of employers, not the market.
+- One server: a failure means rebuilding from the runbook and the last backup, with up to a
+  day of data at risk. Monitoring is email only; backups are not immutable.
+- Posting history is permanent, but raw pages stay 4 days on the server (30 in S3), and replay
+  reads only the server's copy.
 
 ## Documentation
 
-| | |
-|---|---|
-| [Start here](docs/START_HERE.md) | three areas of the code worth reading, with their tests |
-| [Architecture and data model](docs/ARCHITECTURE.md) | the pipeline, identity and versions, live views and snapshots |
-| [Decisions](docs/DECISIONS.md) | the main choices, their costs, and the settings |
-| [Metrics](docs/METRICS.md) | every number above, with its source |
-| [Collection and history](docs/COLLECTION.md) | connectors, evidence, availability, duplicates, the schema |
-| [Requirement extraction](docs/EXTRACTION.md) | the queue, checks, limits, and evaluation |
-| [Analytics](docs/ANALYTICS.md) | dbt layers, counting rules, serving views, the Sheet behind Tableau |
-| [Website](docs/WEBSITE.md) | search rules, pages, the private workspace |
-| [Operations](docs/OPERATIONS.md) | configuration, every command, scheduling, backups, tests, CI |
-| [Runbook](deploy/RUNBOOK.md) and [sizing](deploy/SIZING.md) | deploying to EC2 and the memory evidence |
-| [Spark comparison](docs/spark/README.md) | the PySpark and Databricks measurements |
-| [Dashboards](docs/tableau/DASHBOARDS.md) | the dashboard designs, data dictionary, and build guide |
+[Start here](docs/START_HERE.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Decisions](docs/DECISIONS.md) ·
+[Metrics](docs/METRICS.md) · [Collection](docs/COLLECTION.md) ·
+[Extraction](docs/EXTRACTION.md) · [Analytics](docs/ANALYTICS.md) ·
+[Website](docs/WEBSITE.md) · [Operations](docs/OPERATIONS.md) ·
+[Runbook](deploy/RUNBOOK.md) · [Sizing](deploy/SIZING.md) ·
+[Spark comparison](docs/spark/README.md) · [Dashboards](docs/tableau/DASHBOARDS.md)
