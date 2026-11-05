@@ -61,7 +61,6 @@
     ({{ fmt.age(status.last_complete_collection, now) }}) · {{ status.boards }} boards
     · {{ "{:,}".format(status.pending_extraction) }} of {{ "{:,}".format(status.listings) }}
     active listings still waiting for structured details.
-    Collection runs only when started by hand.
   </p>
   {% if status.stale_boards %}
   <p class="banner warn" role="status">

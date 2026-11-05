@@ -45,7 +45,7 @@
     Reports built {{ fmt.when(b.built_at) }} ({{ fmt.age(b.built_at, now) }}).
     They include collections up to {{ fmt.when(b.latest_complete_collection) }} and structured
     details (AI extraction) up to {{ fmt.when(b.latest_extraction) }}.
-    Reports change only when the analytics are rebuilt; collection runs only when started by hand.
+    Reports change only when the analytics are rebuilt.
   </p>
   {% if failed_at %}
   <p class="banner warn" role="status">
