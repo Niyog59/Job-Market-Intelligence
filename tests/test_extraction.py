@@ -17,7 +17,9 @@ from jobmarket.sources import sync_registry
 
 pytestmark = pytest.mark.db
 
-CONFIG = ExtractionConfig(rpm=60, daily_limit=100)
+# No reserve for new listings here, so the backlog lane can use the whole (small) test
+# allowance; the lane tests set their own reserve.
+CONFIG = ExtractionConfig(rpm=60, daily_limit=100, new_reserve=0)
 
 
 class X(History):
@@ -129,12 +131,14 @@ def test_invalid_answers_are_retried_then_the_job_fails_and_gives_up_after_five_
     broken = ScriptedModel(reply(text='{"role_categories": "oops"}'))
     report = x.run(broken)
     assert (report.requests, report.failed, report.succeeded) == (4, 1, 0)
-    assert x.slept[-3:] == [10.0, 30.0, 90.0]
+    assert [round(s) for s in x.slept[-3:]] == [10, 30, 90]  # the job waits, the run waits
     assert x.scalar("SELECT status FROM extraction_jobs") == "failed"
     assert x.scalar("SELECT count(*) FROM extraction_results") == 0  # nothing stored
     raw = x.scalar("SELECT raw_reply FROM extraction_attempts LIMIT 1")
     assert raw == '{"role_categories": "oops"}'  # kept for diagnosis
+    assert x.run(broken).requests == 0  # a failed round waits an hour
     for _ in range(4):
+        x.clock.advance(extraction.FAILED_ROUND_GAP)
         x.run(broken)
     assert x.scalar("SELECT status, runs_failed FROM extraction_jobs") == "gave_up"
     assert x.run(broken).requests == 0  # gave up: not retried automatically
@@ -186,14 +190,16 @@ def test_a_rejected_request_stops_the_run(x):
 
 def test_the_safety_stop_leaves_ten_percent_of_the_daily_limit(x):
     x.collect(T0, [job(n) for n in range(1, 6)])
-    report = x.run(ScriptedModel(reply()), config=ExtractionConfig(rpm=60, daily_limit=4))
+    report = x.run(
+        ScriptedModel(reply()), config=ExtractionConfig(rpm=60, daily_limit=4, new_reserve=0)
+    )
     assert report.succeeded == 3  # floor(0.9 * 4)
     assert report.stop_reason.startswith("safety stop")
 
 
 def test_requests_are_spaced_to_the_per_minute_limit(x):
     x.collect(T0, [job(1), job(2)])
-    x.run(ScriptedModel(reply()), config=ExtractionConfig(rpm=4, daily_limit=100))
+    x.run(ScriptedModel(reply()), config=ExtractionConfig(rpm=4, daily_limit=100, new_reserve=0))
     assert any(14.0 < s <= 15.0 for s in x.slept)  # 60 s / 4 requests per minute
 
 
@@ -234,7 +240,7 @@ def test_a_configuration_change_never_reruns_the_backlog_by_itself(x):
     x.collect(T0, [gh_job(1)])
     x.run(ScriptedModel(reply()))
     newer = ExtractionConfig(model="gemini-3.8-flash", thinking_level="low", rpm=60,
-                             daily_limit=100)  # fmt: skip
+                             daily_limit=100, new_reserve=0)  # fmt: skip
     model = ScriptedModel(reply())
     assert x.run(model, config=newer).requests == 0  # already extracted under another config
     queued = reprocess(x.conn, newer, x.clock(), "compare models", limit=1)

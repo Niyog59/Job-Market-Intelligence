@@ -824,6 +824,10 @@ def _extract_run(settings: Settings, config, args) -> int:
         f"reused without a request, {report.failed} failed ({report.gave_up} gave up), "
         f"{report.superseded} superseded by newer content."
     )
+    if report.retries_scheduled:
+        print(f"{report.retries_scheduled} listing(s) will be retried shortly (invalid answer).")
+    if report.recovered:
+        print(f"Recovered {report.recovered} listing(s) left running by a process that ended.")
     if report.queued_now:
         print(f"Queued {report.queued_now} newly stored listing(s) first.")
     print(f"Stopped: {report.stop_reason}.")
@@ -845,7 +849,8 @@ def _extract_status(info: dict) -> None:
             "(not run; `extract reprocess` supersedes them)"
         )
     if info["not_yet_queued"]:
-        print(f"  {info['not_yet_queued']} listing(s) not queued yet (queued by the next run)")
+        print(f"  {info['not_yet_queued']} listing(s) not queued yet (queued by the next "
+              "collection or run)")  # fmt: skip
     req, ok, prompt, out, thought, total = info["usage_today"]
     print(
         f"Today ({info['pacific_day']}, Pacific): {req} request(s), {ok} successful; tokens "
@@ -857,7 +862,11 @@ def _extract_status(info: dict) -> None:
             "free tier is not billed (planning figure only)."
         )
     if info["safety_stop_at"] is not None:
-        print(f"  Safety stop at {info['safety_stop_at']} request(s) today.")
+        print(
+            f"  Safety stop at {info['safety_stop_at']} request(s) today. Backlog lane: "
+            f"{info['backlog_today']} of {info['backlog_allowance']} used; "
+            f"{info['new_reserve']} kept for new listings."
+        )
     if info["paused_until"]:
         print(f"  Paused until {_when(info['paused_until'])} (daily quota).")
     results = info["current_results"]
