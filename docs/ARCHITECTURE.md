@@ -6,39 +6,34 @@ live and which are published snapshots. Back to the [README](../README.md).
 ## The pipeline
 
 ```mermaid
-flowchart LR
-    subgraph sources["Employer job boards"]
-        gh["Greenhouse API"]
-        lv["Lever API"]
-    end
+flowchart TB
+    boards["Greenhouse and Lever<br/>public job board APIs"]
     subgraph ec2["One EC2 server, Docker Compose"]
-        af["Airflow<br/>schedules every step"]
+        direction TB
+        af["Airflow<br/>runs each step on schedule"]
         col["Collector<br/>fetch, validate, screen"]
-        pg[("PostgreSQL<br/>postings, versions,<br/>observations")]
-        ex["Extraction queue<br/>validate answers,<br/>check quotes"]
-        dbt["dbt<br/>staging, intermediate,<br/>reporting, serving"]
-        web["Flask website<br/>behind Caddy"]
+        pg[("PostgreSQL<br/>postings, versions, observations")]
+        ex["Extraction queue<br/>validate answers, check quotes"]
+        dbt["dbt<br/>staging, intermediate, reporting, serving"]
+        web["Flask website behind Caddy"]
     end
     gem["Gemini API"]
-    s3[("S3<br/>raw responses,<br/>backups")]
+    s3[("S3<br/>raw pages and backups")]
     sheet["Google Sheet"]
     tab["Tableau Public"]
 
-    gh --> col
-    lv --> col
+    boards --> col
+    af -.-> col
     col --> pg
-    col -. raw pages .-> s3
-    pg --> ex
+    col -.-> s3
+    pg <--> ex
     ex <--> gem
-    ex --> pg
     pg --> dbt
     dbt --> web
-    dbt --> sheet --> tab
-    tab -. embedded .-> web
+    dbt --> sheet
+    sheet --> tab
+    tab -. embedded in /insights .-> web
     pg -. nightly backup .-> s3
-    af -. runs .-> col
-    af -. runs .-> ex
-    af -. runs .-> dbt
 ```
 
 | Part | Role | Code |
