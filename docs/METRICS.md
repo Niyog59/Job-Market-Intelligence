@@ -67,7 +67,39 @@ FROM pipeline_step_runs WHERE step = 'report_publish' ORDER BY started_at DESC L
 SELECT status, count(*) FROM collection_runs
 WHERE trigger = 'scheduled' AND started_at > now() - interval '7 days'
 GROUP BY status;
+
+-- 5. Extraction queue: open jobs and the oldest one, by priority
+--    (1 new kept, 2 kept backlog, 3 new other, 4 other backlog)
+SELECT priority, status, count(*), min(created_at) AS oldest
+FROM extraction_jobs WHERE status IN ('pending', 'running', 'failed')
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- 6. Extraction runs: how late each started, how long it took, and why it stopped
+SELECT run_id, started_at, round(extract(epoch FROM finished_at - started_at)) AS seconds,
+       requests, succeeded, failed, stop_reason
+FROM extraction_runs ORDER BY run_id DESC LIMIT 24;
+
+-- 7. Requests per Pacific day by outcome, and request duration
+SELECT (started_at AT TIME ZONE 'America/Los_Angeles')::date AS pacific_day, outcome,
+       count(*), round(avg(extract(epoch FROM finished_at - started_at))::numeric, 1) AS avg_s,
+       round(avg(total_tokens)) AS avg_tokens
+FROM extraction_attempts GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- 8. Time from queueing and from collection to a result, new listings, last 7 days
+SELECT j.priority, count(*),
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.created_at - j.created_at)) / 60)::numeric, 1) AS queued_p50_min,
+       round((percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM r.created_at - j.created_at)) / 60)::numeric, 1) AS queued_p95_min,
+       round((percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.created_at - v.first_seen_at)) / 60)::numeric, 1) AS collected_p50_min
+FROM extraction_results r JOIN extraction_jobs j ON j.job_id = r.job_id
+JOIN posting_versions v ON v.version_id = r.version_id
+WHERE j.priority IN (1, 3) AND r.reused_from_result_id IS NULL
+  AND r.created_at > now() - interval '7 days'
+GROUP BY 1 ORDER BY 1;
 ```
+
+Queries 5 to 8 are the baseline for the extraction worker: run them before starting it and
+again a few days later. `jobmarket extract status` shows the same numbers for the last 24
+hours.
 
 The other production numbers come from the public `/reports` page, whose tables are the
 published `rpt_extraction_coverage`, `rpt_inventory_daily`, and `rpt_pipeline_health_daily`
