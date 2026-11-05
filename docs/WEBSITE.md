@@ -61,8 +61,9 @@ the pages need no client-side framework.
    views before starting and says what is missing.
 
 The site shows whatever was last collected and extracted: run `jobmarket collect` and
-`jobmarket extract run` to refresh it. On the server, Airflow runs both on a schedule
-(see [Scheduling](OPERATIONS.md#scheduling)).
+`jobmarket extract run` to refresh it. On the server, Airflow runs collection on a
+schedule and the extraction worker extracts new listings as they are queued, so search shows
+a result on the next page load (see [Scheduling](OPERATIONS.md#scheduling)).
 
 **Routes.**
 

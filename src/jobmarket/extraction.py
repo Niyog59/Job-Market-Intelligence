@@ -594,10 +594,13 @@ def _release(conn, job_id, message: str | None, now: datetime, round_attempts: i
     )
 
 
-class _StopRun(Exception):
-    def __init__(self, reason: str):
+class StopRun(Exception):
+    """Extraction must stop for now. until is when it may resume, when known (the Pacific
+    reset after a quota pause or the safety stop)."""
+
+    def __init__(self, reason: str, until: datetime | None = None):
         super().__init__(reason)
-        self.reason = reason
+        self.reason, self.until = reason, until
 
 
 class _LaneFull(Exception):
@@ -608,11 +611,13 @@ class Session:
     """One process's work on the queue: claims jobs one at a time and handles each. Used by
     run_extraction (a bounded run) and by the long-running worker."""
 
-    def __init__(self, conn, generate, config, clock, sleep, claimant: str, only=None):
+    def __init__(self, conn, generate, config, clock, sleep, claimant: str, only=None,
+                 should_stop: Callable[[], bool] = lambda: False):  # fmt: skip
         if not conn.autocommit:
             raise ValueError("extraction needs an autocommit connection")
         self.conn, self.generate, self.config = conn, generate, config
         self.clock, self.sleep, self.claimant, self.only = clock, sleep, claimant, only
+        self.should_stop = should_stop
         self.report = RunReport()
         self.backlog_open = True
 
@@ -640,14 +645,16 @@ class Session:
     # -- limits
 
     def check_limits(self) -> None:
-        """Raise _StopRun while paused or at the safety stop; close the backlog lane once it
+        """Raise StopRun while paused or at the safety stop; close the backlog lane once it
         has used its share."""
         now = self.clock()
         until = _paused_until(self.conn, self.config.model, now)
         if until is not None:
-            raise _StopRun(f"paused until {until.isoformat(timespec='minutes')} (daily quota)")
+            raise StopRun(
+                f"paused until {until.isoformat(timespec='minutes')} (daily quota)", until
+            )
         if requests_today(self.conn, self.config.model, now) >= safety_stop_at(self.config):
-            raise _StopRun(self.safety_message())
+            raise StopRun(self.safety_message(), next_pacific_midnight(now))
         self.backlog_open = self.backlog_has_room(now)
 
     def backlog_has_room(self, now) -> bool:
@@ -693,7 +700,7 @@ class Session:
 
     def step(self) -> int | None:
         """Claim and handle one ready job; return its id, or None when nothing is ready.
-        Raises _StopRun when extraction must stop (pause, safety stop, rejected request)."""
+        Raises StopRun when extraction must stop (pause, safety stop, rejected request)."""
         self.check_limits()
         priorities = NEW_LANE + (BACKLOG_LANE if self.backlog_open else ())
         claimed = _claim(self.conn, self.config, self.clock(), priorities, self.only,
@@ -736,11 +743,13 @@ class Session:
         """Wait for a free request slot, then record the request as started. Checking the
         limits and recording happen under one lock, so processes never overshoot together."""
         while True:
+            if self.should_stop():
+                raise StopRun("shutting down")
             with self.conn.transaction():
                 self.conn.execute("SELECT pg_advisory_xact_lock(%s)", (PACING_LOCK_KEY,))
                 now = self.clock()
                 if requests_today(self.conn, self.config.model, now) >= safety_stop_at(self.config):
-                    raise _StopRun(self.safety_message())
+                    raise StopRun(self.safety_message(), next_pacific_midnight(now))
                 if job.lane == "backlog" and not self.backlog_has_room(now):
                     raise _LaneFull()
                 wait = self._pacing_wait(now, estimate)
@@ -784,7 +793,7 @@ class Session:
             n += 1
             try:
                 attempt_id = self._start_request(job, n, estimated_tokens(document))
-            except (_StopRun, _LaneFull):
+            except (StopRun, _LaneFull):
                 _release(conn, job.job_id, last_problem, self.clock(), n - 1)
                 raise
             try:
@@ -805,11 +814,13 @@ class Session:
                          finished),
                     )  # fmt: skip
                     _release(conn, job.job_id, last_problem, finished, n - 1)
-                    raise _StopRun(f"daily quota exhausted; paused until "
-                                   f"{until.isoformat(timespec='minutes')}") from None  # fmt: skip
+                    reason = (
+                        f"daily quota exhausted; paused until {until.isoformat(timespec='minutes')}"
+                    )
+                    raise StopRun(reason, until) from None
                 if error.kind == "client_error":
                     self._failed(job, last_problem, finished)
-                    raise _StopRun(
+                    raise StopRun(
                         f"request rejected ({error.http_status}): {error.detail[:200]}"
                     ) from None
                 if error.kind in JOB_SPECIFIC_KINDS:
@@ -888,7 +899,7 @@ def run_extraction(
                     report.stop_reason = session.backlog_message()
                 break
             sleep(wait)  # only a retry within a round is left: wait for it, as before
-    except _StopRun as stop:
+    except StopRun as stop:
         report.stop_reason = stop.reason
     else:
         if limit is not None and len(handled) >= limit:
@@ -966,3 +977,69 @@ def status(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) ->
         "new_reserve": config.new_reserve,
         "current_results": results,
     }
+
+
+@dataclass
+class LaneTiming:
+    lane: str
+    extracted: int  # results from a request
+    reused: int  # results copied from an identical earlier input
+    queue_p50: float | None  # minutes from queueing to a validated result
+    queue_p95: float | None
+    collection_p50: float | None  # minutes from the collection that first saw the content
+    collection_p95: float | None
+
+
+def queue_metrics(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) -> dict:
+    """Queue depth and age by priority, throughput and latency by lane over the last 24
+    hours, and request outcomes today (Pacific)."""
+    params = {"key": config.key, "max": MAX_FAILED_RUNS, "now": now}
+    depth = conn.execute(
+        """
+        SELECT priority,
+               count(*) FILTER (WHERE next_attempt_at IS NULL OR next_attempt_at <= %(now)s),
+               count(*) FILTER (WHERE next_attempt_at > %(now)s),
+               min(created_at)
+        FROM extraction_jobs
+        WHERE config_key = %(key)s
+          AND (status IN ('pending', 'running') OR (status = 'failed' AND runs_failed < %(max)s))
+        GROUP BY priority ORDER BY priority
+        """,
+        params,
+    ).fetchall()
+    timing = [
+        LaneTiming(*row)
+        for row in conn.execute(
+            """
+            WITH done AS (
+                SELECT CASE WHEN j.priority IN (1, 3) THEN 'new' ELSE 'backlog' END AS lane,
+                       r.reused_from_result_id IS NOT NULL AS reused,
+                       extract(epoch FROM r.created_at - j.created_at) / 60 AS queue_min,
+                       extract(epoch FROM r.created_at - v.first_seen_at) / 60 AS seen_min
+                FROM extraction_results r
+                JOIN extraction_jobs j ON j.job_id = r.job_id
+                JOIN posting_versions v ON v.version_id = r.version_id
+                WHERE r.config_key = %(key)s AND r.created_at > %(now)s - interval '24 hours'
+            )
+            SELECT lane, count(*) FILTER (WHERE NOT reused), count(*) FILTER (WHERE reused),
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY queue_min),
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY queue_min),
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY seen_min),
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY seen_min)
+            FROM done GROUP BY lane ORDER BY lane DESC
+            """,
+            params,
+        ).fetchall()
+    ]
+    last_hour = conn.execute(
+        "SELECT count(*) FROM extraction_results WHERE config_key = %s AND created_at > %s "
+        "AND reused_from_result_id IS NULL",
+        (config.key, now - timedelta(hours=1)),
+    ).fetchone()[0]
+    outcomes = conn.execute(
+        "SELECT coalesce(outcome, 'in flight'), count(*) FROM extraction_attempts "
+        "WHERE model = %s AND started_at >= %s GROUP BY 1 ORDER BY 2 DESC",
+        (config.model, _pacific_day_start(now)),
+    ).fetchall()
+    return {"depth": depth, "timing": timing, "extracted_last_hour": last_hour,
+            "outcomes_today": outcomes}  # fmt: skip

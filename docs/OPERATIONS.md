@@ -96,7 +96,8 @@ Optional settings:
 | `jobmarket replay --scan ID [--scan ID ...]` / `--available` | Reprocess saved raw responses under their original collection time |
 | `jobmarket history POSTING_ID` / `--board TOKEN --job SOURCE_ID` | Content stages, change windows, and versions of one posting |
 | `jobmarket extract status` | Extraction queue, today's requests and tokens, pause, safety stop, results |
-| `jobmarket extract run [--limit N]` | Send queued listings to the model, one at a time, within the configured limits |
+| `jobmarket extract run [--limit N] [--skip-if-worker]` | Send queued listings to the model, one at a time, within the configured limits; with `--skip-if-worker`, do nothing (exit 3) while the worker runs |
+| `jobmarket extract worker` | Extract continuously until stopped: the extraction worker service ([Extraction](EXTRACTION.md#extraction-worker)) |
 | `jobmarket extract show POSTING_ID [--evidence]` | The current extraction of a listing, with warnings and quotes |
 | `jobmarket extract reprocess --reason R [--limit N] [--retained-only]` | Explicitly queue current content under the active configuration |
 | `jobmarket extract renormalize` | Re-apply skill and location clean-up to stored answers (no model calls) |
@@ -135,7 +136,7 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
 |---|---|---|
 | `jobmarket_collection` | 12:00 and 21:00 | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, `tableau sync` (only after a successful publication; skipped until the Sheet is configured), (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
 | `jobmarket_retries` | every 15 minutes | `retry-due`, then `notifications --send` |
-| `jobmarket_extraction` | every hour at :30 | `extract run --limit 20` |
+| `jobmarket_extraction` | every hour at :30 | `extract run --limit 20 --skip-if-worker` (skipped while the extraction worker runs) |
 
 - **Time zone:** the cron expressions are read in America/Chicago, so the local times hold
   across daylight saving changes.
@@ -151,9 +152,11 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
 - **A failure never stops later steps** (trigger rule `all_done`): reports, the backup,
   and the summary run even when collection failed. The backup runs right after the evening
   collection, whatever its result and before any AI work.
-- **AI work is separate and bounded:** at most 20 listings per hourly batch, within the free
-  limits; a quota pause shows in the summary, not as an alert. Without a Gemini key the
-  batch is skipped.
+- **AI work is separate from Airflow when the worker runs:** the extraction worker (Compose
+  service `extract-worker`, profile `worker`) extracts new listings as collection queues
+  them, and the hourly batch skips itself. Without the worker, the hourly batch handles at
+  most 20 listings. Either way the free limits apply, a quota pause shows in the summary,
+  not as an alert, and without a Gemini key nothing is sent.
 - **Time limits:** collection 45 minutes, retry check 30, AI batch 20, report publication
   20, backup and raw uploads 20, Sheet sync 10, summary and email 10.
 - **No triggerer:** none of the tasks are deferrable, so Airflow's optional triggerer is

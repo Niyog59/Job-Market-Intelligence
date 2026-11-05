@@ -406,7 +406,7 @@ docker compose run --rm jobs jobmarket backup create --upload
 | 12:00 and 21:00 | Collect from every enabled board, copy raw files to S3 and remove local ones S3 confirmed, then publish reports |
 | 21:00 run only, right after collection | Back up both schemas to S3 (confirmed), keep the newest 3 verified local backups, send the daily summary email, clean Airflow history older than 30 days |
 | Every 15 minutes | Retry the boards whose retry is due (up to 3 per failed board, about 1, 2, and 3 hours after the failure), then send any alert |
-| Every hour at :30 | One AI batch of at most 20 listings (free tier; pauses itself on a quota error) |
+| Every hour at :30 | One AI batch of at most 20 listings (free tier; pauses itself on a quota error). Skipped while the extraction worker runs (section W) |
 
 Only one task runs at a time. If the server was off at a scheduled time, Airflow makes one
 catch-up run for the latest missed time when it starts, not one per missed time.
@@ -497,7 +497,8 @@ nothing runs twice. Without Airflow, start one job at a time (memory).
 |---|---|
 | Collect jobs from all boards | `jobmarket collect` |
 | Retry boards whose retry is due | `jobmarket retry-due` |
-| Run one AI batch | `jobmarket extract run --limit 20` |
+| Run one AI batch | `jobmarket extract run --limit 20` (safe while the worker runs: they share the queue and the limits) |
+| Extraction status, worker, and timings | `jobmarket extract status` |
 | Rebuild and publish the reports | `jobmarket analytics publish` |
 | Copy raw responses to S3, then remove local ones S3 confirmed | `jobmarket sync-raw`, then `jobmarket cleanup-raw --require-s3` |
 | Back up to S3, then keep the newest 3 local copies | `jobmarket backup create --upload`, then `jobmarket backup prune --keep 3` |
@@ -577,6 +578,58 @@ the key file somewhere outside the project):
 after `jobmarket migrate` and `jobmarket analytics publish`.
 
 ---
+
+## W. Extraction worker (new listings within minutes)
+
+The worker extracts new listings as soon as a collection queues them, instead of at the
+next :30 batch. It uses the same queue, daily allowance, and checks; it does not add
+requests. Before you start: the server runs this version (section H, which includes
+`jobmarket migrate`), and the hourly batch already extracts (`extract status` shows results).
+
+**W1. Check the memory.**
+
+```bash
+free -m
+docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'
+```
+
+- What: the worker is limited to 256 MB (it used about 67 MB in a test on a Mac).
+- Check: the `available` column of `free -m` is above 256. Write both outputs down. If it
+  is not, keep the hourly batch and do not go on.
+
+**W2. Start the worker.**
+
+```bash
+grep -q '^COMPOSE_PROFILES=' .env && sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=worker/' .env || echo 'COMPOSE_PROFILES=worker' >> .env
+docker compose up -d extract-worker
+docker compose logs --tail 20 extract-worker
+```
+
+- What: `COMPOSE_PROFILES=worker` makes `docker compose up -d` (also in later updates)
+  start the worker with the rest.
+- Check: the log shows `Extraction worker ... started`, then `Job ...: extracted` lines or
+  `Idle: queue empty.` `docker compose run --rm jobs jobmarket extract status` shows
+  `Worker worker@...: idle` or `working`. At the next :30, Airflow's `extract` task is
+  skipped (pink): expected, the worker is doing that work.
+
+**W3. Check it after the next collection.** After the 12:00 or 21:00 run, `extract status`
+shows the new lane's time from queueing to result (median and 95th percentile) for the last
+24 hours, and the daily summary has a `New listings, last 24 hours` line. The target is
+within five minutes while the day's requests last. `docker stats --no-stream` shows the
+worker's memory; add it to `SIZING.md`.
+
+**W4. Go back to the hourly batch (rollback).**
+
+```bash
+docker compose stop extract-worker
+sed -i '/^COMPOSE_PROFILES=worker$/d' .env
+```
+
+- What: stopping lets a request already sent finish (up to 150 seconds). From the next :30,
+  the hourly batch extracts again by itself. The queue, results, and heartbeat rows stay;
+  nothing needs to be undone in the database.
+- Check: `extract status` shows the worker as `stopped`, and the next `extract` task in
+  Airflow is green. To also go back to the earlier code, see section I.
 
 ## H. Updating to a new version
 
@@ -690,5 +743,6 @@ on 2026-11-04:
   publication, Sheet update, and summary email
 - [x] T1 to T4: dashboard Sheet, service account, key on the server, first sync
 - [ ] T5: workbook published on Tableau Public and its name set for the Market insights page
+- [ ] W1 to W3: memory checked, extraction worker started, first collection with the worker checked
 - [ ] G6: heartbeat and uptime monitors (optional)
 - [ ] Record memory use on the instance in `deploy/SIZING.md` after a few days of schedules

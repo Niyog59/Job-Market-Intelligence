@@ -16,8 +16,10 @@ Scheduling rules:
 - Company retries are not waits inside a task: each failed board's next retry time is
   stored in the database, and `jobmarket retry-due` runs every 15 minutes and does only the
   retries that are due, so no task holds the slot while waiting.
-- AI extraction runs hourly in batches of at most 20 listings, stops at 90% of the free daily
-  limit, and pauses itself on a quota error; it is a separate DAG, so it never delays
+- AI extraction is done by the extraction worker service when it runs (docker compose
+  profile "worker"). The hourly batch here, at most 20 listings, skips itself while the
+  worker is alive and takes over again as soon as it stops; it stops at 90% of the free
+  daily limit and pauses itself on a quota error. It is a separate DAG, so it never delays
   collection, reports, or backups for longer than one bounded batch.
 - Steps after collection use trigger_rule all_done: a failed collection, backup, or raw
   upload never stops report publication, the summary, or email.
@@ -164,7 +166,8 @@ with DAG(
 
 with DAG(
     dag_id="jobmarket_extraction",
-    description="Hourly: one bounded batch of AI requirement extraction (free tier).",
+    description="Hourly: one bounded batch of AI requirement extraction (free tier), "
+    "unless the extraction worker is running.",
     # Minute 30, so a batch never starts at the same moment as a collection.
     schedule=CronTriggerTimetable("30 * * * *", timezone=TIMEZONE),
     start_date=START,
@@ -173,5 +176,6 @@ with DAG(
     default_args=DEFAULTS,
     tags=["jobmarket"],
 ) as ai:
-    task("extract", f"jobmarket extract run --limit {AI_BATCH_SIZE}", AI_BATCH_LIMIT,
+    task("extract", f"jobmarket extract run --limit {AI_BATCH_SIZE} --skip-if-worker",
+         AI_BATCH_LIMIT,
          skip_on_exit_code=[SKIP, BUSY, NOT_CONFIGURED], priority_weight=1)  # fmt: skip
