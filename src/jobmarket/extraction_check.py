@@ -7,9 +7,9 @@ check_answer() runs three layers:
    request is retried; nothing from it is stored as a result.
 2. Consistency and evidence. Relationships must refer to listed skills, alternative groups
    must exist, year ranges must be ordered, dates must look like YYYY-MM, and every quote is
-   searched for in the exact document that was sent. Problems here are warnings: the
-   answer is kept (decision 2026-10-27: "we trust the AI"), and each quote records whether
-   it was found and where. A claim with no evidence, or whose quotes were not found, is
+   searched for in the exact document that was sent. Problems here are warnings, not
+   rejections: the answer is kept and marked valid_with_warnings, and each quote records
+   whether it was found and where. A claim with no evidence, or whose quotes were not found, is
    marked so in the evidence list. Passing these checks shows the answer is well formed and
    quoted from the posting; it does not show the answer is right.
 3. Normalization. Skill aliases and locations are tidied deterministically

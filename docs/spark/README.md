@@ -125,7 +125,7 @@ PostgreSQL's time grew from 0.04 s to 5.2 s, while Spark's model time grew from 
 12.4 s. Somewhere above 100 times today's data Spark might win on this machine, but that was
 not measured, and the export to Parquet (21 s at 100x) would still sit in front of it unless
 the data lived in a Spark-native store to begin with. Not tested either: running a JVM next to
-PostgreSQL and Airflow on the planned 2 GiB server (`deploy/SIZING.md`).
+PostgreSQL and Airflow on the 2 GiB production server (`deploy/SIZING.md`).
 
 Moving engines would not mean rewriting the models in PySpark: dbt has adapters for
 Databricks (`dbt-databricks`) and Snowflake (`dbt-snowflake`), so the models could stay SQL in

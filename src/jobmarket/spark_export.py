@@ -2,7 +2,8 @@
 (jobmarket.spark_models), together with dbt's result over the same inputs.
 
 The inputs are the dbt models that rpt_skill_demand, rpt_jobs_current, and rpt_weekly_jobs
-read, from analytics_staging and analytics_intermediate, through the read-only analytics login.
+read, from analytics_staging and analytics_intermediate, through the analytics login, which
+cannot write ingestion tables.
 The private schema is never read.
 
 The reference Spark must match is dbt's compiled SQL of the three models, run inside the same

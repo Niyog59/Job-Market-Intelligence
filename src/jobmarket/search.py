@@ -22,8 +22,8 @@ Filter semantics
   assumed inactive. The listing shown first is the most recently observed one; the others
   stay reachable from the detail page.
 - Active results are observed and possibly unavailable listings; assumed inactive and
-  closed ones are in the archived view. Availability is the ingestion's state (Module 6);
-  this module never changes or re-derives it.
+  closed ones are in the archived view. Availability is the state the availability rules
+  stored at collection time; this module never changes or re-derives it.
 """
 
 from collections.abc import Iterable, Mapping
@@ -37,8 +37,8 @@ from psycopg import sql
 
 from jobmarket.availability import ACTIVE_STATES
 
-PAGE_SIZE = 25  # decision 2026-10-28
-STALE_AFTER = timedelta(hours=36)  # decision 2026-10-28: "may be out of date" note
+PAGE_SIZE = 25
+STALE_AFTER = timedelta(hours=36)  # longer without a complete collection: "may be out of date"
 ARCHIVED_STATES = ("assumed_inactive", "closed")
 SERVING_SCHEMA = "analytics_serving"
 MAX_SKILL_NAME = 80  # longer than any skill name; anything longer is not a skill
@@ -71,7 +71,7 @@ PLACE_CHOICES = {
     "elsewhere": ("Elsewhere", ("elsewhere", "remote_elsewhere")),
 }
 ARRANGEMENT_CHOICES = {"onsite": "On site", "hybrid": "Hybrid", "remote": "Remote"}
-# Bands of the smallest required overall minimum, by whole years (decision 2026-10-28):
+# Bands of the smallest required overall minimum, by whole years:
 # 0-1 covers minimums below 2 years, 2-4 below 5, 5+ the rest.
 EXPERIENCE_CHOICES = {"0-1": ("0-1 years", 0, 2), "2-4": ("2-4 years", 2, 5),
                       "5+": ("5+ years", 5, None)}  # fmt: skip

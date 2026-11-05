@@ -8,7 +8,7 @@ request at a time:
 
   priority  1 new or edited retained listing    2 retained backlog
             3 new or edited other listing       4 other backlog
-  (backlog = content recorded before extraction tracking started, decision 2026-10-27)
+  (backlog = content recorded before extraction tracking started)
 
 For each job it builds the input document, reuses an earlier answer when the same document
 was already extracted under the same configuration (no request), otherwise sends one
@@ -70,7 +70,7 @@ TPM_ENV = "JOBMARKET_AI_TPM"
 DAILY_ENV = "JOBMARKET_AI_DAILY_LIMIT"
 TIMEOUT_ENV = "JOBMARKET_AI_TIMEOUT_SECONDS"
 
-DEFAULT_MODEL = "gemini-3.5-flash-lite"  # decision 2026-10-27
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_THINKING = "minimal"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 

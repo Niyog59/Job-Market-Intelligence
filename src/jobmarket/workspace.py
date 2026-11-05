@@ -12,7 +12,7 @@ not exist, finds nothing.
 - Application status is entered by the owner: an Apply link or a closed posting changes
   nothing. Any status may follow any other; a correction is a new event naming the one it
   corrects, so history is never overwritten.
-- A visit starts at each sign-in, or after more than an hour idle (decision 2026-10-29). Its
+- A visit starts at each sign-in, or after more than an hour idle. Its
   cutoff (the previous visit's last activity) stays fixed for the whole visit; the first
   visit has none.
 """
@@ -37,7 +37,7 @@ from jobmarket.search import (
 from jobmarket.skills import canonical_skill
 
 ZONE = ZoneInfo("America/Chicago")
-VISIT_IDLE = timedelta(hours=1)  # decision 2026-10-29
+VISIT_IDLE = timedelta(hours=1)
 
 EXPERIENCE_KINDS = {"employment": "Employment", "internship": "Internship", "project": "Project"}
 EDUCATION_LEVELS = {

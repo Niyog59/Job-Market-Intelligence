@@ -118,8 +118,8 @@ class Record:
 
 def load_records(conn: psycopg.Connection, now: datetime) -> list[Record]:
     """Postings that are or have been retained. Every listing has content history since
-    2026-10-27; duplicate matching keeps its Module 6 scope (postings with a version recorded
-    while retained) until that scope is decided separately."""
+    2026-10-27; duplicate matching keeps its original scope (postings with a version recorded
+    while retained) until widening it is decided separately."""
     rows = conn.execute(
         """
         SELECT p.posting_id, b.employer_id, e.name, b.board_key, b.source_system,
