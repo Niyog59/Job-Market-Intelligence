@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 from extraction_fakes import ScriptedModel, reply
-from gh_fakes import T0, FakeClock, board, registry
+from gh_fakes import T0, FakeClock, board, ok, registry
 from test_extraction import CONFIG, X, job
 from test_history import HOUR, other_connection
 
@@ -206,3 +206,26 @@ def test_a_listing_edited_while_waiting_for_its_retry_is_superseded(x):
     assert "Rewritten for team 1." in model.calls[0]
     statuses = [r[0] for r in x.conn.execute("SELECT status FROM extraction_jobs ORDER BY job_id")]
     assert statuses == ["superseded", "succeeded"]
+
+
+# --- collection -------------------------------------------------------------------------------
+
+
+def test_collection_queues_after_every_board_while_extraction_is_busy(env, monkeypatch, db_settings,
+                                                                      isolated_schema):  # fmt: skip
+    worker = other_connection(db_settings, isolated_schema)
+    try:
+        # Another process is in the middle of a request: it holds the pacing lock.
+        worker.execute("SELECT pg_advisory_lock(%s)", (extraction.PACING_LOCK_KEY,))
+        calls = []
+        real = extraction.enqueue_new
+        monkeypatch.setattr(extraction, "enqueue_new",
+                            lambda *a: calls.append(1) or real(*a))  # fmt: skip
+        env.transport.queue("acme", ok([job(1)]))
+        env.transport.queue("beta", ok([job(2)]))
+        report = env.collector().collect()
+    finally:
+        worker.close()
+    assert report.status == "complete" and report.extraction_queued == 2
+    assert len(calls) == 3  # after each of the two boards, and once at the end
+    assert env.scalar("SELECT count(*) FROM extraction_attempts") == 0

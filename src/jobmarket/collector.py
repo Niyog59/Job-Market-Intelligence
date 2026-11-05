@@ -267,6 +267,9 @@ class Collector:
             outcome = self._collect_board(run_id, target, fetch)
             report.outcomes.append(outcome)
             events.append(incidents.IncidentEvent(outcome.incident_event, outcome.incident_id))
+            # After every board, so the extraction worker can start on its new listings while
+            # the remaining boards are still being collected.
+            self._queue_extraction(report, self.clock())
 
         statuses = {o.status for o in report.outcomes}
         if statuses == {"complete"}:
@@ -298,7 +301,7 @@ class Collector:
         try:
             config = extraction.ExtractionConfig.from_env()
             with self.conn.transaction():
-                report.extraction_queued = extraction.enqueue_new(self.conn, config, now)
+                report.extraction_queued += extraction.enqueue_new(self.conn, config, now)
         except Exception as exc:  # noqa: BLE001 - collection must succeed without extraction
             report.extraction_queue_error = f"{type(exc).__name__}: {exc}"[:300]
 
