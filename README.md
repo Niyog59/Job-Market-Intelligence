@@ -2,13 +2,17 @@
 
 [![CI](https://github.com/Niyog59/Job-Market-Intelligence/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Niyog59/Job-Market-Intelligence/actions/workflows/ci.yml)
 
-A data engineering project that collects employer job listings, tracks changes over time,
-and turns job descriptions into searchable requirements and market analysis.
+I wanted an easier way to find jobs that fit me without checking each company's career page
+separately. So I built Job Observatory, a data engineering project that collects employer
+listings, tracks changes, and extracts job requirements for search and analysis. Once I had
+the data, I also wanted to see what employers ask for and how that differs across roles.
 
-Built with Python, PostgreSQL, dbt, Airflow, Docker, and AWS, with a Flask application for
-job search and Tableau for visualization.
+Python collects listings from the employers' Greenhouse and Lever job boards and asks Gemini to
+read the requirements. PostgreSQL keeps every version of every listing, dbt turns that history
+into tested tables, and Airflow runs each step twice a day in Docker on one AWS server. A Flask
+site serves job search and reports, and the reporting tables feed a Google Sheet for Tableau.
 
-[Live site](https://jobobservatory.dev) · [Pipeline](#how-the-pipeline-works) · [Analysis](#application-and-analysis) · [Decisions](#key-decisions) · [Run locally](#run-it-locally)
+[Live site](https://jobobservatory.dev) · [How it is built](#how-it-is-built) · [Results](#measured-results) · [Decisions](#key-decisions) · [Run locally](#run-it-locally)
 
 | Part | Tools |
 |---|---|
@@ -17,29 +21,17 @@ job search and Tableau for visualization.
 | Scheduling and deployment | Airflow, Docker Compose, AWS EC2 |
 | Backups and checks | AWS S3, GitHub Actions |
 | Application and visualization | Flask; Tableau (data feed running, workbook in progress) |
-| Performance experiment, not in production | PySpark, Databricks |
+| Comparison experiment, not in production | PySpark, Databricks |
 
-<details>
-<summary><strong>Why I built it</strong></summary>
+## How it is built
 
-I wanted an easier way to find jobs that fit me. I was checking different company websites
-and reading through listings to understand the role, location, and experience requirements.
-
-I built Job Observatory to bring those listings into one place. It collects jobs from
-company boards, keeps track of changes, and extracts the requirements so I can search them
-more easily.
-
-Once I had the data, I also wanted to understand what employers were asking for and how
-requirements differed across roles.
-
-</details>
-
-| The pipeline | The analysis |
-|---|---|
-| [Architecture and data flow](docs/ARCHITECTURE.md) | [Tableau visualizations](docs/tableau/DASHBOARDS.md) |
-| [Collection, history, and duplicate handling](docs/COLLECTION.md) | [Skills and experience requirements](docs/tableau/DASHBOARDS.md#1-what-are-employers-asking-for-main-view-whatemployersaskfor) |
-| [dbt transformations and publication](docs/ANALYTICS.md) | [Junior and senior opening patterns](docs/tableau/DASHBOARDS.md#2-junior-vs-senior-hiring-view-juniorvssenior) |
-| [Scheduling, tests, and recovery](docs/OPERATIONS.md) | [Metric definitions, coverage, and limitations](docs/ANALYTICS.md#counting-rules) |
+| Part | How it works | Implementation |
+|---|---|---|
+| Collection and history | Each board is read through its public API and every raw page is saved. A job's identity, its content versions, and each sighting are stored separately. One missing scan never hides a job, and duplicates merge only on strong evidence. [Collection](docs/COLLECTION.md), [posting history](docs/COLLECTION.md#posting-history) | [`collector.py`](src/jobmarket/collector.py), [`store.py`](src/jobmarket/store.py), [`availability.py`](src/jobmarket/availability.py), [`duplicates.py`](src/jobmarket/duplicates.py), [`test_history.py`](tests/test_history.py) |
+| Requirement extraction | Rules decide which jobs are kept. Gemini fills a fixed JSON schema for each new version, and Python validates the answer and searches the posting for every quote. [Extraction](docs/EXTRACTION.md) | [`extraction.py`](src/jobmarket/extraction.py), [`extraction_check.py`](src/jobmarket/extraction_check.py), [`test_extraction_check.py`](tests/test_extraction_check.py) |
+| Transformations and publication | dbt builds staging, intermediate, reporting, and serving models. Reporting tables are rebuilt in shadow schemas, tested, analyzed, and swapped in together. [Analytics](docs/ANALYTICS.md) | [`analytics/models/`](analytics/models/), [`analytics.py`](src/jobmarket/analytics.py), [`test_publish.py`](tests/test_publish.py) |
+| Scheduling and recovery | Airflow runs collection, retries, extraction batches, publication, and nightly S3 backups; CI restores a backup on every run. [Operations](docs/OPERATIONS.md), [runbook](deploy/RUNBOOK.md) | [`jobmarket.py` DAGs](deploy/airflow/dags/jobmarket.py), [`incidents.py`](src/jobmarket/incidents.py), [`backup.py`](src/jobmarket/backup.py), [`deploy/airflow/tests/`](deploy/airflow/tests/) |
+| Search and analysis | Job search reads live serving views. The Reports page and the Google Sheet for Tableau read the published reporting tables. [Website](docs/WEBSITE.md), [dashboard data](docs/ANALYTICS.md#dashboard-data-tableau-public), [dashboard designs](docs/tableau/DASHBOARDS.md) | [`search.py`](src/jobmarket/search.py), [`web/`](src/jobmarket/web/), [`sheets.py`](src/jobmarket/sheets.py), [`reporting/`](analytics/models/reporting/), [`test_sheets.py`](tests/test_sheets.py) |
 
 ## How the pipeline works
 
@@ -80,29 +72,24 @@ flowchart TB
     af -. schedules .-> flow
 ```
 
-At noon and 9 PM (America/Chicago), Airflow collects 51 employer boards. The collector saves
-the raw pages and screens each job with rules. PostgreSQL stores a job's identity, its
-content versions, and each sighting separately, so a repeated sighting creates no new
-version and no AI request.
-
-New versions are queued for extraction: Gemini returns requirements as JSON, and Python
-validates each answer and searches the posting for its quotes. Job search reads live dbt
-views. The Reports page and the Google Sheet read reporting tables that are rebuilt aside
-and swapped in only after their tests pass. The evening run also backs up to S3.
+Collection runs at noon and 9 PM (America/Chicago). A repeated sighting of unchanged text adds
+an observation but no new version and no AI request. Job search sees new data at once, while
+reports change only when a publication passes its tests.
 More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Measured results
 
-| Measurement | Result | When and where |
-|---|---|---|
-| Collection of all 51 boards | 133 s | 2026-11-03, Mac, real data |
-| Report publication (build, tests, statistics, swap) | 25 s | 2026-11-03, Mac |
-| First scheduled 9 PM run | every step, including the S3 backup, done by 21:04 | 2026-11-04, production |
-| Backup restore | production was built from a verified backup; CI restores one on every run | 2026-11-04, production; CI |
-| dbt project | 46 SQL models and 125 data tests, all passing in CI | current `main` |
+| Measurement | Result | When and where | Evidence |
+|---|---|---|---|
+| Collection of all 51 boards | 133 s | 2026-11-03, Mac with real data | [query 2](docs/METRICS.md#queries) |
+| Report publication (build, tests, statistics, swap) | 25 s | 2026-11-03, Mac | [query 3](docs/METRICS.md#queries) |
+| First scheduled 9 PM run | every step, including the S3 backup and the Sheet update, done by 21:04 | 2026-11-04, production | [snapshot](docs/METRICS.md#historical-snapshot-2026-11-04) |
+| Backup restore | production was built from a verified backup; CI restores one on every run | 2026-11-04, production; every CI run | [CI workflow](.github/workflows/ci.yml) |
+| dbt project | 46 SQL models and 125 data tests, all passing | current `main`, CI | [`analytics/`](analytics/) |
 
-Job counts and extraction coverage change with every collection; they are on the live
-[Reports page](https://jobobservatory.dev/reports), with definitions and a dated snapshot in
+Job counts and extraction coverage change with every collection, so they live on the
+[Reports page](https://jobobservatory.dev/reports). Coverage means a listing has an extraction
+result. It is not accuracy, which I have not measured yet. Definitions and a dated snapshot:
 [docs/METRICS.md](docs/METRICS.md).
 
 **PostgreSQL and dbt against Spark.** I rebuilt three reporting models in PySpark and timed
@@ -121,16 +108,19 @@ took 11.6 s at 1x, mostly upstream models). Spark matched dbt row for row at eve
 on Databricks Free Edition. PostgreSQL was faster at every size I measured on this data, so
 the pipeline stays on dbt. Method: [docs/spark/README.md](docs/spark/README.md).
 
-## Application and analysis
+## Job search and analysis
 
 ![A job page on the live site: the job overview on the left, and the requirements extracted from the description on the right, with a View source evidence button for each requirement.](docs/images/job-page.png)
 
 *A job page: each extracted requirement links to the sentence it came from, next to the full
 description.*
 
-The Tableau workbook is not published yet. Its data reaches the Google Sheet after every
-run, and the dashboard designs (skills, role differences, junior and senior mix, AI mentions,
-experience) are in [docs/tableau/DASHBOARDS.md](docs/tableau/DASHBOARDS.md).
+Tableau's part so far is the data feed. After every successful publication, the pipeline
+replaces nine dashboard tables and a caption row in a Google Sheet with one all-or-nothing
+request ([`sheets.py`](src/jobmarket/sheets.py)). This has run on the server since 2026-11-04.
+The workbook that reads the Sheet is not published yet, so there is no dashboard to show. The
+designs are in [DASHBOARDS.md](docs/tableau/DASHBOARDS.md) and the fields in
+[DATA_DICTIONARY.md](docs/tableau/DATA_DICTIONARY.md).
 
 From the publication of 2026-11-04 (147 open jobs kept by the screening rules, at 29 tracked
 employers): of the jobs with a clear level, 10% were junior and 83% senior or above, and 27%
@@ -139,14 +129,14 @@ and a mention of AI does not explain hiring.
 
 ## Key decisions
 
-| Decision | Reason | Tradeoff |
-|---|---|---|
-| Official Greenhouse and Lever APIs only | complete listings per board, so a missing job means something | only employers on these two systems |
-| Separate identities, versions, and observations | small, complete history: when a job changed and when it was last seen | more tables; late data must not overwrite newer state |
-| Conservative absence and duplicate rules | a bad scan or a wrong merge cannot hide jobs | closed jobs stay visible longer; some duplicates wait for review |
-| PostgreSQL and dbt, after the Spark comparison | faster on this data, one engine to run and back up | single-machine scale |
-| Airflow | run history, dependencies, time zones | the largest memory user; why the server needs 2 GiB |
-| AI extraction with validation | rules decide which jobs are kept; answers are schema-checked and quotes searched for | answers with evidence problems are kept with warnings; accuracy not measured |
+| Decision | Reason | Tradeoff | Where |
+|---|---|---|---|
+| Official Greenhouse and Lever APIs only | complete listings per board, so a missing job means something | only employers on these two systems | [`greenhouse.py`](src/jobmarket/greenhouse.py), [`lever.py`](src/jobmarket/lever.py) |
+| Separate identities, versions, and observations | small, complete history: when a job changed and when it was last seen | more tables; late data must not overwrite newer state | [`store.py`](src/jobmarket/store.py), [`test_history.py`](tests/test_history.py) |
+| Conservative absence and duplicate rules | a bad scan or a wrong merge cannot hide jobs | closed jobs stay visible longer; some duplicates wait for review | [`availability.py`](src/jobmarket/availability.py), [`duplicates.py`](src/jobmarket/duplicates.py) |
+| PostgreSQL and dbt, after the Spark comparison | faster on this data, one engine to run and back up | single-machine scale | [`analytics/`](analytics/), [comparison](docs/spark/README.md) |
+| Airflow | run history, dependencies, time zones | the largest memory user; why the server needs 2 GiB | [DAGs](deploy/airflow/dags/jobmarket.py), [sizing](deploy/SIZING.md) |
+| AI extraction with validation | rules decide which jobs are kept; answers are schema-checked and quotes searched for | answers with evidence problems are kept with warnings; accuracy not measured | [`extraction_check.py`](src/jobmarket/extraction_check.py) |
 
 The full reasoning, options, and settings: [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -213,11 +203,10 @@ server's settings.
 
 ## Plans for more employers
 
-- Grow to about 300 to 400 verified employers in stages.
-- Before each stage, check collection success, publication time, and the extraction backlog,
-  since the free AI tier handles a fixed number of listings a day.
-- Count a new board's existing jobs as initial imports, not new openings, and compare trends
-  over a consistent group of employers.
+I plan to grow toward 300 to 400 verified employers in stages, moving to the next stage only
+while collection stays reliable and the free extraction tier keeps up with the new listings. A
+new board's existing jobs count as initial imports, not new openings, so trends compare a
+consistent group of employers.
 
 ## Run it locally
 
