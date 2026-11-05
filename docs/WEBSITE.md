@@ -54,14 +54,15 @@ the pages need no client-side framework.
 **Run it.**
 
 1. `pip install -e ".[web]"` (Flask).
-2. The read-only analytics login must exist and its password be in `.env`
+2. The analytics login must exist and its password be in `.env`
    (`ANALYTICS_DB_PASSWORD`; see [Analytics](ANALYTICS.md#analytics-dbt), Setup).
 3. `jobmarket analytics build` once, to create the serving views.
 4. `jobmarket web`, then open http://127.0.0.1:8000/. The command checks the login and the
    views before starting and says what is missing.
 
 The site shows whatever was last collected and extracted: run `jobmarket collect` and
-`jobmarket extract run` to refresh it. Nothing runs on a schedule.
+`jobmarket extract run` to refresh it. On the server, Airflow runs both on a schedule
+(see [Scheduling](OPERATIONS.md#scheduling)).
 
 **Routes.**
 
@@ -92,8 +93,8 @@ structured details are pending or unavailable rather than "not stated". Back to 
 restores the search, the page, and the scroll position. Below 820 px the layout becomes one
 column.
 
-**Reports page.** Shows the reporting tables as they were at the last `jobmarket analytics
-build`: extraction coverage (with the queue, retries, and skips when processing is
+**Reports page.** Shows the reporting tables as of the last build or
+publication: extraction coverage (with the queue, retries, and skips when processing is
 incomplete), current inventory, daily activity, skills in demand (required alone, required
 as one of several choices, and preferred kept in separate columns), experience,
 sponsorship and other eligibility statements with all three denominators, pipeline health,
@@ -103,7 +104,7 @@ current day is marked as provisional. Before the first build the page says the r
 not exist yet. It reads `analytics_reporting` (`reporting_schema` in `WebConfig`) and
 computes nothing beyond the dbt models.
 
-**Security.** Pages run as the read-only login in read-only sessions. Descriptions are
+**Security.** Pages run as the analytics login in read-only sessions. Descriptions are
 rebuilt from an allowlist (`safe_description_html`), templates escape everything else, and
 only `https` links are kept (opened with `rel="noopener noreferrer"`). Responses carry a
 strict Content-Security-Policy (scripts, styles, and fonts from the site only; frames only

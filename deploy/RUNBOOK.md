@@ -8,15 +8,13 @@ instance (Amazon Linux 2023, 20 GiB disk, region us-east-2):
   `airflow-dag-processor`, `airflow-api`), which runs the pipeline on its schedule.
 - **Only ports 80 and 443 are open to the public.** PostgreSQL and the website are
   reachable only from the other containers. Administration uses AWS Systems Manager
-  Session Manager, a shell in the browser. Your existing SSH access stays open during setup
-  as a fallback, and is closed (step F8) only after Session Manager has worked, including
-  after a reboot.
+  Session Manager, a shell in the browser. SSH stays open during setup as a fallback and
+  is closed (step F8) only after Session Manager has worked, including after a reboot.
 - **S3** keeps raw responses and backups (encrypted, deleted after 30 days by lifecycle
   rules). The server reaches S3 through an IAM role, so no AWS keys are stored anywhere.
-- **Scheduling needs a bigger instance.** Airflow and the rest of the stack do not fit in
-  a t3.micro's 1 GiB (see `SIZING.md`); a 2 GiB t3.small is the candidate, and changing
-  size is your budget decision. Sections A to F work on the current t3.micro with jobs run
-  by hand; section G (Airflow) waits for that decision.
+- **Instance size.** Airflow and the rest of the stack do not fit in a t3.micro's 1 GiB
+  (see `SIZING.md`). The production server runs on a 2 GiB t3.small. Sections A to F also
+  work on a t3.micro with jobs run by hand; section G (Airflow) needs the larger size.
 
 Every step says **where** to run it, **what** it does, the **values** you supply, and how
 to **check** it worked. Do the sections in order. Placeholders look like `YOUR-BUCKET-NAME`;
@@ -79,7 +77,11 @@ Never paste a password, key, or the contents of `.env` into a chat, an issue, or
      `deploy/aws/instance-role-s3-policy.json`, replace the four `YOUR-BUCKET-NAME`, and
      name it `jobmarket-s3`.
 - Check: the role's Permissions tab lists `AmazonSSMManagedInstanceCore` and `jobmarket-s3`.
-  The role has no `s3:DeleteObject`: the server cannot delete backups.
+  The role has no `s3:DeleteObject`, so the server cannot delete objects. That alone does
+  not make backups immutable: the role can still replace an object by writing to the same
+  key (the bucket has no versioning), the 30-day lifecycle rule deletes objects, and an
+  account administrator can delete them. S3 Versioning or Object Lock would be needed for
+  backups that cannot be removed, and neither is set up.
 
 **B5. Attach the role to the instance.**
 - Where: EC2 > Instances > select yours > Actions > Security > Modify IAM role.
@@ -265,7 +267,7 @@ nano .env
      and copy it (shown once).
   3. In `deploy/.env` on the server (`nano .env`): `JOBMARKET_SMTP_USER` and
      `JOBMARKET_ALERT_FROM` = that Gmail address; `JOBMARKET_SMTP_PASSWORD` = the app
-     password without spaces; `JOBMARKET_ALERT_TO` = `upretyyniyog@gmail.com`.
+     password without spaces; `JOBMARKET_ALERT_TO` = the address that should receive them.
 - Check (after F2): `docker compose run --rm jobs jobmarket notifications --send-test`
   prints `Sent 1`, and the "[Job Pipeline] Test email" arrives. If it says failed,
   `jobmarket notifications --full` shows the error.
@@ -278,7 +280,7 @@ All commands in `~/Job-Market-Intelligence/deploy`.
 
 **F1. Build the application image.**
 - What: builds the image for the commit you are on and tags it with that commit, so a
-  later rollback can return to it. Takes several minutes on a t3.micro.
+  later rollback can return to it. Takes several minutes.
 
 ```bash
 sed -i "s/^APP_VERSION=.*/APP_VERSION=$(git rev-parse --short HEAD)/" .env
@@ -410,10 +412,10 @@ Only one task runs at a time. If the server was off at a scheduled time, Airflow
 catch-up run for the latest missed time when it starts, not one per missed time.
 Backups: S3 keeps them 30 days (B3); restoring is F3 option 1 steps 3 to 5, or section I.
 
-**G0. Before Airflow: the instance size (your decision).** Airflow plus the rest needs more
-than 1 GiB (`SIZING.md`). Do not start Airflow on the t3.micro; keep using G5. When you
-decide to change size (a 2 GiB t3.small is the candidate; about $20.58 a month before
-credits):
+**G0. Before Airflow: the instance size.** Airflow plus the rest needs more than 1 GiB
+(`SIZING.md`). Do not start Airflow on a t3.micro; keep using G5 there. To move to a 2 GiB
+t3.small (about $20.58 a month before credits; the production server made this change on
+2026-11-04):
 - Where: EC2 > Instances > yours > Instance state > Stop; then Actions > Instance settings
   > Change instance type > `t3.small` > Apply; then Instance state > Start.
 - What: the disk and the Elastic IP stay; Docker starts the containers again at boot.
@@ -666,30 +668,27 @@ are gone by design.
 
 ---
 
-## Remaining manual work checklist
+## Checklist
 
-Done in the code (this repository): Docker image, Compose stack, Caddy HTTPS, database
-first-start script, backups and S3 commands, IAM and bucket policy examples, the Airflow
-schedules, email and summary commands, this runbook.
-Not done yet, and only you can do it in AWS:
+In the repository: Docker image, Compose stack, Caddy HTTPS, database first-start script,
+backups and S3 commands, IAM and bucket policy examples, the Airflow schedules, email and
+summary commands, this runbook.
 
-- [ ] B1 S3 bucket (block public access, SSE-S3)
-- [ ] B2 bucket policy (HTTPS only)
-- [ ] B3 lifecycle rules, 30 days for `raw/` and `backups/`
-- [ ] B4 IAM role `jobmarket-ec2` with Session Manager and the `jobmarket-s3` inline policy
-- [ ] B5 role attached to the instance
-- [ ] B6 security group: 80 and 443 added, existing SSH rule kept, nothing for 5432
-- [ ] B7 Elastic IP associated
-- [ ] B8 budget alert (optional)
-- [ ] C1 domain registered at Cloudflare
-- [ ] C2 A record (DNS only) pointing to the Elastic IP
-- [ ] E1 to E5 server preparation (swap, Docker, plugins, code, `.env`)
-- [ ] F1 to F7 first start, checks, restart test, first S3 backup
-- [ ] F8 SSH rule removed, only after Session Manager worked in D1 and after the F6 reboot
-- [ ] E6 Gmail app password; `notifications --send-test` arrives
-- [ ] G0 instance size decision (budget); resize only after approving it
-- [ ] G1 to G3 Airflow started, UI reached privately, first evening run and summary email
-- [ ] G6 heartbeat and uptime monitors (optional)
-- [ ] T1 to T4 dashboard Sheet: Google project, service account, Sheet shared, key on the server
-- [ ] T5 workbook published on Tableau Public and its name set for the Market insights page
-- [ ] Record real memory use in `deploy/SIZING.md` after a few days of schedules
+Done by hand in AWS, Cloudflare, Google, and on the server. Status of the production server
+on 2026-11-04:
+
+- [x] B1 to B7: bucket, bucket policy, lifecycle rules, IAM role, role attached, security
+  group (80 and 443), Elastic IP
+- [ ] B8 budget alert (optional; not recorded here)
+- [x] C1, C2: domain at Cloudflare, A record (DNS only)
+- [x] E1 to E6: swap, Docker and plugins, code, `.env`, Gmail app password (test email arrived)
+- [x] F1 to F7: first start, restore of the existing data, HTTPS, checks, restart test, first
+  S3 backup
+- [x] F8: SSH rule removed after Session Manager worked in D1 and after the F6 reboot
+- [x] G0: resized to t3.small
+- [x] G1 to G3: Airflow started, UI reached privately, first 9 PM run with backup, report
+  publication, Sheet update, and summary email
+- [x] T1 to T4: dashboard Sheet, service account, key on the server, first sync
+- [ ] T5: workbook published on Tableau Public and its name set for the Market insights page
+- [ ] G6: heartbeat and uptime monitors (optional)
+- [ ] Record memory use on the instance in `deploy/SIZING.md` after a few days of schedules

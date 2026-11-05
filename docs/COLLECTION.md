@@ -139,7 +139,7 @@ hired. Every transition is in `posting_availability_events` with its reason, sca
 evidence; `jobmarket availability show` prints them.
 
 When availability tracking was introduced, every existing posting started as `observed`
-with no qualifying absences; earlier Module 3 counts remain in `complete_scan_absences`.
+with no qualifying absences; the counts kept before then remain in `complete_scan_absences`.
 
 ## Duplicates
 
@@ -180,10 +180,10 @@ jobmarket duplicates dissolve 4 --reason "employer reuses requisition numbers pe
 ```
 
 A dismissed flag is not raised again, and a dissolved group is not recreated by its rule.
-The Module 3 flags (same title and description, no location check) are kept with status
+The first duplicate flags (2026-10-25: same title and description, no location check) are kept with status
 `superseded`; the current rule reopens any pair it also matches.
 
-Duplicate matching covers postings that are or have been retained (the Module 6 scope),
+Duplicate matching covers postings that are or have been retained (the scope set when duplicate handling was added on 2026-10-27),
 even though every listing now has content history.
 
 ## Posting history
@@ -356,7 +356,7 @@ transaction (such as `CREATE INDEX CONCURRENTLY`).
   is stored in the database, so it survives restarts. `retry-due` scans only boards whose
   retry is due; successful boards are not rerun. A collection run while no retry is due
   neither uses nor resets the retry budget. Late retries never come in a burst: a retry
-  run more than 5 minutes after its slot (there is no scheduler yet) moves the next one to
+  run more than 5 minutes after its slot (the 15-minute retry check can start late) moves the next one to
   a full hour after it, so the three retries always span about three hours of attempts.
 - Within one attempt, a `429` or `503` with a `Retry-After` of 30 seconds or less is
   waited out once per board scan, however many pages the scan has; there are no other

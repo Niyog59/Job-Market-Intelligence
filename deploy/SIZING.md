@@ -1,13 +1,15 @@
 # Resource sizing
 
-The server today is one EC2 t3.micro (2 vCPU burstable, 1 GiB memory, 20 GiB disk) in
-us-east-2. The full stack is PostgreSQL, the website, Caddy, and Airflow (scheduler, DAG
-processor, API server) running the pipeline one task at a time.
+**Deployment status (2026-11-04).** Production runs on one EC2 t3.small (2 vCPU burstable,
+2 GiB memory plus a 2 GiB swap file, 20 GiB disk) in us-east-2. The instance started as a
+t3.micro (1 GiB) and was resized before Airflow was started, on the evidence below. The full
+stack is PostgreSQL, the website, Caddy, and Airflow (scheduler, DAG processor, API server)
+running the pipeline one task at a time.
 
-**Status: nothing here has been measured on EC2.** There are three kinds of evidence below,
-labeled every time: measured on macOS with the real data, measured on Linux in CI with
-almost no data, and estimates. No instance size has been confirmed, and none has been
-changed.
+**Measurement status.** The measurements below were taken before the deployment: on macOS
+with the real data, on Linux in CI with almost no data, plus estimates; each is labeled.
+Memory on the EC2 instance itself has not been recorded yet (see "What would confirm a
+size").
 
 ## 1. Full stack with the real pipeline, macOS (2026-11-01)
 
@@ -96,7 +98,7 @@ are loaded in CI, so collection had no work), and only about 8 samples were take
   on macOS, about 1 GB on Linux with an empty database, and has to share the 1 GiB with the
   OS and Docker. Swap would be in constant use. Without Airflow (jobs started by hand) the
   earlier estimate of 730 to 830 MB still applies.
-- **t3.small (2 GiB) is a candidate, not a confirmed fit.** By the estimate it keeps roughly
+- **t3.small (2 GiB) was chosen, and is not yet a confirmed fit.** By the estimate it keeps roughly
   250 to 650 MB free at peak, with the 2 GiB swap file as a safety net. That margin rests on
   macOS numbers and a Linux run without data; it has to be measured on the instance itself
   (below) before it is relied on.
@@ -112,8 +114,8 @@ responses kept 30 days, backups, and requests). A gp2 disk would be $2.00 instea
 
 | Instance | Memory | EC2 | Total | Notes |
 |---|---|---|---|---|
-| t3.micro (current) | 1 GiB | $7.59 | **$13.00** | too small for the full stack |
-| t3.small | 2 GiB | $15.18 | **$20.58** | same x86 image; the existing instance can be resized in place |
+| t3.micro (original instance) | 1 GiB | $7.59 | **$13.00** | too small for the full stack |
+| t3.small (production since 2026-11-04) | 2 GiB | $15.18 | **$20.58** | same x86 image; resized in place |
 | t4g.small | 2 GiB | $12.26 | **$17.66** | ARM: needs a new instance and an arm64 image, not built or tested |
 | t3.medium | 4 GiB | $30.37 | **$35.77** | comfortable headroom |
 
@@ -123,11 +125,11 @@ t3.small's baseline, but a full day on EC2 has not been measured. Instance types
 under an AWS free-plan account are limited; check eligibility in the console before
 choosing.
 
-No instance has been resized and no spending has changed.
+These are list-price estimates, not billed amounts; the account runs on AWS credits.
 
 ## What would confirm a size
 
-On the candidate instance, with the full stack running its normal schedule (RUNBOOK
+On the t3.small, with the full stack running its normal schedule (RUNBOOK
 section G):
 
 1. Watch at least one 9 PM run (collection, backup, publication, summary) and several hourly

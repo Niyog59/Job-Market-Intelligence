@@ -161,7 +161,7 @@ pipeline: nothing scheduled, and nothing in the server image, uses Spark.
 
 1. Install `pip install -e ".[analytics,spark]"` and Java 17 or 21 (`java -version`).
 2. `jobmarket spark export` reads the models' inputs from `analytics_staging` and
-   `analytics_intermediate` through the read-only analytics login and writes them to
+   `analytics_intermediate` through the analytics login and writes them to
    `data/spark/inputs/` as Parquet. In the same database snapshot it runs dbt's compiled SQL
    of the three models and writes the results to `data/spark/dbt/`. `data/` is never
    committed.
@@ -192,7 +192,7 @@ each: `about` (build time and the "data collected through ..." caption every cha
 `jobs`, `job_skills`, `genai_terms`, `skill_pairs`, `weekly_jobs`, `weekly_skills`,
 `daily_activity`, `eligibility`, and `pipeline_health`.
 
-- Only published reporting tables are read, through the read-only analytics login, so
+- Only published reporting tables are read, through the analytics login, so
   nothing from the private workspace can reach the Sheet.
 - All tabs are replaced in one Google `batchUpdate` request, which applies all or nothing:
   the Sheet holds one complete publication, the previous one if an update fails.

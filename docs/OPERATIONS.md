@@ -65,7 +65,7 @@ Optional settings:
 | `JOBMARKET_AI_TPM`           | unset                           | the account's tokens-per-minute limit, if any |
 | `JOBMARKET_AI_TIMEOUT_SECONDS` | `120`                         | timeout of one extraction request |
 | `JOBMARKET_EVAL_DIR`         | `data/eval`                     | evaluation case files (ignored by Git) |
-| `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the read-only login dbt builds with and the website reads through |
+| `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | `jobmarket_analytics`, empty | the login dbt builds with (it reads ingestion tables and writes only its own analytics schemas); the website uses it in read-only sessions |
 | `PRIVATE_DB_USER`, `PRIVATE_DB_PASSWORD` | `jobmarket_private`, empty | the login for private pages; without a password, private pages are off and browsing still works |
 | `WEB_COOKIE_SECURE` | `true` | `false` only for a browser that refuses Secure cookies on http://127.0.0.1 |
 | `JOBMARKET_SMTP_HOST`, `JOBMARKET_SMTP_PORT` (587), `JOBMARKET_SMTP_USER`, `JOBMARKET_SMTP_PASSWORD`, `JOBMARKET_SMTP_STARTTLS` (`true`), `JOBMARKET_ALERT_FROM`, `JOBMARKET_ALERT_TO` | unset | alert delivery; without host, sender, and recipient, notifications stay in the outbox |
@@ -133,7 +133,7 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
 
 | DAG | When (America/Chicago) | Tasks |
 |---|---|---|
-| `jobmarket_collection` | 12:00 and 21:00 | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
+| `jobmarket_collection` | 12:00 and 21:00 | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, `tableau sync` (only after a successful publication; skipped until the Sheet is configured), (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
 | `jobmarket_retries` | every 15 minutes | `retry-due`, then `notifications --send` |
 | `jobmarket_extraction` | every hour at :30 | `extract run --limit 20` |
 
@@ -155,7 +155,7 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
   limits; a quota pause shows in the summary, not as an alert. Without a Gemini key the
   batch is skipped.
 - **Time limits:** collection 45 minutes, retry check 30, AI batch 20, report publication
-  20, backup and raw uploads 20, summary and email 10.
+  20, backup and raw uploads 20, Sheet sync 10, summary and email 10.
 - **No triggerer:** none of the tasks are deferrable, so Airflow's optional triggerer is
   not run.
 - **Run history:** kept in its own `airflow` database (login `airflow`) and cleaned after
@@ -227,7 +227,7 @@ restored database:
 
 ```bash
 jobmarket migrate                 # apply migrations newer than the backup, if any
-jobmarket analytics grant         # read-only access for the analytics login
+jobmarket analytics grant         # the analytics login: read ingestion, own analytics schemas
 jobmarket private grant           # private schema for the private login
 jobmarket private check-access    # confirm who can reach private data
 jobmarket analytics build         # recreate the reporting tables and serving views
@@ -250,7 +250,10 @@ access and lifecycle rules can differ:
 
 Credentials come from the AWS SDK's default chain (on EC2, the instance role), so no access
 keys are configured. Nothing in the code deletes S3 objects: retention is a bucket lifecycle
-rule (30 days for backups and for raw responses). A dump's manifest is uploaded after the
+rule (30 days for backups and for raw responses). The instance role has no `s3:DeleteObject`,
+but that does not make the backups immutable: the role can overwrite an object by writing
+the same key (versioning is off), and an account administrator can delete objects. S3
+Versioning or Object Lock would be needed for that guarantee; neither is set up. A dump's manifest is uploaded after the
 dump, so `backup list` shows only finished uploads; `backup fetch STAMP` downloads both parts
 and verifies them before a restore. After an upload, every object is checked in S3 (it
 must exist with the local size) and only then is an `UPLOADED` file written into the
@@ -280,15 +283,16 @@ are retried by the next cleanup. Locally, without a bucket, cleanup works as bef
 | `Caddyfile` | HTTPS for `SITE_DOMAIN`, HTTP redirected to HTTPS |
 | `postgres-init/10-jobmarket.sh` | on the first start: the three logins and the database owned by the non-superuser owner login |
 | `env.example` | the settings, with placeholders only; copied to `deploy/.env` on the server |
-| `aws/` | IAM role policy (S3 prefixes only, no delete), EC2 trust policy, bucket policy (HTTPS only), lifecycle rules (30 days) |
+| `aws/` | IAM role policy (S3 prefixes only, no `s3:DeleteObject`), EC2 trust policy, bucket policy (HTTPS only), lifecycle rules (30 days) |
 | `RUNBOOK.md` | ordered steps from an empty AWS account to the running site, updates, rollback, recovery |
 | `SIZING.md` | memory measurements (including Airflow), estimates, their limits, and candidate instance sizes with costs |
 
 All containers restart unless stopped, and Docker starts at boot. Visitors reach only
 Caddy, and the database is not exposed. Administration uses AWS Systems Manager Session
-Manager; the runbook keeps the existing SSH rule as a fallback until Session Manager has
-been tested, including after a reboot, and only then removes it. Public pages read through
-the read-only login; nothing a visitor does starts a collection, an AI call, or a change to
+Manager. The runbook keeps SSH as a fallback until Session Manager has worked, including
+after a reboot, and only then removes the rule; on the production server that happened on
+2026-11-04. Public pages read through
+the analytics login in read-only sessions; nothing a visitor does starts a collection, an AI call, or a change to
 job data (signing in records sign-in attempts and sessions in the private schema).
 
 ## Tests
