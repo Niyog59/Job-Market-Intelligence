@@ -192,8 +192,8 @@ def queue_cases(conn: psycopg.Connection, config: ExtractionConfig, cases: list[
         if row[1] != "succeeded":
             if row[1] in ("gave_up", "superseded"):
                 conn.execute(
-                    "UPDATE extraction_jobs SET status = 'pending', runs_failed = 0 "
-                    "WHERE job_id = %s",
+                    "UPDATE extraction_jobs SET status = 'pending', runs_failed = 0, "
+                    "round_attempts = 0, next_attempt_at = NULL WHERE job_id = %s",
                     (row[0],),
                 )
             jobs.append(row[0])

@@ -3,27 +3,41 @@ what to keep.
 
 Flow. Collection stores versions and never calls the model. enqueue_new() adds a job for
 every current version that has never been queued, under the active configuration (model,
-thinking level, prompt and schema versions). run_extraction() works through the queue one
-request at a time:
+thinking level, prompt and schema versions); collection calls it after every board.
 
-  priority  1 new or edited retained listing    2 retained backlog
-            3 new or edited other listing       4 other backlog
+Two lanes share the account's one daily allowance:
+
+  new lane      priority 1 new or edited retained listing, then 3 new or edited other listing
+  backlog lane  priority 2 retained backlog, then 4 other backlog (and reprocessing)
   (backlog = content recorded before extraction tracking started)
 
-For each job it builds the input document, reuses an earlier answer when the same document
-was already extracted under the same configuration (no request), otherwise sends one
-request, checks the answer (jobmarket.extraction_check), and stores the result together
-with its versions and evidence in one transaction. A job whose version is no longer the
-posting's current content is superseded instead of extracted, so a result is never attached
-to newer content.
+The new lane always goes first. The backlog lane only uses requests the new lane does not
+need, and never more than the safety stop minus a daily reserve kept for new listings
+(JOBMARKET_AI_NEW_RESERVE, 200 by default: decision 2026-11-05).
 
-Limits and failures (decisions 2026-10-27). Requests are spaced to the configured
-requests-per-minute and, if set, tokens-per-minute limits. A failed request is retried up
-to three times, waiting 10, 30, then 90 seconds, or longer if Google says so. A job whose
-requests all fail is retried in the next run, at most five runs, and then gives up until
-`jobmarket extract reprocess`. A daily-quota error pauses extraction until midnight Pacific
-time (the provider's reset). Runs stop before 90% of the configured daily request limit, to
-leave room for manual tests. None of this touches collection.
+For each job a process claims it, builds the input document, reuses an earlier answer when
+the same document was already extracted under the same configuration (no request),
+otherwise sends one request, checks the answer (jobmarket.extraction_check), and stores the
+result together with its versions and evidence in one transaction. A job whose version is
+no longer the posting's current content is superseded instead of extracted, so a result is
+never attached to newer content.
+
+Several processes can work at once (the worker, the hourly batch, a manual run, an
+evaluation). A claim is a session-level advisory lock on the job, released by PostgreSQL if
+the process dies, so a job left "running" by a crash is simply claimed again. Every request
+is recorded before it is sent, under one pacing lock, so the per-minute spacing, the
+tokens-per-minute window, and the daily count hold across all processes together.
+
+Limits and failures (decisions 2026-10-27 and 2026-11-05). A round is up to four requests
+for one job, waiting 10, 30, then 90 seconds between them, or longer if Google says so.
+Failures of the provider (rate limits, server and network errors) are retried in place,
+because every other job would meet them too. Problems with one listing's answer (invalid
+output, a blocked reply) are retried later instead: the job waits for its retry time and
+other jobs go ahead. A job whose round fails waits an hour before the next round, at most
+five rounds, and then gives up until `jobmarket extract reprocess`. A rejected request
+(another 4xx, such as a bad key) stops the run. A daily-quota error pauses extraction until
+midnight Pacific time (the provider's reset). Requests stop before 90% of the configured
+daily request limit, to leave room for manual tests. None of this touches collection.
 
 Configuration changes are never applied to old results automatically: a new model, prompt,
 or schema version applies to new content only, until `jobmarket extract reprocess` queues
@@ -60,7 +74,8 @@ from jobmarket.extraction_schema import (
 from jobmarket.gemini import ModelError, Reply
 from jobmarket.store import MAX_STORED_DESCRIPTION_CHARS
 
-EXTRACTION_LOCK_KEY = 4_815_162_344
+PACING_LOCK_KEY = 4_815_162_345  # held briefly while a process reserves a request slot
+JOB_LOCK_CLASS = 4815  # first key of the per-job advisory locks; the job id is the second
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 MODEL_ENV = "JOBMARKET_AI_MODEL"
@@ -69,13 +84,21 @@ RPM_ENV = "JOBMARKET_AI_RPM"
 TPM_ENV = "JOBMARKET_AI_TPM"
 DAILY_ENV = "JOBMARKET_AI_DAILY_LIMIT"
 TIMEOUT_ENV = "JOBMARKET_AI_TIMEOUT_SECONDS"
+NEW_RESERVE_ENV = "JOBMARKET_AI_NEW_RESERVE"
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_THINKING = "minimal"
 DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_NEW_RESERVE = 200  # requests a day the backlog lane may never use
 
-RETRY_WAITS = (10.0, 30.0, 90.0)  # seconds before retries 1, 2, 3
-MAX_FAILED_RUNS = 5
+NEW_LANE = (1, 3)
+BACKLOG_LANE = (2, 4)
+LANE_ORDER = [*NEW_LANE, *BACKLOG_LANE]
+
+RETRY_WAITS = (10.0, 30.0, 90.0)  # seconds before retries 1, 2, 3 of a round
+MAX_FAILED_RUNS = 5  # failed rounds before a job gives up
+FAILED_ROUND_GAP = timedelta(hours=1)  # wait after a failed round (decision 2026-11-05)
+JOB_SPECIFIC_KINDS = frozenset({"blocked"})  # with invalid output: retried later, not in place
 SAFETY_SHARE = 0.9  # stop at 90% of the daily request limit
 MAX_INPUT_DESCRIPTION_CHARS = MAX_STORED_DESCRIPTION_CHARS  # longer: link only, not sent
 
@@ -85,7 +108,7 @@ PAID_RATE_PER_MILLION = {"gemini-3.5-flash-lite": (0.30, 2.50)}
 
 
 class ExtractionBusy(Exception):
-    """Another extraction run holds the lock."""
+    """Another extraction worker is already running."""
 
 
 class ExtractionNotConfigured(Exception):
@@ -100,6 +123,7 @@ class ExtractionConfig:
     tpm: int | None = None  # tokens per minute, if the account has such a limit
     daily_limit: int | None = None  # requests per day
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    new_reserve: int = DEFAULT_NEW_RESERVE  # requests a day kept for the new lane
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "ExtractionConfig":
@@ -124,6 +148,7 @@ class ExtractionConfig:
             tpm=number(TPM_ENV, int),
             daily_limit=number(DAILY_ENV, int),
             timeout_seconds=number(TIMEOUT_ENV, float) or DEFAULT_TIMEOUT_SECONDS,
+            new_reserve=_reserve(env.get(NEW_RESERVE_ENV, "")),
         )
 
     @property
@@ -140,6 +165,19 @@ class ExtractionConfig:
                 f"set {' and '.join(missing)} to this account's free-tier limits for "
                 f"{self.model} (shown in Google AI Studio) before sending requests"
             )
+
+
+def _reserve(raw: str) -> int:
+    raw = raw.strip()
+    if not raw:
+        return DEFAULT_NEW_RESERVE
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ExtractionNotConfigured(f"{NEW_RESERVE_ENV} must be a number, got {raw!r}") from None
+    if value < 0:
+        raise ExtractionNotConfigured(f"{NEW_RESERVE_ENV} must not be negative")
+    return value
 
 
 Generator = Callable[[str, str, dict], Reply]  # (instructions, text, schema) -> Reply
@@ -214,7 +252,8 @@ def reprocess(
         cap = "LIMIT %(limit)s" if limit else ""
         result.reset = conn.execute(
             f"""
-            UPDATE extraction_jobs j SET status = 'pending', runs_failed = 0, note = %(reason)s,
+            UPDATE extraction_jobs j SET status = 'pending', runs_failed = 0, round_attempts = 0,
+                   next_attempt_at = NULL, note = %(reason)s,
                    updated_at = %(now)s
             FROM source_postings p JOIN posting_screenings ps USING (posting_id)
             WHERE j.posting_id = p.posting_id AND j.version_id = p.current_version_id
@@ -291,6 +330,8 @@ class RunReport:
     gave_up: int = 0
     superseded: int = 0
     warnings: int = 0
+    retries_scheduled: int = 0
+    recovered: int = 0  # jobs left running by a process that ended, claimed again
     stop_reason: str = "queue empty"
     errors: list[str] = field(default_factory=list)
 
@@ -301,16 +342,29 @@ def next_pacific_midnight(now: datetime) -> datetime:
     return datetime.combine(tomorrow, time(0, 0), tzinfo=PACIFIC)
 
 
-def requests_today(conn: psycopg.Connection, model: str, now: datetime) -> int:
-    start = datetime.combine(now.astimezone(PACIFIC).date(), time(0, 0), tzinfo=PACIFIC)
+def _pacific_day_start(now: datetime) -> datetime:
+    return datetime.combine(now.astimezone(PACIFIC).date(), time(0, 0), tzinfo=PACIFIC)
+
+
+def requests_today(
+    conn: psycopg.Connection, model: str, now: datetime, lane: str | None = None
+) -> int:
+    """Requests started since midnight Pacific, including those still waiting for a reply;
+    with lane, only that lane's."""
     return conn.execute(
-        "SELECT count(*) FROM extraction_attempts WHERE model = %s AND started_at >= %s",
-        (model, start),
+        "SELECT count(*) FROM extraction_attempts WHERE model = %s AND started_at >= %s"
+        + (" AND lane = %s" if lane else ""),
+        (model, _pacific_day_start(now), *([lane] if lane else [])),
     ).fetchone()[0]
 
 
 def safety_stop_at(config: ExtractionConfig) -> int:
     return math.floor(config.daily_limit * SAFETY_SHARE)
+
+
+def backlog_allowance(config: ExtractionConfig) -> int:
+    """The most requests the backlog lane may send in one Pacific day."""
+    return max(0, safety_stop_at(config) - config.new_reserve)
 
 
 def _paused_until(conn, model: str, now: datetime) -> datetime | None:
@@ -327,75 +381,104 @@ def estimated_tokens(document: str) -> int:
     return (len(INSTRUCTIONS) + len(document)) // 4 + 2000
 
 
-class _Pacer:
-    def __init__(self, conn, config: ExtractionConfig, clock: Clock, sleep):
-        self.conn, self.config, self.clock, self.sleep = conn, config, clock, sleep
-
-    def wait(self, estimate: int) -> None:
-        last = self.conn.execute(
-            "SELECT max(started_at) FROM extraction_attempts WHERE model = %s",
-            (self.config.model,),
-        ).fetchone()[0]
-        if last is not None:
-            gap = 60.0 / self.config.rpm - (self.clock() - last).total_seconds()
-            if gap > 0:
-                self.sleep(gap)
-        if self.config.tpm:
-            while True:
-                now = self.clock()
-                rows = self.conn.execute(
-                    "SELECT started_at, coalesce(total_tokens, 0) FROM extraction_attempts "
-                    "WHERE model = %s AND started_at > %s ORDER BY started_at",
-                    (self.config.model, now - timedelta(seconds=60)),
-                ).fetchall()
-                used = sum(t for _, t in rows)
-                if used + estimate <= self.config.tpm or not rows:
-                    return
-                self.sleep(max(1.0, 60.0 - (now - rows[0][0]).total_seconds()))
+# A job another process may take: waiting, or failed with rounds left, and due. A "running"
+# job qualifies only if its claim lock is free, which means its process has ended.
+_CLAIMABLE = """
+    j.config_key = %(key)s
+    AND (j.status IN ('pending', 'running') OR (j.status = 'failed' AND j.runs_failed < %(max)s))
+    AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= %(now)s)
+"""
 
 
-def _pick(conn, config: ExtractionConfig, tried: list[int], only: list[int] | None):
-    return conn.execute(
-        f"""
-        SELECT j.job_id, j.version_id, j.posting_id, (p.current_version_id = j.version_id)
-        FROM extraction_jobs j JOIN source_postings p ON p.posting_id = j.posting_id
-        WHERE j.config_key = %s AND NOT (j.job_id = ANY(%s))
-          AND (j.status = 'pending' OR (j.status = 'failed' AND j.runs_failed < %s))
-          {"AND j.job_id = ANY(%s)" if only is not None else ""}
-        ORDER BY j.priority, j.created_at, j.job_id
-        LIMIT 1
-        """,
-        (config.key, tried, MAX_FAILED_RUNS, *([only] if only is not None else [])),
-    ).fetchone()
+@dataclass(frozen=True)
+class _Claim:
+    job_id: int
+    version_id: int
+    posting_id: int
+    priority: int
+    current: bool  # the job's version is still the posting's current content
+    round_attempts: int
+    lane: str | None
 
 
-def _record_attempt(
-    conn,
-    job_id,
-    run_id,
-    n,
-    config,
-    started,
-    finished,
-    outcome,
-    *,
-    reply=None,
-    error: ModelError | None = None,
-    raw=None,
-    detail=None,
-) -> int:
+def _lock_args(job_id: int) -> tuple[int, int]:
+    # The two-key form takes 32-bit keys. Job ids stay far below that; if one ever did not,
+    # a collision would only make two jobs wait for each other, never share a claim.
+    return JOB_LOCK_CLASS, job_id % 2_147_483_647
+
+
+def _try_lock(conn, job_id: int) -> bool:
+    return conn.execute("SELECT pg_try_advisory_lock(%s, %s)", _lock_args(job_id)).fetchone()[0]
+
+
+def _claim(conn, config, now, priorities, only, claimant) -> tuple[_Claim, bool] | None:
+    """Claim the first ready job in lane order; returns it and whether it was recovered from
+    a process that ended while working on it."""
+    params = {"key": config.key, "max": MAX_FAILED_RUNS, "now": now, "order": LANE_ORDER}
+    if only is not None:
+        params["only"] = only
+        which = "AND j.job_id = ANY(%(only)s)"
+    else:
+        params["prio"] = list(priorities)
+        which = "AND j.priority = ANY(%(prio)s)"
+    candidates = conn.execute(
+        f"SELECT j.job_id FROM extraction_jobs j WHERE {_CLAIMABLE} {which} "
+        "ORDER BY array_position(%(order)s::int[], j.priority::int), j.created_at, j.job_id "
+        "LIMIT 25",
+        params,
+    ).fetchall()
+    for (job_id,) in candidates:
+        if not _try_lock(conn, job_id):
+            continue  # another process is working on it
+        # Read again under the lock: another process may have finished it meanwhile.
+        row = conn.execute(
+            f"SELECT j.version_id, j.posting_id, j.priority, j.status, j.round_attempts, "
+            f"p.current_version_id = j.version_id FROM extraction_jobs j "
+            f"JOIN source_postings p ON p.posting_id = j.posting_id "
+            f"WHERE j.job_id = %(job)s AND {_CLAIMABLE}",
+            {**params, "job": job_id},
+        ).fetchone()
+        if row is None:
+            _unlock(conn, job_id)
+            continue
+        version_id, posting_id, priority, status, round_attempts, current = row
+        recovered = status == "running"
+        with conn.transaction():
+            if recovered:
+                conn.execute(
+                    "UPDATE extraction_attempts SET outcome = 'interrupted', finished_at = %s, "
+                    "error_detail = 'the process sending this request ended first' "
+                    "WHERE job_id = %s AND finished_at IS NULL",
+                    (now, job_id),
+                )
+            conn.execute(
+                "UPDATE extraction_jobs SET status = 'running', claimed_by = %s, "
+                "claimed_at = %s, updated_at = %s WHERE job_id = %s",
+                (claimant, now, now, job_id),
+            )
+        lane = None if only is not None else ("new" if priority in NEW_LANE else "backlog")
+        claim = _Claim(job_id, version_id, posting_id, priority, current, round_attempts, lane)
+        return claim, recovered
+    return None
+
+
+def _unlock(conn, job_id: int) -> None:
+    conn.execute("SELECT pg_advisory_unlock(%s, %s)", _lock_args(job_id))
+
+
+def _finish_attempt(conn, attempt_id, finished, outcome, *, reply=None, error=None, raw=None,
+                    detail=None) -> None:  # fmt: skip
     usage = reply.usage if reply else (error.usage if error and error.usage else None)
-    return conn.execute(
+    conn.execute(
         """
-        INSERT INTO extraction_attempts (job_id, run_id, attempt_no, model, started_at,
-            finished_at, outcome, http_status, quota_id, retry_after_seconds, prompt_tokens,
-            output_tokens, thought_tokens, total_tokens, traffic_type, model_version,
-            raw_reply, error_detail)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING attempt_id
+        UPDATE extraction_attempts SET finished_at = %s, outcome = %s, http_status = %s,
+            quota_id = %s, retry_after_seconds = %s, prompt_tokens = %s, output_tokens = %s,
+            thought_tokens = %s, total_tokens = %s, traffic_type = %s, model_version = %s,
+            raw_reply = %s, error_detail = %s
+        WHERE attempt_id = %s
         """,
         (
-            job_id, run_id, n, config.model, started, finished, outcome,
+            finished, outcome,
             error.http_status if error else None,
             error.quota_id if error else None,
             error.retry_after if error else None,
@@ -406,8 +489,9 @@ def _record_attempt(
             usage.traffic_type if usage else None,
             reply.model_version if reply else None,
             raw, detail or (error.detail if error else None),
+            attempt_id,
         ),
-    ).fetchone()[0]  # fmt: skip
+    )  # fmt: skip
 
 
 def _store_result(
@@ -453,7 +537,7 @@ def _store_result(
     )
     conn.execute(
         "UPDATE extraction_jobs SET status = 'succeeded', result_id = %s, last_error = NULL, "
-        "updated_at = %s WHERE job_id = %s",
+        "round_attempts = 0, next_attempt_at = NULL, updated_at = %s WHERE job_id = %s",
         (result_id, now, job_id),
     )
     return result_id
@@ -479,23 +563,34 @@ def _reuse(conn, job_id, version_id, posting_id, input_hash, config, now) -> boo
     return True
 
 
-def _fail_job(conn, job_id, message: str, now: datetime) -> bool:
-    """Count a failed run for the job; True when it has now given up."""
+def _fail_round(conn, job_id, message: str, now: datetime) -> bool:
+    """Count a failed round for the job and make it wait FAILED_ROUND_GAP; True when it has
+    now given up."""
     row = conn.execute(
         "UPDATE extraction_jobs SET runs_failed = runs_failed + 1, last_error = %s, "
+        "round_attempts = 0, next_attempt_at = %s, "
         "status = CASE WHEN runs_failed + 1 >= %s THEN 'gave_up' ELSE 'failed' END, "
         "updated_at = %s WHERE job_id = %s RETURNING status",
-        (message[:1000], MAX_FAILED_RUNS, now, job_id),
+        (message[:1000], now + FAILED_ROUND_GAP, MAX_FAILED_RUNS, now, job_id),
     ).fetchone()
     return row[0] == "gave_up"
 
 
-def _release(conn, job_id, message: str | None, now: datetime) -> None:
+def _retry_later(conn, job_id, round_attempts: int, wait: float, message: str, now) -> None:
+    """Put the job back, due after wait seconds, keeping its place in the round."""
+    conn.execute(
+        "UPDATE extraction_jobs SET status = 'pending', round_attempts = %s, "
+        "next_attempt_at = %s, last_error = %s, updated_at = %s WHERE job_id = %s",
+        (round_attempts, now + timedelta(seconds=wait), message[:1000], now, job_id),
+    )
+
+
+def _release(conn, job_id, message: str | None, now: datetime, round_attempts: int) -> None:
     """Put a job back as pending without counting a failure (the cause was not the job)."""
     conn.execute(
-        "UPDATE extraction_jobs SET status = 'pending', last_error = %s, updated_at = %s "
-        "WHERE job_id = %s",
-        (message, now, job_id),
+        "UPDATE extraction_jobs SET status = 'pending', last_error = %s, round_attempts = %s, "
+        "updated_at = %s WHERE job_id = %s",
+        (message, round_attempts, now, job_id),
     )
 
 
@@ -503,6 +598,263 @@ class _StopRun(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+class _LaneFull(Exception):
+    """The backlog lane has used its share of today's requests."""
+
+
+class Session:
+    """One process's work on the queue: claims jobs one at a time and handles each. Used by
+    run_extraction (a bounded run) and by the long-running worker."""
+
+    def __init__(self, conn, generate, config, clock, sleep, claimant: str, only=None):
+        if not conn.autocommit:
+            raise ValueError("extraction needs an autocommit connection")
+        self.conn, self.generate, self.config = conn, generate, config
+        self.clock, self.sleep, self.claimant, self.only = clock, sleep, claimant, only
+        self.report = RunReport()
+        self.backlog_open = True
+
+    # -- run bookkeeping
+
+    def start(self) -> None:
+        now = self.clock()
+        if self.only is None:
+            with self.conn.transaction():
+                self.report.queued_now = enqueue_new(self.conn, self.config, now)
+        self.report.run_id = self.conn.execute(
+            "INSERT INTO extraction_runs (started_at, config_key) VALUES (%s, %s) RETURNING run_id",
+            (now, self.config.key),
+        ).fetchone()[0]
+
+    def save(self, finished: bool = True) -> None:
+        r = self.report
+        self.conn.execute(
+            "UPDATE extraction_runs SET finished_at = %s, requests = %s, succeeded = %s, "
+            "reused = %s, failed = %s, stop_reason = %s WHERE run_id = %s",
+            (self.clock() if finished else None, r.requests, r.succeeded, r.reused, r.failed,
+             r.stop_reason if finished else None, r.run_id),
+        )  # fmt: skip
+
+    # -- limits
+
+    def check_limits(self) -> None:
+        """Raise _StopRun while paused or at the safety stop; close the backlog lane once it
+        has used its share."""
+        now = self.clock()
+        until = _paused_until(self.conn, self.config.model, now)
+        if until is not None:
+            raise _StopRun(f"paused until {until.isoformat(timespec='minutes')} (daily quota)")
+        if requests_today(self.conn, self.config.model, now) >= safety_stop_at(self.config):
+            raise _StopRun(self.safety_message())
+        self.backlog_open = self.backlog_has_room(now)
+
+    def backlog_has_room(self, now) -> bool:
+        used = requests_today(self.conn, self.config.model, now, lane="backlog")
+        return used < backlog_allowance(self.config)
+
+    def safety_message(self) -> str:
+        return (
+            f"safety stop: {safety_stop_at(self.config)} requests today is "
+            f"{int(SAFETY_SHARE * 100)}% of the daily limit {self.config.daily_limit}"
+        )
+
+    def backlog_message(self) -> str:
+        return (
+            f"backlog share used: {backlog_allowance(self.config)} requests today; the "
+            f"remaining {self.config.new_reserve} are kept for new listings"
+        )
+
+    def backlog_waiting(self) -> bool:
+        return self.conn.execute(
+            f"SELECT EXISTS (SELECT 1 FROM extraction_jobs j WHERE {_CLAIMABLE} "
+            "AND j.priority = ANY(%(prio)s))",
+            {"key": self.config.key, "max": MAX_FAILED_RUNS, "now": self.clock(),
+             "prio": list(BACKLOG_LANE)},
+        ).fetchone()[0]  # fmt: skip
+
+    def next_retry_in(self) -> float | None:
+        """Seconds until the earliest retry within a round falls due, if one is due within
+        the longest retry wait; None otherwise."""
+        priorities = list(NEW_LANE + (BACKLOG_LANE if self.backlog_open else ()))
+        due = self.conn.execute(
+            "SELECT min(next_attempt_at) FROM extraction_jobs WHERE config_key = %s "
+            "AND status = 'pending' AND round_attempts > 0 AND next_attempt_at > %s "
+            + ("AND job_id = ANY(%s)" if self.only is not None else "AND priority = ANY(%s)"),
+            (self.config.key, self.clock(), self.only if self.only is not None else priorities),
+        ).fetchone()[0]
+        if due is None:
+            return None
+        wait = (due - self.clock()).total_seconds()
+        return wait if wait <= max(RETRY_WAITS) else None
+
+    # -- one job
+
+    def step(self) -> int | None:
+        """Claim and handle one ready job; return its id, or None when nothing is ready.
+        Raises _StopRun when extraction must stop (pause, safety stop, rejected request)."""
+        self.check_limits()
+        priorities = NEW_LANE + (BACKLOG_LANE if self.backlog_open else ())
+        claimed = _claim(self.conn, self.config, self.clock(), priorities, self.only,
+                         self.claimant)  # fmt: skip
+        if claimed is None:
+            return None
+        claimed, recovered = claimed
+        self.report.recovered += recovered
+        try:
+            self._handle(claimed)
+        except _LaneFull:
+            self.backlog_open = False
+        finally:
+            _unlock(self.conn, claimed.job_id)
+        return claimed.job_id
+
+    def _handle(self, job: _Claim) -> None:
+        conn, now = self.conn, self.clock()
+        if not job.current and self.only is None:
+            conn.execute(
+                "UPDATE extraction_jobs SET status = 'superseded', updated_at = %s "
+                "WHERE job_id = %s",
+                (now, job.job_id),
+            )
+            self.report.superseded += 1
+            return
+        document = version_document(conn, job.version_id)
+        with conn.transaction():
+            input_hash = store_input(conn, document, now)
+            conn.execute(
+                "UPDATE extraction_jobs SET input_hash = %s, updated_at = %s WHERE job_id = %s",
+                (input_hash, now, job.job_id),
+            )
+        if _reuse(conn, job.job_id, job.version_id, job.posting_id, input_hash, self.config, now):
+            self.report.reused += 1
+            return
+        self._process(job, input_hash, document)
+
+    def _start_request(self, job: _Claim, n: int, estimate: int) -> int:
+        """Wait for a free request slot, then record the request as started. Checking the
+        limits and recording happen under one lock, so processes never overshoot together."""
+        while True:
+            with self.conn.transaction():
+                self.conn.execute("SELECT pg_advisory_xact_lock(%s)", (PACING_LOCK_KEY,))
+                now = self.clock()
+                if requests_today(self.conn, self.config.model, now) >= safety_stop_at(self.config):
+                    raise _StopRun(self.safety_message())
+                if job.lane == "backlog" and not self.backlog_has_room(now):
+                    raise _LaneFull()
+                wait = self._pacing_wait(now, estimate)
+                if wait <= 0:
+                    return self.conn.execute(
+                        "INSERT INTO extraction_attempts (job_id, run_id, attempt_no, model, "
+                        "started_at, estimated_tokens, lane) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                        "RETURNING attempt_id",
+                        (job.job_id, self.report.run_id, n, self.config.model, now, estimate,
+                         job.lane),
+                    ).fetchone()[0]  # fmt: skip
+            self.sleep(wait)
+
+    def _pacing_wait(self, now, estimate: int) -> float:
+        """Seconds to wait before the next request may start, across every process."""
+        last = self.conn.execute(
+            "SELECT max(started_at) FROM extraction_attempts WHERE model = %s",
+            (self.config.model,),
+        ).fetchone()[0]
+        if last is not None:
+            gap = 60.0 / self.config.rpm - (now - last).total_seconds()
+            if gap > 0:
+                return gap
+        if self.config.tpm:
+            rows = self.conn.execute(
+                "SELECT started_at, coalesce(total_tokens, estimated_tokens, 0) "
+                "FROM extraction_attempts WHERE model = %s AND started_at > %s "
+                "ORDER BY started_at",
+                (self.config.model, now - timedelta(seconds=60)),
+            ).fetchall()
+            if rows and sum(t for _, t in rows) + estimate > self.config.tpm:
+                return max(1.0, 60.0 - (now - rows[0][0]).total_seconds())
+        return 0.0
+
+    def _process(self, job: _Claim, input_hash: str, document: str) -> None:
+        conn, config, report = self.conn, self.config, self.report
+        text = request_text(document)
+        n = job.round_attempts
+        last_problem = job_problem = None
+        while True:
+            n += 1
+            try:
+                attempt_id = self._start_request(job, n, estimated_tokens(document))
+            except (_StopRun, _LaneFull):
+                _release(conn, job.job_id, last_problem, self.clock(), n - 1)
+                raise
+            try:
+                reply = self.generate(INSTRUCTIONS, text, RESPONSE_SCHEMA)
+            except ModelError as error:
+                finished = self.clock()
+                report.requests += 1
+                _finish_attempt(conn, attempt_id, finished, error.kind, error=error)
+                last_problem = f"{error.kind}: {error.detail}"
+                if error.kind == "quota_exhausted":
+                    until = next_pacific_midnight(finished)
+                    conn.execute(
+                        "INSERT INTO extraction_pauses (model, paused_until, reason, set_at) "
+                        "VALUES (%s, %s, %s, %s) ON CONFLICT (model) DO UPDATE SET "
+                        "paused_until = EXCLUDED.paused_until, reason = EXCLUDED.reason, "
+                        "set_at = EXCLUDED.set_at",
+                        (config.model, until, f"daily quota exhausted ({error.quota_id})",
+                         finished),
+                    )  # fmt: skip
+                    _release(conn, job.job_id, last_problem, finished, n - 1)
+                    raise _StopRun(f"daily quota exhausted; paused until "
+                                   f"{until.isoformat(timespec='minutes')}") from None  # fmt: skip
+                if error.kind == "client_error":
+                    self._failed(job, last_problem, finished)
+                    raise _StopRun(
+                        f"request rejected ({error.http_status}): {error.detail[:200]}"
+                    ) from None
+                if error.kind in JOB_SPECIFIC_KINDS:
+                    job_problem = last_problem
+                    break
+                if n <= len(RETRY_WAITS):  # the provider's problem: every job would wait
+                    self.sleep(max(RETRY_WAITS[n - 1], error.retry_after or 0))
+                    continue
+                self._failed(job, last_problem, finished)
+                return
+            finished = self.clock()
+            report.requests += 1
+            try:
+                answer = json.loads(reply.text)
+            except json.JSONDecodeError as exc:
+                checked = None
+                problem = f"reply is not JSON: {exc}"
+            else:
+                checked = check_answer(answer, document)
+                problem = None if checked.valid else "; ".join(checked.errors[:5])
+            if problem is not None:
+                _finish_attempt(conn, attempt_id, finished, "invalid_output", reply=reply,
+                                raw=reply.text[:200_000], detail=problem)  # fmt: skip
+                job_problem = last_problem = f"invalid_output: {problem}"
+                break
+            with conn.transaction():
+                _finish_attempt(conn, attempt_id, finished, "success", reply=reply)
+                _store_result(conn, job.job_id, job.version_id, job.posting_id, input_hash,
+                              config, checked, answer, finished, attempt_id=attempt_id,
+                              model_version=reply.model_version)  # fmt: skip
+            report.succeeded += 1
+            report.warnings += bool(checked.warnings)
+            return
+        # A problem with this listing's answer: retry it later and let other jobs go first.
+        now = self.clock()
+        if n <= len(RETRY_WAITS):
+            _retry_later(conn, job.job_id, n, RETRY_WAITS[n - 1], job_problem, now)
+            report.retries_scheduled += 1
+        else:
+            self._failed(job, job_problem, now)
+
+    def _failed(self, job: _Claim, problem: str, now) -> None:
+        self.report.failed += 1
+        self.report.gave_up += _fail_round(self.conn, job.job_id, problem, now)
+        self.report.errors.append(f"job {job.job_id}: {problem}")
 
 
 def run_extraction(
@@ -514,174 +866,35 @@ def run_extraction(
     limit: int | None = None,
     only_jobs: list[int] | None = None,
 ) -> RunReport:
-    """Work through the queue (see the module docstring). conn must be in autocommit mode;
-    each step commits on its own so usage and results survive an interrupted run. limit caps
-    how many jobs this run handles. only_jobs restricts the run to those jobs (evaluation):
-    they are extracted for their own version even if newer content exists, and nothing else
-    is queued or run."""
+    """Work through the queue (see the module docstring) and stop when nothing is ready.
+    conn must be in autocommit mode; each step commits on its own so usage and results
+    survive an interrupted run. limit caps how many jobs this run handles. only_jobs restricts
+    the run to those jobs (evaluation): they are extracted for their own version even if
+    newer content exists, outside the lanes, and nothing else is queued or run."""
     config.require_limits()
-    if not conn.execute("SELECT pg_try_advisory_lock(%s)", (EXTRACTION_LOCK_KEY,)).fetchone()[0]:
-        raise ExtractionBusy("another extraction run is in progress")
+    session = Session(conn, generate, config, clock, sleep, f"run-{os.getpid()}", only_jobs)
+    session.start()
+    handled: set[int] = set()
+    report = session.report
     try:
-        return _run(conn, generate, config, clock, sleep, limit, only_jobs)
-    finally:
-        conn.execute("SELECT pg_advisory_unlock(%s)", (EXTRACTION_LOCK_KEY,))
-
-
-def _run(conn, generate, config, clock, sleep, limit, only_jobs=None) -> RunReport:
-    report = RunReport()
-    now = clock()
-    # Holding the lock, no other run is active: anything left "running" was interrupted.
-    conn.execute(
-        "UPDATE extraction_jobs SET status = 'pending', updated_at = %s WHERE status = 'running'",
-        (now,),
-    )
-    if only_jobs is None:
-        with conn.transaction():
-            report.queued_now = enqueue_new(conn, config, now)
-    report.run_id = conn.execute(
-        "INSERT INTO extraction_runs (started_at, config_key) VALUES (%s, %s) RETURNING run_id",
-        (now, config.key),
-    ).fetchone()[0]
-    pacer = _Pacer(conn, config, clock, sleep)
-    tried: list[int] = []
-    try:
-        while limit is None or len(tried) < limit:
-            now = clock()
-            until = _paused_until(conn, config.model, now)
-            if until is not None:
-                raise _StopRun(f"paused until {until.isoformat(timespec='minutes')} "
-                               "(daily quota)")  # fmt: skip
-            if requests_today(conn, config.model, now) >= safety_stop_at(config):
-                raise _StopRun(
-                    f"safety stop: {safety_stop_at(config)} requests today is "
-                    f"{int(SAFETY_SHARE * 100)}% of the daily limit {config.daily_limit}"
-                )
-            picked = _pick(conn, config, tried, only_jobs)
-            if picked is None:
+        while limit is None or len(handled) < limit:
+            job_id = session.step()
+            if job_id is not None:
+                handled.add(job_id)
+                continue
+            wait = session.next_retry_in()
+            if wait is None:
+                if only_jobs is None and not session.backlog_open and session.backlog_waiting():
+                    report.stop_reason = session.backlog_message()
                 break
-            job_id, version_id, posting_id, current = picked
-            tried.append(job_id)
-            if not current and only_jobs is None:
-                conn.execute(
-                    "UPDATE extraction_jobs SET status = 'superseded', updated_at = %s "
-                    "WHERE job_id = %s",
-                    (now, job_id),
-                )
-                report.superseded += 1
-                continue
-            document = version_document(conn, version_id)
-            with conn.transaction():
-                input_hash = store_input(conn, document, now)
-                conn.execute(
-                    "UPDATE extraction_jobs SET input_hash = %s, updated_at = %s WHERE job_id = %s",
-                    (input_hash, now, job_id),
-                )
-            if _reuse(conn, job_id, version_id, posting_id, input_hash, config, now):
-                report.reused += 1
-                continue
-            conn.execute(
-                "UPDATE extraction_jobs SET status = 'running', updated_at = %s WHERE job_id = %s",
-                (now, job_id),
-            )
-            _process(conn, generate, config, clock, sleep, pacer, report,
-                     job_id, version_id, posting_id, input_hash, document)  # fmt: skip
+            sleep(wait)  # only a retry within a round is left: wait for it, as before
     except _StopRun as stop:
         report.stop_reason = stop.reason
     else:
-        if limit is not None and len(tried) >= limit:
+        if limit is not None and len(handled) >= limit:
             report.stop_reason = f"limit of {limit} job(s) reached"
-    conn.execute(
-        "UPDATE extraction_runs SET finished_at = %s, requests = %s, succeeded = %s, "
-        "reused = %s, failed = %s, stop_reason = %s WHERE run_id = %s",
-        (clock(), report.requests, report.succeeded, report.reused, report.failed,
-         report.stop_reason, report.run_id),
-    )  # fmt: skip
+    session.save()
     return report
-
-
-def _process(
-    conn,
-    generate,
-    config,
-    clock,
-    sleep,
-    pacer,
-    report,
-    job_id,
-    version_id,
-    posting_id,
-    input_hash,
-    document,
-) -> None:
-    text = request_text(document)
-    last_problem = "no request sent"
-    for n in range(1, len(RETRY_WAITS) + 2):
-        if n > 1 and requests_today(conn, config.model, clock()) >= safety_stop_at(config):
-            _release(conn, job_id, last_problem, clock())
-            raise _StopRun(f"safety stop reached during retries of job {job_id}")
-        pacer.wait(estimated_tokens(document))
-        started = clock()
-        try:
-            reply = generate(INSTRUCTIONS, text, RESPONSE_SCHEMA)
-        except ModelError as error:
-            finished = clock()
-            report.requests += 1
-            _record_attempt(conn, job_id, report.run_id, n, config, started, finished,
-                            error.kind, error=error)  # fmt: skip
-            last_problem = f"{error.kind}: {error.detail}"
-            if error.kind == "quota_exhausted":
-                until = next_pacific_midnight(finished)
-                conn.execute(
-                    "INSERT INTO extraction_pauses (model, paused_until, reason, set_at) "
-                    "VALUES (%s, %s, %s, %s) ON CONFLICT (model) DO UPDATE SET "
-                    "paused_until = EXCLUDED.paused_until, reason = EXCLUDED.reason, "
-                    "set_at = EXCLUDED.set_at",
-                    (config.model, until, f"daily quota exhausted ({error.quota_id})", finished),
-                )
-                _release(conn, job_id, last_problem, finished)
-                raise _StopRun(f"daily quota exhausted; paused until "
-                               f"{until.isoformat(timespec='minutes')}") from None  # fmt: skip
-            if error.kind == "client_error":
-                report.failed += 1
-                report.gave_up += _fail_job(conn, job_id, last_problem, finished)
-                report.errors.append(f"job {job_id}: {last_problem}")
-                raise _StopRun(
-                    f"request rejected ({error.http_status}): {error.detail[:200]}"
-                ) from None
-            if n <= len(RETRY_WAITS):
-                sleep(max(RETRY_WAITS[n - 1], error.retry_after or 0))
-            continue
-        finished = clock()
-        report.requests += 1
-        try:
-            answer = json.loads(reply.text)
-        except json.JSONDecodeError as exc:
-            answer, checked = None, None
-            problem = f"reply is not JSON: {exc}"
-        else:
-            checked = check_answer(answer, document)
-            problem = None if checked.valid else "; ".join(checked.errors[:5])
-        if problem is not None:
-            _record_attempt(conn, job_id, report.run_id, n, config, started, finished,
-                            "invalid_output", reply=reply, raw=reply.text[:200_000],
-                            detail=problem)  # fmt: skip
-            last_problem = f"invalid_output: {problem}"
-            if n <= len(RETRY_WAITS):
-                sleep(RETRY_WAITS[n - 1])
-            continue
-        with conn.transaction():
-            attempt_id = _record_attempt(conn, job_id, report.run_id, n, config, started,
-                                         finished, "success", reply=reply)  # fmt: skip
-            _store_result(conn, job_id, version_id, posting_id, input_hash, config, checked,
-                          answer, finished, attempt_id=attempt_id,
-                          model_version=reply.model_version)  # fmt: skip
-        report.succeeded += 1
-        report.warnings += bool(checked.warnings)
-        return
-    report.failed += 1
-    report.gave_up += _fail_job(conn, job_id, last_problem, clock())
-    report.errors.append(f"job {job_id}: {last_problem}")
 
 
 # --- re-normalization, status, and display ---------------------------------------------------
@@ -748,5 +961,8 @@ def status(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) ->
         "paid_equivalent_today": paid_equivalent_usd(config.model, usage[2], usage[3] + usage[4]),
         "paused_until": _paused_until(conn, config.model, now),
         "safety_stop_at": safety_stop_at(config) if config.daily_limit else None,
+        "backlog_today": requests_today(conn, config.model, now, lane="backlog"),
+        "backlog_allowance": backlog_allowance(config) if config.daily_limit else None,
+        "new_reserve": config.new_reserve,
         "current_results": results,
     }

@@ -13,7 +13,7 @@ The collector, availability rules, duplicate rules, and extraction queue are the
 only HTTP responses and model answers are scripted.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -86,8 +86,10 @@ def built(request, db_settings, tmp_path_factory):
     collect("2026-10-26T17:00:00", ok([j1, j2], total=3), fail)  # partial: baseline not set
     collect("2026-10-26T18:00:00", ok([j1, j2, j3]), fail)  # acme baseline
     collect("2026-10-27T17:00:00", ok([j1, j2_edited, j3, j4]), ok([j50]))  # acme2 baseline
-    run_extraction(conn, ScriptedModel(reply(SKILLS)), ExtractionConfig(rpm=60, daily_limit=100),
-                   lambda: at("2026-10-27T18:00:00"), lambda s: None, limit=2)  # fmt: skip
+    ext_clock = FakeClock(at("2026-10-27T18:00:00"))  # moves forward when extraction sleeps
+    run_extraction(conn, ScriptedModel(reply(SKILLS)),
+                   ExtractionConfig(rpm=60, daily_limit=100, new_reserve=0), ext_clock,
+                   lambda s: ext_clock.advance(timedelta(seconds=s)), limit=2)  # fmt: skip
     collect("2026-10-28T04:59:00", ok([j1, j2_edited, j4]), ok([j50]))  # 23:59 CDT on 10-27
     collect("2026-10-28T13:00:00", fail, ok([j50]))  # acme failed: nothing counted
     collect("2026-10-28T14:00:00", ok([j1, j2_edited, j4]), ok([j50]))

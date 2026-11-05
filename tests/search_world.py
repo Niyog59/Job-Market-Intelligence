@@ -21,7 +21,7 @@ recently observed copy.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -164,8 +164,10 @@ def world(db_settings, tmp_path_factory):
                   sleep=lambda s: None, interval=0).collect(tokens=tokens)  # fmt: skip
 
     collect("2026-10-26T17:00:00", ok([J1, J2, J4, J6, J7, J8]), ok([J5]))  # baselines
-    run_extraction(conn, ByPosting(), ExtractionConfig(rpm=60, daily_limit=100),
-                   lambda: at("2026-10-26T18:00:00"), lambda s: None)  # fmt: skip
+    # Pacing waits re-read the clock, so this clock moves forward when extraction sleeps.
+    ext_clock = FakeClock(at("2026-10-26T18:00:00"))
+    run_extraction(conn, ByPosting(), ExtractionConfig(rpm=60, daily_limit=100, new_reserve=0),
+                   ext_clock, lambda s: ext_clock.advance(timedelta(seconds=s)))  # fmt: skip
     collect("2026-10-27T17:00:00", ok([J1, J2, J3, J4, J6, J7]))  # J3 new; J8 missing (1)
     collect("2026-10-28T17:00:00", ok([J1, J2, J3, J4, J6, J7]))  # J8 missing (2)
     collect("2026-10-28T18:00:00", ok([J1, J2, J3, J6, J7]))  # J8 (3): inactive; J4 (1)
