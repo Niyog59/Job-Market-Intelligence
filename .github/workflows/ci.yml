@@ -199,7 +199,7 @@ jobs:
           sed -i "s|^AIRFLOW_FERNET_KEY=.*|AIRFLOW_FERNET_KEY=$fernet|" .env
           if grep -q CHANGE_ME .env; then exit 1; fi
           docker compose config --quiet
-          docker compose --profile jobs --profile init config --quiet
+          docker compose --profile jobs --profile init --profile worker config --quiet
 
       - name: Build the application image
         run: docker compose build web
@@ -238,6 +238,19 @@ jobs:
           test "$count" = 3
           docker compose exec -T airflow-scheduler airflow dags list-import-errors
 
+      - name: The extraction worker starts and, without a Gemini key, waits and says why
+        run: |
+          docker compose --profile worker up -d extract-worker
+          for attempt in $(seq 1 20); do
+            state=$(docker compose exec -T db psql -U jobmarket -d Job_Market -Atc \
+              "SELECT state || ': ' || coalesce(detail, '') FROM extraction_workers ORDER BY heartbeat_at DESC LIMIT 1" || true)
+            case "$state" in paused*) break ;; esac
+            sleep 3
+          done
+          echo "$state"
+          echo "$state" | grep -q "not configured"
+          test "$(docker inspect -f '{{.RestartCount}}' "$(docker compose ps -q extract-worker)")" = 0
+
       - name: Pipeline through Airflow, with memory measured on Linux
         run: |
           (while true; do
@@ -271,6 +284,13 @@ jobs:
           test "$(sql "SELECT count(*) FROM notifications WHERE kind = 'summary'")" = 1
           docker compose run --rm -T jobs jobmarket backup list | grep -q "ingestion, private"
 
+      - name: The extraction worker stops cleanly and records it
+        run: |
+          docker compose stop extract-worker
+          sql() { docker compose exec -T db psql -U jobmarket -d Job_Market -Atc "$1"; }
+          test "$(sql "SELECT state FROM extraction_workers ORDER BY heartbeat_at DESC LIMIT 1")" = stopped
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq extract-worker)")" = 2
+
       - name: The pipeline's backup restores into an empty database
         run: |
           docker compose exec -T db psql -U postgres -c 'CREATE DATABASE restore_check OWNER jobmarket'
@@ -297,4 +317,4 @@ jobs:
 
       - name: Remove the test stack
         if: always()
-        run: docker compose --profile jobs --profile init down --volumes
+        run: docker compose --profile jobs --profile init --profile worker down --volumes

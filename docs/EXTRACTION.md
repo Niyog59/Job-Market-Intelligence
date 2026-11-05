@@ -51,15 +51,71 @@ an answer is well formed and quoted from the posting, not that it is correct.
 States become two-letter codes, common country names one spelling, and Texas cities are
 placed in the DFW or Houston area with the screening city lists.
 
-**Queue.** `jobmarket collect` queues new content (it never calls the model);
-`jobmarket extract run` processes the queue in priority order: new or edited retained
-listings, retained backlog, new or edited other listings, other backlog. Requests are sent
-one at a time, spaced to `JOBMARKET_AI_RPM` (and `JOBMARKET_AI_TPM` if set). A failed
-request is retried three times after 10, 30, and 90 seconds, or longer if Google says so;
-a job that still fails is retried in the next run, five runs at most, then waits for
-`extract reprocess`. A daily-quota error pauses extraction until midnight Pacific time.
-Runs stop at 90% of `JOBMARKET_AI_DAILY_LIMIT`. An interrupted run is recovered by the next
-one. Collection is unaffected by any of this.
+**Queue.** `jobmarket collect` queues new content after every board (it never calls the
+model). The extraction worker, or the hourly batch when no worker runs, then works through
+the queue in two lanes that share the account's one daily allowance:
+
+| Lane | Priority order | Share of the day's requests |
+|---|---|---|
+| New | 1 new or edited kept listing, 3 new or edited other listing | always first; at least `JOBMARKET_AI_NEW_RESERVE` (200) of the requests are kept for it |
+| Backlog | 2 kept backlog, 4 other backlog (and reprocessing) | only requests the new lane does not need, at most the safety stop minus the reserve (250 with a 500 daily limit) |
+
+"Kept" means the screening rules kept the listing: its role is in a target family (data,
+analytics, BI, software, data science, ML) and it is in DFW or Houston or remote and open
+to Texas. It does not mean the listing matches the owner's profile, level, or sponsorship
+needs; those are compared on the website. Backlog is content recorded before extraction
+tracking started.
+
+Requests are sent one at a time, spaced to `JOBMARKET_AI_RPM` (and `JOBMARKET_AI_TPM` if
+set), and stop at 90% of `JOBMARKET_AI_DAILY_LIMIT`. Every request is recorded before it
+is sent, under one lock, so these limits hold across the worker, the hourly batch, manual
+runs, and evaluations together. A round is up to four requests for one job. Provider
+failures (rate limits, server and network errors) are retried in place after 10, 30, and 90
+seconds, or longer if Google says so, because every other job would meet them too. A bad
+answer for one listing (invalid output or a blocked reply) is retried after the same waits
+while other jobs go ahead. A job whose round fails waits one hour before the next round,
+five rounds at most, then waits for `extract reprocess`. A rejected request (another 4xx,
+such as a bad key) stops the run. A daily-quota error pauses extraction until midnight
+Pacific time. A job is claimed with a lock that PostgreSQL releases if its process dies, so
+a crash leaves nothing stuck: the job is picked up again and its unanswered request is
+marked `interrupted` (it still counts toward the day). Collection is unaffected by any of
+this.
+
+### Extraction worker
+
+`jobmarket extract worker` (the Compose service `extract-worker`, profile `worker`) runs the
+queue continuously instead of once an hour. It claims the next ready job as soon as it is
+free; when nothing is ready it queues anything still missing a job and checks again every
+15 seconds, sleeping in between. It sleeps through a quota pause or the safety stop until
+the Pacific reset, waits an hour after a rejected request, and keeps a heartbeat row in
+`extraction_workers` with its state and the reason for a pause. Only one worker runs at a
+time. While it runs, the hourly batch (`extract run --skip-if-worker`) skips itself; when it
+stops, the hourly batch takes over again, which is also the rollback (RUNBOOK section W).
+On SIGTERM it lets a request already sent finish and be recorded, then exits.
+
+One worker is enough: at 15 requests a minute the pacing allows one request every 4
+seconds, and a request took 3.6 seconds at the median (7.0 at the 95th percentile) over
+472 requests recorded on the Mac copy of the database (2026-10-27 to 2026-11-03), so
+concurrent requests would only reach the daily limit sooner. The
+daily limit, not the worker, sets how many listings are extracted per day: about 450
+requests, of which the backlog lane may use 250.
+
+**Times to keep apart.** For a new listing:
+
+1. The employer posts or edits it (the provider's own timestamps, when it gives them).
+2. A collection sees it: noon or 9 PM Chicago time, or a retry of a failed board.
+3. Its extraction finishes: `extraction_results.created_at`. With the worker and quota
+   left, a few seconds per listing ahead of it in the new lane (the target is within five
+   minutes of queueing); without the worker, the next :30 batch of 20.
+4. Search shows it at once (the serving views are live); the Reports page, the Market
+   insights numbers, and the Google Sheet change at the next publication after a
+   collection; Tableau Public re-reads the Sheet about once a day. Reports are not rebuilt
+   after each result.
+
+`extract status` shows the worker's state, open jobs by priority (ready and waiting for a
+retry) with the oldest one's age, results in the last hour, results and reuses per lane in
+the last 24 hours with the median and 95th percentile time from queueing and from
+collection to a validated result, and today's requests by outcome.
 
 **Caching and versions.** Results are keyed by the posting version and the configuration
 (model, thinking level, prompt version, schema version). Unchanged content is never sent
@@ -78,8 +134,8 @@ improve its products; job descriptions are public listings.
 Tables: `extraction_inputs` (the exact text sent), `extraction_jobs` (queue),
 `extraction_runs`, `extraction_attempts` (every request, its outcome and token usage),
 `extraction_results` (answer, normalized form, warnings, evidence offsets, versions),
-`extraction_pauses`. Views: `current_extractions`, `extraction_usage_daily`,
-`screening_disagreements`.
+`extraction_pauses`, `extraction_workers` (worker heartbeats). Views: `current_extractions`,
+`extraction_usage_daily`, `screening_disagreements`.
 
 ### Evaluation
 

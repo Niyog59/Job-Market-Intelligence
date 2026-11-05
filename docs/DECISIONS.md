@@ -118,6 +118,30 @@ what it costs, and what would make me revisit it. Back to the [README](../README
 - **Revisit when** the schedule stays this simple: cron plus the existing commands would be
   enough, and the server could shrink.
 
+## A separate extraction worker
+
+- **Problem.** New listings waited for the next hourly batch (up to an hour, or longer when
+  more than 20 arrived at once) before their requirements were extracted, while the
+  per-minute limit sat unused for most of each hour.
+- **Options.** Run the hourly batch more often; a long-running worker on the existing
+  PostgreSQL queue; a separate queue system (Redis, Kafka).
+- **Choice.** One worker service beside Airflow, on the same queue. Collection queues new
+  content after every board; the worker takes it as soon as it is free, in two lanes: new
+  listings first, the backlog with spare requests and never more than the safety stop
+  minus a daily reserve of 200 for new listings. The hourly batch stays as the fallback and
+  skips itself while the worker runs.
+- **Benefit.** New listings are extracted within minutes of collection while the day's
+  requests last, without a new system to run: claims, pacing, and the daily count live in
+  the database and hold across the worker, the batch, and manual runs. One request at a
+  time already uses the per-minute limit (one request every 4 seconds; a request took 3.6
+  seconds at the median on the Mac copy), so no concurrency was added.
+- **Cost.** One more always-on process (256 MB limit) on a 2 GiB server, and more queue
+  logic: claims, recovery after a crash, scheduled retries. It does not raise daily
+  throughput: the free daily limit (about 450 usable requests) still decides how fast the
+  backlog shrinks, now at most 250 a day.
+- **Revisit when** the daily limit changes, new listings regularly exceed the reserve, or
+  the server's memory measurement shows the worker does not fit.
+
 ## One server
 
 - **Problem.** The site, the database, and the pipeline need a home, within a small budget.
@@ -157,8 +181,10 @@ Values that change product behavior, decided before they went into the code.
 | Collection times | 12:00 and 21:00 America/Chicago | DAG `jobmarket_collection` |
 | Retries after a failed board | 3, about 1, 2, and 3 hours later; checked every 15 minutes | [`incidents.py`](../src/jobmarket/incidents.py), DAG `jobmarket_retries` |
 | A retry run more than 5 minutes late | moves the next retry a full hour after it | [`incidents.py`](../src/jobmarket/incidents.py) |
-| AI batches | every hour at :30, up to 20 listings | DAG `jobmarket_extraction` |
-| AI request retries | 3 per request (10, 30, 90 s), at most 5 runs per job; stop at 90% of the daily limit | [`extraction.py`](../src/jobmarket/extraction.py) |
+| AI batches | every hour at :30, up to 20 listings; skipped while the extraction worker runs | DAG `jobmarket_extraction` |
+| Extraction lanes | new listings first; the backlog may use at most the safety stop minus 200 requests a day (`JOBMARKET_AI_NEW_RESERVE`) | [`extraction.py`](../src/jobmarket/extraction.py) |
+| Extraction worker | checks for new work every 15 s when idle; waits 1 hour after a rejected request; 256 MB memory limit; 150 s to finish a request on stop | [`extraction_worker.py`](../src/jobmarket/extraction_worker.py), [`docker-compose.yml`](../deploy/docker-compose.yml) |
+| AI request retries | rounds of up to 4 requests (waits 10, 30, 90 s; a bad answer waits while other jobs go ahead), 1 hour between failed rounds, at most 5 rounds; stop at 90% of the daily limit | [`extraction.py`](../src/jobmarket/extraction.py) |
 | AI model | Gemini 3.5 Flash-Lite, minimal thinking, free tier | [`extraction.py`](../src/jobmarket/extraction.py) |
 | Answers whose quotes are not found | kept, marked `valid_with_warnings` | [`extraction_check.py`](../src/jobmarket/extraction_check.py) |
 | Availability | possibly unavailable after 1 missing complete scan, assumed inactive after 3 | [`availability.py`](../src/jobmarket/availability.py) |

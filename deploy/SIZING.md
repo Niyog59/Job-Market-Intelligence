@@ -92,6 +92,11 @@ are loaded in CI, so collection had no work), and only about 8 samples were take
 | A running task (Airflow task process plus the job) | +150 to 270 MB (macOS scheduler peak 640 vs 373) |
 | **Peak** | **about 1.4 to 1.8 GB** |
 
+The optional extraction worker (RUNBOOK section W, added 2026-11-05) comes on top of this.
+It has a 256 MB limit; a process with its code loaded peaked at about 67 MB on a Mac. The
+CI `deploy` job records its container's memory with the others; on the server, measure it
+in W1 and W3 before relying on it.
+
 ## What this means
 
 - **t3.micro (1 GiB) cannot run the full stack.** The stack measured 914 MB at its lowest

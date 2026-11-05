@@ -13,7 +13,7 @@ flowchart TB
         af["Airflow<br/>runs each step on schedule"]
         col["Collector<br/>fetch, validate, screen"]
         pg[("PostgreSQL<br/>postings, versions, observations")]
-        ex["Extraction queue<br/>validate answers, check quotes"]
+        ex["Extraction worker<br/>validate answers, check quotes"]
         dbt["dbt<br/>staging, intermediate, reporting, serving"]
         web["Flask website behind Caddy"]
     end
@@ -41,11 +41,11 @@ flowchart TB
 | Collection and screening | Saves every page, stores postings, versions, and observations, and screens each job with rules (role family, DFW, Houston, or remote open to Texas). Rules, not the AI, decide which jobs are kept. | [`collector.py`](../src/jobmarket/collector.py), [`store.py`](../src/jobmarket/store.py), [`classify.py`](../src/jobmarket/classify.py) |
 | Availability and duplicates | Decides when a job is possibly unavailable, assumed inactive, or closed, and groups the same opening posted twice. Both run after each collection. | [`availability.py`](../src/jobmarket/availability.py), [`duplicates.py`](../src/jobmarket/duplicates.py) |
 | PostgreSQL | Holds the ingestion tables (the `public` schema), the analytics schemas dbt builds, and the owner's private workspace (`private`). Three logins keep them apart. | [`migrations/`](../src/jobmarket/migrations/) |
-| Requirement extraction | A queue sends new or changed listings to Gemini one at a time, within the free-tier limits. Python validates the JSON and checks every quoted piece of evidence against the posting. | [`extraction.py`](../src/jobmarket/extraction.py), [`extraction_check.py`](../src/jobmarket/extraction_check.py) |
+| Requirement extraction | A queue in PostgreSQL, worked by the extraction worker service (or an hourly batch when it is off), sends new or changed listings to Gemini one at a time within the free-tier limits: new listings first, the backlog with spare requests. Python validates the JSON and checks every quoted piece of evidence against the posting. | [`extraction.py`](../src/jobmarket/extraction.py), [`extraction_worker.py`](../src/jobmarket/extraction_worker.py), [`extraction_check.py`](../src/jobmarket/extraction_check.py) |
 | dbt | Turns the stored history into staging and intermediate models, reporting tables, and serving views, with data tests. A publish builds everything in shadow schemas and swaps it in only after the tests pass. | [`analytics/`](../analytics/), [`analytics.py`](../src/jobmarket/analytics.py) |
 | Serving views and reporting tables | Serving views (`srv_*`) are what job search reads. Reporting tables (`rpt_*`) are what the Reports page and the dashboards read. | [`serving/`](../analytics/models/serving/), [`reporting/`](../analytics/models/reporting/) |
 | Website | Server-rendered Flask pages: search, job pages, reports, market insights, and the owner's private workspace. | [`web/`](../src/jobmarket/web/) |
-| Airflow | Runs collection at noon and 9 PM America/Chicago, a retry check every 15 minutes, and an extraction batch every hour, one task at a time. Every task is an ordinary `jobmarket` command. | [`jobmarket.py`](../deploy/airflow/dags/jobmarket.py) |
+| Airflow | Runs collection at noon and 9 PM America/Chicago, a retry check every 15 minutes, and an hourly extraction batch that skips itself while the extraction worker runs, one task at a time. Every task is an ordinary `jobmarket` command. | [`jobmarket.py`](../deploy/airflow/dags/jobmarket.py) |
 | Docker Compose on EC2 | One server runs PostgreSQL, the website, Caddy (HTTPS), and Airflow. Only ports 80 and 443 are open. | [`docker-compose.yml`](../deploy/docker-compose.yml), [RUNBOOK](../deploy/RUNBOOK.md) |
 | S3 | Keeps raw responses and verified nightly backups for 30 days. | [`s3store.py`](../src/jobmarket/s3store.py), [`backup.py`](../src/jobmarket/backup.py) |
 | Google Sheets and Tableau Public | After each successful publication the dashboard tables are copied to a Google Sheet; the Tableau Public workbook reads the Sheet. | [`sheets.py`](../src/jobmarket/sheets.py), [docs/tableau/](tableau/) |

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from jobmarket import db, extraction
+from jobmarket import db, extraction, extraction_worker
 from jobmarket.availability import ACTIVE_STATES, AvailabilityError, close_posting, release_hold
 from jobmarket.clock import system_clock
 from jobmarket.collector import (
@@ -756,9 +756,13 @@ def _extract(settings: Settings, args) -> int:
     command = args.extract_command
     if command == "run":
         return _extract_run(settings, config, args)
+    if command == "worker":
+        return _extract_worker(settings, config)
     with db.connect(settings, autocommit=True) as conn:
         if command == "status":
-            _extract_status(extraction.status(conn, config, system_clock()))
+            now = system_clock()
+            _extract_status(extraction.status(conn, config, now))
+            _extract_pipeline(conn, config, now)
         elif command == "show":
             return _extract_show(conn, args)
         elif command == "reprocess":
@@ -806,18 +810,17 @@ def _extract_run(settings: Settings, config, args) -> int:
         return EXIT_CONFIG_ERROR
     try:
         config.require_limits()
-        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
     except extraction.ExtractionNotConfigured as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
     with db.connect(settings, autocommit=True) as conn:
-        try:
-            report = extraction.run_extraction(
-                conn, client.generate, config, system_clock, time.sleep, args.limit
-            )
-        except extraction.ExtractionBusy as exc:
-            print(str(exc), file=sys.stderr)
+        if args.skip_if_worker and extraction_worker.worker_running(conn):
+            print("The extraction worker is running and handles the queue; nothing to do.")
             return EXIT_BUSY
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+        report = extraction.run_extraction(
+            conn, client.generate, config, system_clock, time.sleep, args.limit
+        )
     print(
         f"Extraction run {report.run_id} ({config.key}): {report.requests} request(s), "
         f"{report.succeeded} extracted ({report.warnings} with warnings), {report.reused} "
@@ -834,6 +837,74 @@ def _extract_run(settings: Settings, config, args) -> int:
     for error in report.errors[:10]:
         print(f"  {error}")
     return EXIT_OK
+
+
+def _extract_worker(settings: Settings, config) -> int:
+    import os
+
+    from jobmarket.gemini import API_KEY_ENV, GeminiClient
+
+    stopper = extraction_worker.Stopper()
+    stopper.install()
+    worker = extraction_worker.worker_id()
+    problem = None
+    key = os.environ.get(API_KEY_ENV, "").strip()
+    try:
+        if not key:
+            raise extraction.ExtractionNotConfigured(f"{API_KEY_ENV} is not set")
+        config.require_limits()
+        client = GeminiClient(key, config.model, config.thinking_level, config.timeout_seconds)
+    except extraction.ExtractionNotConfigured as exc:
+        problem = str(exc)
+    with db.connect(settings, autocommit=True) as conn:
+        if problem is not None:
+            print(f"Configuration error: {problem}. Waiting to be stopped.", file=sys.stderr,
+                  flush=True)  # fmt: skip
+            extraction_worker.run_unconfigured(conn, worker, system_clock, stopper, problem)
+            return EXIT_CONFIG_ERROR
+        try:
+            extraction_worker.run_worker(
+                conn, client.generate, config, system_clock, stopper, worker,
+                log=lambda line: print(line, flush=True),
+            )  # fmt: skip
+        except extraction.ExtractionBusy as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_BUSY
+    return EXIT_OK
+
+
+def _minutes(value) -> str:
+    return "-" if value is None else f"{value:.1f} min"
+
+
+def _extract_pipeline(conn, config, now) -> None:
+    """Worker state, queue depth and age, throughput, and latency (see queue_metrics)."""
+    labels = {1: "new retained", 2: "retained backlog", 3: "new other", 4: "other backlog"}
+    alive = extraction_worker.worker_running(conn)
+    latest = extraction_worker.latest_worker(conn)
+    if latest is None:
+        print("Worker: none has run yet (the hourly batch handles the queue).")
+    else:
+        name, state, detail, beat, _ = latest
+        status = state if alive or state == "stopped" else f"{state}, process gone"
+        print(f"Worker {name}: {status}; {detail or ''} (last heartbeat {_when(beat)}).")
+    info = extraction.queue_metrics(conn, config, now)
+    print("Open jobs: ready / waiting for a retry, oldest queued")
+    for priority, ready, waiting, oldest in info["depth"]:
+        age = (now - oldest).total_seconds() / 3600
+        print(f"  {labels[priority]:17} {ready:>6} / {waiting:<4} {_when(oldest)} ({age:.1f} h)")
+    print(f"Extracted in the last hour: {info['extracted_last_hour']}.")
+    print("Last 24 hours, by lane: extracted, reused; queued to result p50/p95; first "
+          "collected to result p50/p95")  # fmt: skip
+    for t in info["timing"]:
+        print(
+            f"  {t.lane:8} {t.extracted:>5}, {t.reused:>4} reused; "
+            f"{_minutes(t.queue_p50)} / {_minutes(t.queue_p95)}; "
+            f"{_minutes(t.collection_p50)} / {_minutes(t.collection_p95)}"
+        )
+    if info["outcomes_today"]:
+        print("Requests today by outcome: " + ", ".join(
+            f"{outcome} {n}" for outcome, n in info["outcomes_today"]))  # fmt: skip
 
 
 def _extract_status(info: dict) -> None:
@@ -1623,6 +1694,14 @@ def build_parser() -> argparse.ArgumentParser:
     ext_cmds.add_parser("status", help="queue, today's usage, pause, and results")
     ext_run = ext_cmds.add_parser("run", help="send queued listings to the model, within limits")
     ext_run.add_argument("--limit", type=int, metavar="N", help="handle at most N jobs")
+    ext_run.add_argument(
+        "--skip-if-worker",
+        action="store_true",
+        help="do nothing (exit 3) while the extraction worker is running (the hourly batch)",
+    )
+    ext_cmds.add_parser(
+        "worker", help="extract continuously until stopped (the extraction worker service)"
+    )
     ext_show = ext_cmds.add_parser("show", help="the current extraction of one listing")
     ext_show.add_argument("posting", type=int)
     ext_show.add_argument("--evidence", action="store_true", help="list every quote")

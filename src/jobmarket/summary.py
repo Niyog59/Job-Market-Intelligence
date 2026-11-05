@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import psycopg
 
-from jobmarket import extraction, operations
+from jobmarket import extraction, extraction_worker, operations
 from jobmarket.search import STALE_AFTER  # the website's "may be out of date" threshold
 
 CHICAGO = ZoneInfo("America/Chicago")
@@ -196,9 +196,23 @@ def compose(conn: psycopg.Connection, now: datetime) -> Summary:
             + (f" of the {info['safety_stop_at']} this pipeline allows"
                if info["safety_stop_at"] else "")
         )  # fmt: skip
+        if info["safety_stop_at"]:
+            lines.append(f"- Backlog lane: {info['backlog_today']} of its "
+                         f"{info['backlog_allowance']} requests today")  # fmt: skip
         if info["paused_until"]:
             lines.append(f"- Paused by the daily free quota until {_when(info['paused_until'])}; "
                          "this is expected and resumes on its own.")  # fmt: skip
+        new = next((t for t in extraction.queue_metrics(conn, config, now)["timing"]
+                    if t.lane == "new"), None)  # fmt: skip
+        if new and new.queue_p50 is not None:
+            lines.append(f"- New listings, last 24 hours: queued to result {new.queue_p50:.0f} min "
+                         f"(median), {new.queue_p95:.0f} min (95th percentile)")  # fmt: skip
+        latest = extraction_worker.latest_worker(conn)
+        if extraction_worker.worker_running(conn):
+            lines.append(f"- Worker: running, {latest[1]}: {latest[2] or ''}")
+        elif latest and latest[1] != "stopped":
+            lines.append("- Worker: not running (its process ended); the hourly batch is used")
+            attention.append("extraction worker not running")
     except (extraction.ExtractionNotConfigured, ValueError, psycopg.Error) as exc:
         lines.append(f"- Status unavailable: {exc}")
 

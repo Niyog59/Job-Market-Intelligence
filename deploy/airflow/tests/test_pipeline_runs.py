@@ -127,8 +127,10 @@ def test_retry_check_then_email(stubs):
 
 def test_ai_batch_is_bounded_and_skips_until_configured(stubs, monkeypatch):
     assert set(run(load().ai, NOON).values()) == {"success"}
-    assert calls(stubs) == ["extract run --limit 20"]
+    assert calls(stubs) == ["extract run --limit 20 --skip-if-worker"]
     monkeypatch.setenv("STUB_EXIT_extract", "2")  # no Gemini key or limits yet
+    assert set(run(load().ai, NOON).values()) == {"skipped"}
+    monkeypatch.setenv("STUB_EXIT_extract", "3")  # the extraction worker is running
     assert set(run(load().ai, NOON).values()) == {"skipped"}
 
 
