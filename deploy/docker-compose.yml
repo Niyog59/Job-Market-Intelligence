@@ -182,6 +182,29 @@ services:
     restart: "no"
     command: ["airflow", "db", "migrate"]
 
+  # The extraction worker: sends new listings to Gemini within minutes of their collection,
+  # with the same queue, limits, and checks as `jobmarket extract run`. Started only with
+  # the "worker" profile (COMPOSE_PROFILES=worker in .env); while it runs, the hourly batch
+  # in Airflow skips itself, and it runs again once the worker is stopped (RUNBOOK
+  # section W). It needs only the database and the Gemini settings.
+  extract-worker:
+    <<: *app
+    profiles: ["worker"]
+    restart: unless-stopped
+    command: ["jobmarket", "extract", "worker"]
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      POSTGRES_PASSWORD: ""  # the superuser password is not needed here
+    # On stop, a request already sent may take up to its 120-second time limit; this leaves
+    # time for it to finish and be recorded before Docker kills the process.
+    stop_grace_period: 150s
+    mem_limit: 256m  # decision 2026-11-05; measured in CI (deploy job) and in SIZING.md
+    read_only: true
+    tmpfs:
+      - /tmp
+
   # Command-line jobs, run by hand: docker compose run --rm jobs jobmarket <command>.
   # Never started by `docker compose up`.
   jobs:
