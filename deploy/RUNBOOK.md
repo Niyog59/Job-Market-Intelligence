@@ -472,7 +472,7 @@ docker compose exec airflow-scheduler airflow dags trigger jobmarket_collection
 A run triggered after 17:00 Chicago time counts as an evening run (backup and summary).
 Gemini extraction runs only when `GEMINI_API_KEY` and the `JOBMARKET_AI_*` limits are set
 in `.env`; until then that DAG skips. To set them, replace RPM, TPM, and DAILY below with
-your account's limits (the values in your Mac's `.env`; README "Requirement extraction"),
+your account's limits (the values in your Mac's `.env`; [docs/EXTRACTION.md](../docs/EXTRACTION.md)),
 and read the key at a hidden prompt, so it never appears on screen or in the shell history:
 
 ```bash
