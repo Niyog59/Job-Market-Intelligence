@@ -142,6 +142,40 @@ The full reasoning, options, and settings: [docs/DECISIONS.md](docs/DECISIONS.md
 
 ## What broke and how I fixed it
 
+**AI extraction was falling behind**, addressed by moving it into a dedicated worker. The
+worker runs on the server since 2026-11-05; its speed there is not measured yet.
+
+<details>
+<summary>Details</summary>
+
+- **What happened:** new listings waited hours for AI extraction. On 2026-11-05 the oldest
+  waiting new listing had been in the queue for 38.8 hours.
+- **Why:** extraction ran as an hourly batch of at most 20 listings, and that batch shared
+  Airflow's single task slot with collection, reports, and backups. When a collection found
+  more than 20 new listings, the rest waited for later hours. Each batch took a minute or
+  two, so the free per-minute allowance sat unused for the rest of the hour.
+- **What changed:** extraction moved into a dedicated worker
+  ([`extraction_worker.py`](src/jobmarket/extraction_worker.py)) that checks for waiting jobs
+  continuously, every 15 seconds when idle. It handles new listings first and works through
+  the older backlog with spare capacity, at most 250 requests a day, so 200 always stay free
+  for new listings. The queue changes it relies on are in
+  [`extraction.py`](src/jobmarket/extraction.py): each job is claimed by one process at a
+  time, and every process shares one rate limit. It is one worker, not several in parallel.
+  The hourly batch stays as a fallback and skips itself while the worker runs.
+- **What did not change:** the daily API limit. The free tier allows 500 requests a day and
+  extraction stops at 450. The worker shortens each new listing's wait; it does not raise how
+  many listings a day can be extracted. The backlog of about 4,800 older listings is not
+  cleared and still clears only at the free tier's pace.
+- **How I checked it:** [`test_extraction_worker.py`](tests/test_extraction_worker.py) covers
+  idling, picking up new work, quota pauses and their reset, and clean shutdown.
+  [`test_extraction_lanes.py`](tests/test_extraction_lanes.py) covers priority, the backlog
+  share, crash recovery, and that no two processes take the same job. CI also starts and stops
+  the worker container. On its first day in production the worker had nothing to send: Google
+  was returning "high demand" errors (HTTP 503), and the hourly batch's retries had already
+  used the day's limit. Speed figures will be added here once measured.
+
+</details>
+
 **Slow queries right after a publication**, fixed by running `ANALYZE` before the new tables
 are swapped in.
 
