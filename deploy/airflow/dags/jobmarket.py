@@ -22,14 +22,14 @@ Scheduling rules:
 - Steps after collection use trigger_rule all_done: a failed collection, backup, or raw
   upload never stops report publication, the summary, or email.
 - After a successful report publication, the published dashboard tables are copied to the
-  Google Sheet behind the Tableau Public dashboards (decision 2026-11-02: every run).
+  Google Sheet behind the Tableau Public dashboards, in every run.
 - The evening run also backs up, prunes local backups, sends the daily summary, and cleans
   Airflow's own history. A run is "evening" when it was scheduled at 17:00 Chicago time or
   later (the 21:00 slot, even if it starts after midnight, or a manual run started in the
   evening).
 
-Decisions (Niyog, 2026-11-01): retry check every 15 minutes; AI hourly, up to 20 per run;
-keep 3 local backups and 30 days of Airflow history; the time limits below.
+The intervals, batch size, retention, and time limits below are recorded in
+docs/DECISIONS.md.
 """
 
 import os
@@ -47,15 +47,14 @@ SKIP = 99  # exit code that marks a task skipped (BashOperator's default)
 BUSY = 3  # jobmarket: another collection, extraction, or publish holds the lock
 NOT_CONFIGURED = 2  # jobmarket: a required setting is missing
 
-# Time limits per task (Niyog, 2026-11-01). Raw uploads and Airflow cleanup use the backup
-# limit.
+# Time limits per task. Raw uploads and Airflow cleanup use the backup limit.
 COLLECTION_LIMIT = timedelta(minutes=45)
 RETRY_CHECK_LIMIT = timedelta(minutes=30)
 AI_BATCH_LIMIT = timedelta(minutes=20)
 REPORT_LIMIT = timedelta(minutes=20)
 BACKUP_LIMIT = timedelta(minutes=20)
 SUMMARY_LIMIT = timedelta(minutes=10)
-SHEETS_LIMIT = timedelta(minutes=10)  # Niyog, 2026-11-02
+SHEETS_LIMIT = timedelta(minutes=10)
 
 KEEP_LOCAL_BACKUPS = 3
 AIRFLOW_HISTORY_DAYS = 30

@@ -1,6 +1,6 @@
 """Explainable comparison of a job's stored requirements with the owner's confirmed profile.
 
-Inputs are the stored AI answer for the listing's CURRENT description version (Module 7) and
+Inputs are the stored AI answer for the listing's CURRENT description version and
 the latest saved profile; nothing calls the model. Each check is Matched, Gap, or Needs
 review, with a plain explanation and the listing's own quotes. There is no score.
 
@@ -8,10 +8,10 @@ review, with a plain explanation and the listing's own quotes. There is no score
   is not a complete inventory of what someone knows. "Python or Java" is met by either.
 - Definite gaps only for explicit, reliably comparable mismatches: years of employment below a
   stated minimum, an education level below a stated level, a graduation date outside a stated
-  window, and stated preferences (labeled "outside your preferences", decision 2026-10-29).
+  window, and stated preferences (labeled "outside your preferences").
   Anything missing, ambiguous, or not faithfully comparable is Needs review.
 - Required years count employment only, overlapping months once; internships do not count
-  but turn a shortfall into Needs review; projects never count (decision 2026-10-29).
+  but turn a shortfall into Needs review; projects never count.
 - Alternative paths ("a degree or equivalent experience") are met if any path is met;
   otherwise they need review rather than becoming a gap.
 - Sponsorship, work authorization, citizenship, and clearance are shown as statements only.

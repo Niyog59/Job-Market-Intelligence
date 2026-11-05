@@ -7,7 +7,7 @@ takes the private schema's name (``schema``) because tests use per-test schemas.
   OWASP minimum) and never stored, logged, or printed.
 - Sessions are server-side: the browser holds a random 256-bit token; the database holds its
   SHA-256, a CSRF token, and the idle and absolute expiry.
-- Every 3 consecutive wrong passwords pause sign-in for 15 minutes (decision 2026-10-29).
+- Every 3 consecutive wrong passwords pause sign-in for 15 minutes.
   Failures are counted for the whole site, not per username, so guessing usernames gains
   nothing.
 """

@@ -1101,7 +1101,7 @@ def _web(settings: Settings, args) -> int:
     from jobmarket.search import ServingUnavailable, site_status
 
     config = load_web_config()
-    # Fail before serving if the read-only login or the serving views are not ready.
+    # Fail before serving if the analytics login or the serving views are not ready.
     try:
         with db.connect(config.settings) as conn:
             conn.read_only = True
@@ -1298,7 +1298,7 @@ def _tableau(settings: Settings, args) -> int:
     from jobmarket.web.config import load_web_config
 
     started = system_clock()
-    reader = load_web_config().settings  # the read-only analytics login
+    reader = load_web_config().settings  # the analytics login
     if args.dry_run:
         with db.connect(reader) as conn:
             conn.read_only = True
@@ -1381,7 +1381,8 @@ def _analytics_publish(settings: Settings, args) -> int:
 
 
 def _analytics_login(settings: Settings) -> Settings:
-    """The read-only analytics login (ANALYTICS_DB_USER and ANALYTICS_DB_PASSWORD)."""
+    """The analytics login (ANALYTICS_DB_USER and ANALYTICS_DB_PASSWORD): it reads the
+    ingestion tables and writes only its own analytics schemas."""
     from dataclasses import replace
 
     from jobmarket.analytics import ANALYTICS_ROLE

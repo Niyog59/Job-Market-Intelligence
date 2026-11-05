@@ -314,7 +314,7 @@ def benchmark(
     prefix: str = "",
     progress=print,
 ) -> dict:
-    """Run every measurement; settings is the login (the read-only analytics login on a
+    """Run every measurement; settings is the login (the analytics login on a
     normal install). prefix and source_schema are for test builds."""
     directory.mkdir(parents=True, exist_ok=True)
     variables = {"schema_prefix": prefix}

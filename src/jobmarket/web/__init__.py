@@ -2,7 +2,7 @@
 server-rendered with Flask templates and a small script for tabs, evidence, and scroll
 restoration, plus the owner's private pages after signing in (jobmarket.web.auth).
 
-Public pages only read: they use the read-only analytics login in read-only sessions.
+Public pages only read: they use the analytics login in read-only sessions.
 Private pages use the private login, which can reach only the private schema. Browsing never
 calls a source, the model, or dbt. Locally it runs with `jobmarket web` (bound to
 127.0.0.1); on a server, with gunicorn behind a reverse proxy (jobmarket.web.wsgi, deploy/).

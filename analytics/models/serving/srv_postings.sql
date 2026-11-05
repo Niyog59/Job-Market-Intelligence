@@ -2,11 +2,12 @@
 -- website. A view over staging, so it is always current: new collections and extractions
 -- appear without rebuilding analytics.
 --
--- Availability is the ingestion's current state (Module 6); the website never derives it.
+-- Availability is the ingestion's current state; the website never derives it.
 -- AI fields come from the extraction of the CURRENT version only (null when there is none,
 -- extraction_status says why). requested_skills are skills asked for as required or
 -- preferred, alone or as one of a set of alternatives; passing mentions are excluded.
--- cohort is the Module 8 rule: initial_import or discovered.
+-- cohort: initial_import (first seen at or before its board's first complete collection) or
+-- discovered.
 with current_results as (
     select distinct on (r.posting_id) r.*
     from {{ ref('stg_extraction_results') }} r

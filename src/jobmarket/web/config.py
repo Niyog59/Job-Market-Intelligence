@@ -1,7 +1,7 @@
 """Website configuration.
 
 Two database logins, never the ingestion owner:
-- public data: the read-only analytics login (ANALYTICS_DB_USER, default jobmarket_analytics,
+- public data: the analytics login (ANALYTICS_DB_USER, default jobmarket_analytics,
   and ANALYTICS_DB_PASSWORD), in read-only sessions;
 - private data: the private login (PRIVATE_DB_USER, default jobmarket_private, and
   PRIVATE_DB_PASSWORD), which can use only the private schema.

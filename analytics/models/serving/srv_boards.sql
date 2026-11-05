@@ -1,7 +1,7 @@
 -- One row per board: how fresh its listings are, for the website.
 --   last_complete_collected_at: the newest complete scan (every page read), i.e. the last
 --     time the whole board was checked;
---   last_trusted_check_at: the newest scan the availability rules counted (Module 6);
+--   last_trusted_check_at: the newest scan the availability rules counted;
 --   on_hold: a mass-disappearance hold is active, so absences are not being counted.
 with complete as (
     select board_id, max(collected_at) as last_complete_collected_at
