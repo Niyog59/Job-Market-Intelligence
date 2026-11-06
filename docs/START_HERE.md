@@ -73,7 +73,7 @@ What to notice:
 - Backups are verified by checksum, uploaded to S3, and confirmed before an older local copy
   is deleted. Restore refuses a database that already has data.
 - The evening duties follow the scheduled slot, not the start time
-  ([what broke](../README.md#what-broke-and-how-i-fixed-it)).
+  ([what broke](PROBLEMS.md#evening-runs-that-started-after-midnight-skipped-their-evening-duties)).
 
 Tests: [`deploy/airflow/tests/test_schedule.py`](../deploy/airflow/tests/test_schedule.py)
 (`test_the_scheduled_slot_decides_not_the_start_time`, daylight saving changes),
