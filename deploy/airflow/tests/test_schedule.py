@@ -41,18 +41,28 @@ def next_run(timetable, monkeypatch, now, last_run=None, earliest=None):
     return info.run_after.in_tz(CHICAGO)
 
 
-def test_noon_and_nine_pm_local_time_across_daylight_saving(module, monkeypatch):
+def test_8_am_noon_and_9_pm_local_time_across_daylight_saving(module, monkeypatch):
     timetable = module.collection.timetable
     # 2026-03-08: clocks spring forward at 2 AM. 2026-11-01: clocks fall back at 2 AM.
     for day, utc_offset in ((dt.date(2026, 3, 7), -6), (dt.date(2026, 3, 8), -5),
                             (dt.date(2026, 10, 31), -5), (dt.date(2026, 11, 1), -6)):  # fmt: skip
-        morning = local(day.year, day.month, day.day, 6)
+        early = local(day.year, day.month, day.day, 6)
         yesterday_evening = local(day.year, day.month, day.day, 21).subtract(days=1)
-        noon = next_run(timetable, monkeypatch, morning, last_run=yesterday_evening)
-        assert (noon.hour, noon.minute) == (12, 0)
-        assert noon.utcoffset() == dt.timedelta(hours=utc_offset)
+        morning = next_run(timetable, monkeypatch, early, last_run=yesterday_evening)
+        assert (morning.date(), morning.hour, morning.minute) == (day, 8, 0)
+        assert morning.utcoffset() == dt.timedelta(hours=utc_offset)
+        noon = next_run(timetable, monkeypatch, morning.add(minutes=5), last_run=morning)
+        assert (noon.date(), noon.hour) == (day, 12)
         evening = next_run(timetable, monkeypatch, noon.add(minutes=5), last_run=noon)
         assert (evening.date(), evening.hour) == (day, 21)
+
+
+def test_collection_hours_are_configurable_and_checked(module):
+    assert module.collection_hours("") == [8, 12, 21]
+    assert module.collection_hours(" 21, 9 ") == [9, 21]
+    for wrong in ("8,25", "noon", "8;12", "8,12"):  # the last has no evening hour
+        with pytest.raises(ValueError):
+            module.collection_hours(wrong)
 
 
 def test_one_catch_up_run_after_downtime(module, monkeypatch):
@@ -77,7 +87,7 @@ def test_no_extra_run_when_nothing_was_missed(module, monkeypatch):
 
 def test_first_start_runs_once_for_the_latest_slot(module, monkeypatch):
     timetable = module.collection.timetable
-    first = next_run(timetable, monkeypatch, local(2026, 11, 20, 8), earliest=module.START)
+    first = next_run(timetable, monkeypatch, local(2026, 11, 20, 7), earliest=module.START)
     assert first == local(2026, 11, 19, 21)
 
 

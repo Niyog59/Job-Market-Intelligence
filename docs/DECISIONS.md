@@ -166,6 +166,32 @@ what it costs, and what would make me revisit it. Back to the [README](../README
 - **Revisit when** collection runs more often (the 3-day window could shrink) or the
   screening rules change.
 
+## Three collections a day
+
+- **Problem.** With collections at noon and 9 PM, a job posted in the evening waited until
+  noon the next day: 15 hours. The request was to check every 15 to 30 minutes.
+- **Options.** A full collection every 15 to 30 minutes; a cheap check of each board's list
+  of job IDs, with a full collection of a board only when a new ID appears; one more full
+  collection a day.
+- **Measured.** A full collection of the 51 boards took 68 to 158 seconds on the Mac and
+  saved about 88 MB of raw responses (30 Lever boards about 71 MB, 21 Greenhouse boards
+  about 17 MB) and about 5,200 observation rows (run 9, 2026-11-03). Every 30 minutes, the
+  raw files alone would be about 4.2 GB a day against a 20 GiB disk with 4 days of
+  retention. Absences are counted per complete scan, so 3 missing scans would mark a
+  removed job inactive within about an hour.
+- **Choice (Niyog, 2026-11-06).** One more full collection, at 8 AM, so 8:00, 12:00, and
+  21:00. The ID check was dropped. Backups, pruning, the summary, and Airflow cleanup stay
+  after the 21:00 run; reports and the Sheet are rebuilt after every collection.
+- **Benefit.** The longest wait for a new job drops from 15 hours (9 PM to noon) to 11
+  (9 PM to 8 AM), and a job posted early in the morning is found by 8 AM or noon.
+- **Cost.** About 50% more raw storage: roughly 1.05 GB on the server instead of 0.7, and
+  about 2.6 GB more in S3 over its 30 days (cents a month). One more report rebuild and
+  Sheet update a day. Removed jobs reach "assumed inactive" after about 1 day instead of
+  about 1.5 (accepted by Niyog), so a board that drops a job by mistake for a day hides it
+  sooner; mass disappearances still put the board on hold.
+- **Revisit when** more boards make a collection take much longer, or new jobs posted in
+  the evening matter more than the overnight gap.
+
 ## One server
 
 - **Problem.** The site, the database, and the pipeline need a home, within a small budget.
@@ -202,7 +228,7 @@ Values that change product behavior, decided before they went into the code.
 
 | Setting | Value | Where |
 |---|---|---|
-| Collection times | 12:00 and 21:00 America/Chicago | DAG `jobmarket_collection` |
+| Collection times | 8:00, 12:00, and 21:00 America/Chicago (`JOBMARKET_COLLECTION_HOURS`); backup and summary after 21:00 only | DAG `jobmarket_collection` |
 | Retries after a failed board | 3, about 1, 2, and 3 hours later; checked every 15 minutes | [`incidents.py`](../src/jobmarket/incidents.py), DAG `jobmarket_retries` |
 | A retry run more than 5 minutes late | moves the next retry a full hour after it | [`incidents.py`](../src/jobmarket/incidents.py) |
 | AI batches | every hour at :30, up to 20 listings; skipped while the extraction worker runs | DAG `jobmarket_extraction` |

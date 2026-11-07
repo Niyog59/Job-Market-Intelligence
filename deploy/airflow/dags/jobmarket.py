@@ -4,8 +4,9 @@ Every task runs an existing `jobmarket` command in /app, so the same work can al
 by hand (`docker compose run --rm jobs jobmarket ...`). Airflow only decides when it runs.
 
 Scheduling rules:
-- Collection at 12:00 and 21:00 America/Chicago. The cron is read in that time zone, so the
-  local times stay the same across daylight saving changes.
+- Collection at 8:00, 12:00, and 21:00 America/Chicago by default
+  (JOBMARKET_COLLECTION_HOURS, comma-separated hours). The cron is read in that time zone, so
+  the local times stay the same across daylight saving changes.
 - catchup=False: after downtime the scheduler creates one run, for the latest missed time
   (Airflow's CronTriggerTimetable takes the later of "the most recent past slot" and "the
   slot after the last run"), never one run per missed slot. Collection always scans the
@@ -28,7 +29,7 @@ Scheduling rules:
 - The evening run also backs up, prunes local backups, sends the daily summary, and cleans
   Airflow's own history. A run is "evening" when it was scheduled at 17:00 Chicago time or
   later (the 21:00 slot, even if it starts after midnight, or a manual run started in the
-  evening).
+  evening). The 8:00 and 12:00 runs collect and publish only.
 
 The intervals, batch size, retention, and time limits below are recorded in
 docs/DECISIONS.md.
@@ -57,6 +58,28 @@ REPORT_LIMIT = timedelta(minutes=20)
 BACKUP_LIMIT = timedelta(minutes=20)
 SUMMARY_LIMIT = timedelta(minutes=10)
 SHEETS_LIMIT = timedelta(minutes=10)
+
+COLLECTION_HOURS_ENV = "JOBMARKET_COLLECTION_HOURS"
+DEFAULT_COLLECTION_HOURS = "8,12,21"  # Niyog, 2026-11-06 (docs/DECISIONS.md)
+
+
+def collection_hours(value: str | None = None) -> list[int]:
+    """Collection hours (Chicago time) from a comma-separated list such as "8,12,21".
+
+    A wrong value stops the DAG file from loading, so `airflow dags list-import-errors`
+    shows it instead of collection silently running at other times.
+    """
+    raw = value if value is not None else os.environ.get(COLLECTION_HOURS_ENV, "")
+    raw = raw.strip() or DEFAULT_COLLECTION_HOURS
+    parts = [part.strip() for part in raw.split(",")]
+    if not all(part.isdigit() and 0 <= int(part) <= 23 for part in parts):
+        raise ValueError(f"{COLLECTION_HOURS_ENV} must be hours 0-23 separated by commas")
+    hours = sorted({int(part) for part in parts})
+    if not any(hour >= EVENING_FROM_HOUR for hour in hours):
+        raise ValueError(f"{COLLECTION_HOURS_ENV} needs an evening hour (from "
+                         f"{EVENING_FROM_HOUR}) for the nightly backup and summary")  # fmt: skip
+    return hours
+
 
 KEEP_LOCAL_BACKUPS = 3
 AIRFLOW_HISTORY_DAYS = 30
@@ -93,9 +116,11 @@ def task(task_id: str, command: str, limit: timedelta, **kwargs) -> BashOperator
 
 with DAG(
     dag_id="jobmarket_collection",
-    description="Collect at noon and 9 PM Chicago time, then publish reports; evenings also "
-    "back up and send the daily summary.",
-    schedule=CronTriggerTimetable("0 12,21 * * *", timezone=TIMEZONE),
+    description="Collect at 8 AM, noon, and 9 PM Chicago time (by default), then publish "
+    "reports; evenings also back up and send the daily summary.",
+    schedule=CronTriggerTimetable(
+        f"0 {','.join(map(str, collection_hours()))} * * *", timezone=TIMEZONE
+    ),
     start_date=START,
     catchup=False,
     max_active_runs=1,

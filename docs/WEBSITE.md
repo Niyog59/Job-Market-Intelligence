@@ -73,6 +73,13 @@ search. It shows active jobs first discovered in the past 3 days, newest discove
 - **Older jobs** follow the same 30-day rule as the search (`old=include`).
 - A job page opened from this list links back to it (`list=newest`).
 
+## Employers
+
+`/employers` lists every enabled board with its last complete check (every page read), its
+latest attempt, and its active and kept jobs, so a reader can see how fresh each employer's
+listings are. Boards are read at the collection times (see the [runbook](../deploy/RUNBOOK.md),
+section G), not continuously.
+
 ## Job-search website
 
 A server-rendered Flask site over the search above (`src/jobmarket/web/`): Jinja templates,

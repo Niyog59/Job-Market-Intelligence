@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Employers{% endblock %}
+{% block body_class %}reports-page{% endblock %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job Market Intelligence</p>
+    <h1>Employers</h1>
+  </div>
+  {% include "_owner_nav.html" %}
+</header>
+
+<main id="main" class="page reports">
+  <p class="lede">The {{ boards|length }} employer job boards this site reads, and when each was last
+    read completely. Boards are read at set times each day, so a job posted after the last
+    check appears after the next one. This is not a live feed of the employers' sites.</p>
+  <p class="freshness">Last complete collection: {{ fmt.when(status.last_complete_collection) }}
+    ({{ fmt.age(status.last_complete_collection, now) }}).</p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th scope="col">Employer</th><th scope="col">Source</th><th scope="col">Last complete check</th><th scope="col">Latest attempt</th><th scope="col">Active jobs</th><th scope="col">Kept jobs</th></tr></thead>
+      <tbody>
+      {% for b in boards %}
+        <tr>
+          <th scope="row">{{ b.employer }}</th>
+          <td>{{ fmt.SOURCE_LABELS.get(b.source_system, b.source_system) }}</td>
+          <td>{% if b.last_complete_at %}{{ fmt.when(b.last_complete_at) }} ({{ fmt.age(b.last_complete_at, now) }}){% else %}<span class="muted">never</span>{% endif %}{% if b.stale %} <span class="tag warn">over 36 hours</span>{% endif %}{% if b.on_hold %} <span class="tag warn">on hold</span>{% endif %}</td>
+          <td>{% if b.latest_scan_status %}{{ fmt.words(b.latest_scan_status) }}, {{ fmt.age(b.latest_scan_at, now) }}{% else %}<span class="muted">none</span>{% endif %}</td>
+          <td>{{ "{:,}".format(b.active_jobs) }}</td>
+          <td>{{ "{:,}".format(b.kept_jobs) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">No boards are enabled.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">A complete check reads every page of the board. A failed or partial attempt
+    never marks a job closed; the board is retried about 1, 2, and 3 hours later. "Kept jobs"
+    passed the screening rules (target role, in DFW, Houston, or remote open to Texas).</p>
+</main>
+{% endblock %}
