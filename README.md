@@ -12,7 +12,7 @@ Once the data was piling up, I got curious about the listings themselves. How ma
 open to someone early in their career? Which skills come up again and again? Those questions are
 now half the project.
 
-[Live site](https://jobobservatory.dev) · [Reports](https://jobobservatory.dev/reports) ·
+[Start here](docs/START_HERE.md) · [Live site](https://jobobservatory.dev) · [Reports](https://jobobservatory.dev/reports) ·
 [Market insights](https://jobobservatory.dev/insights) · [Results](#measured-results) ·
 [What the data shows](#what-the-data-shows) · [Problems](#problems-i-ran-into) ·
 [Run it locally](#run-it-locally)
@@ -43,6 +43,7 @@ server was restored from.
 | Publish the reports (build, tests, statistics, swap) | 25 s | Mac copy, 2026-11-03 |
 | An export that stalled after a publication | over 10 minutes, then 22 s once the new tables had statistics | Mac copy, 2026-11-03 ([problem](#problems-i-ran-into)) |
 | Three reporting models, PostgreSQL vs Spark | 5.18 s vs 12.40 s at 6.6 million synthetic rows | M1 Mac, transformation time only ([comparison](#postgresql-and-dbt-or-spark)) |
+| Three reporting models, Spark on Databricks | 10.9 s, same rows as PostgreSQL | Databricks Free Edition, at today's size (66,367 rows), 2026-11-03 |
 | First scheduled 9 PM run | every step, including the S3 backup and the Sheet update, done by 21:04 | production, 2026-11-04 |
 | Kept jobs with extracted details | 166 of 167 listed postings (99.4%) | production, reports built 2026-11-05 |
 | dbt project | 46 SQL models and 125 data tests, all passing | CI, every run |
@@ -136,15 +137,16 @@ tests.
 
 | Part | Where to look |
 |---|---|
-| Collection and history ([docs](docs/COLLECTION.md)) | [`collector.py`](src/jobmarket/collector.py), [`store.py`](src/jobmarket/store.py), [`availability.py`](src/jobmarket/availability.py), [`duplicates.py`](src/jobmarket/duplicates.py), [`test_history.py`](tests/test_history.py) |
+| Commands | [`cli.py`](src/jobmarket/cli.py) |
+| Collection and history ([docs](docs/COLLECTION.md)) | [`collector.py`](src/jobmarket/collector.py), [`classify.py`](src/jobmarket/classify.py), [`store.py`](src/jobmarket/store.py), [`availability.py`](src/jobmarket/availability.py), [`duplicates.py`](src/jobmarket/duplicates.py), [`test_history.py`](tests/test_history.py), [`test_classify.py`](tests/test_classify.py) |
 | AI extraction ([docs](docs/EXTRACTION.md)) | [`extraction.py`](src/jobmarket/extraction.py), [`extraction_worker.py`](src/jobmarket/extraction_worker.py), [`extraction_check.py`](src/jobmarket/extraction_check.py), [`test_extraction_check.py`](tests/test_extraction_check.py) |
 | Transformations and publication ([docs](docs/ANALYTICS.md)) | [`analytics/models/`](analytics/models/), [`analytics.py`](src/jobmarket/analytics.py), [`test_publish.py`](tests/test_publish.py) |
 | Scheduling, backups, recovery ([docs](docs/OPERATIONS.md), [runbook](deploy/RUNBOOK.md)) | [DAGs](deploy/airflow/dags/jobmarket.py), [`incidents.py`](src/jobmarket/incidents.py), [`backup.py`](src/jobmarket/backup.py), [`deploy/airflow/tests/`](deploy/airflow/tests/) |
 | Website and dashboard feed ([docs](docs/WEBSITE.md)) | [`search.py`](src/jobmarket/search.py), [`web/`](src/jobmarket/web/), [`sheets.py`](src/jobmarket/sheets.py), [`reporting/`](analytics/models/reporting/) |
 
-Tools: Python, PostgreSQL 17, dbt, Airflow, Docker Compose on one AWS EC2 server, S3 for raw
-pages and backups, Flask, Gemini, and GitHub Actions. PySpark and Databricks were only used for
-the comparison below. More detail: [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Tools: Python, PostgreSQL 17, dbt, Airflow, Docker Compose on one AWS EC2 server, S3 for raw pages and backups, Flask, Gemini, and GitHub Actions. That is what runs in production.
+
+PySpark and Databricks Free Edition are not part of it. I used them only for the comparison below, where I checked whether Spark would do the reporting step better than PostgreSQL. It did not, so I kept PostgreSQL. More detail: [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Problems I ran into
 
