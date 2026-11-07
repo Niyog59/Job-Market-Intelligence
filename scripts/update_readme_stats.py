@@ -87,7 +87,7 @@ def validate(d: dict) -> None:
 def live_block(d: dict) -> str:
     cov_pct = round(100 * d["extracted_jobs"] / d["extracted_total"]) if d["extracted_total"] else 0
     return (
-        f"{d['boards_enabled']} employer boards checked twice a day · "
+        f"{d['boards_enabled']} employer boards checked three times a day · "
         f"{d['open_jobs']} open jobs tracked right now · "
         f"{d['kept_jobs_total']} jobs kept in total · "
         f"requirements extracted on {d['extracted_jobs']} of {d['extracted_total']} "
