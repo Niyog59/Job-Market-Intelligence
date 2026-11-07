@@ -4,10 +4,13 @@ it. Built from the reporting tables over the synthetic history in search_world."
 import contextlib
 import json
 import stat
+from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
+from search_world import LAST_SCAN
 
-from jobmarket import profile_stats, reports
+from jobmarket import analytics, cli, operations, profile_stats, reports
 from jobmarket.profile_stats import FIELDS, ProfileStatsError, validate, write
 
 GOOD = {
@@ -92,3 +95,43 @@ def test_an_unrecognized_seniority_value_stops_the_build(world, reporting):
             profile_stats.build(world.conn, reporting)
         raise RuntimeError("roll back the change")
 
+
+# --- the route -----------------------------------------------------------------------------
+
+
+@pytest.mark.db
+def test_the_route_serves_the_file_and_says_404_before_the_first_one(
+    world, db_settings, tmp_path, monkeypatch
+):
+    pytest.importorskip("flask", reason="the website needs Flask (pip install -e '.[web]')")
+    from jobmarket.web import create_app
+    from jobmarket.web.config import WebConfig
+
+    monkeypatch.setenv(profile_stats.PUBLIC_DIR_ENV, str(tmp_path))
+    config = WebConfig(db_settings, serving_schema=world.schema, source_schema=world.source,
+                       clock=lambda: LAST_SCAN + timedelta(hours=1))  # fmt: skip
+    client = create_app(config).test_client()
+    assert client.get("/api/profile-stats.json").status_code == 404
+    write(GOOD, profile_stats.stats_path())
+    response = client.get("/api/profile-stats.json")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("application/json")
+    assert response.get_json() == GOOD
+
+
+# --- only after a successful publication ----------------------------------------------------
+
+
+@pytest.mark.parametrize("published", [True, False])
+def test_publication_writes_the_file_only_after_a_successful_swap(monkeypatch, published):
+    calls = []
+    result = analytics.PublishResult(published, [] if published else ["a test failed"],
+                                     built_at=LAST_SCAN)  # fmt: skip
+    monkeypatch.setattr(analytics, "build_and_publish", lambda conn, target: result)
+    monkeypatch.setattr(cli, "_write_profile_stats", lambda login: calls.append(login) or "x")
+    monkeypatch.setattr(cli.db, "connect", lambda *a, **k: contextlib.nullcontext(None))
+    monkeypatch.setattr(operations, "record_step", lambda *a, **k: None)
+    settings = SimpleNamespace(db_user="owner", db_password="")
+    code = cli._analytics_publish(settings, SimpleNamespace(target="owner"))
+    assert (code == cli.EXIT_OK) == published
+    assert len(calls) == (1 if published else 0)

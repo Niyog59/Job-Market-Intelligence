@@ -55,6 +55,30 @@ ingestion tables, and the failure is recorded (one alert, one recovery notice la
 [Pipeline steps, alerts, and the daily summary](OPERATIONS.md#pipeline-steps-alerts-and-the-daily-summary)). Before the first publish, the Reports page says "Reports not ready
 yet". Only one publish runs at a time.
 
+### Public numbers file
+
+After the swap commits, publish writes `profile-stats.json` (`jobmarket.profile_stats`) from
+the published reporting tables, and the website serves it at `/api/profile-stats.json`. The
+GitHub profile and this repository's README updaters read it. Ten fields, names fixed:
+
+| Field | From |
+|---|---|
+| `boards_enabled` | `rpt_board_freshness`, enabled boards |
+| `open_jobs`, `employers_with_open_jobs` | `rpt_jobs_current`: rows, distinct employers |
+| `kept_jobs_total` | `rpt_inventory_daily`, kept, newest day: opportunities in every state |
+| `extracted_jobs`, `extracted_total` | `rpt_extraction_coverage`, kept: extracted, listed postings |
+| `junior_pct`, `senior_pct` | `rpt_experience_requirements`, kept, seniority, of postings with a stated level (junior: intern, entry, junior; senior: senior and above; mid counts toward the total) |
+| `genai_pct` | distinct jobs in `rpt_job_genai_terms`, of `open_jobs` |
+| `last_published_at` | `rpt_build_info.built_at`, as a date in America/Chicago |
+
+Percentages are whole numbers, rounded half up. Before writing, the numbers are checked (kept
+at least open, extracted at most listed, percentages 0 to 100, an unknown seniority value is
+an error); the file is replaced in one rename, so readers see the old file or the new one. A
+failed publication never reaches this step. If the numbers fail their checks, the previous
+file stays, the error is printed and recorded in the `report_publish` step's detail, and the
+publication itself still counts as done. Locally the file is `data/public/`; on the server
+it is the `publicdata` volume, which the website mounts read-only (`JOBMARKET_PUBLIC_DIR`).
+
 ### Counting rules
 
 - **Grains.** A *source record* is one posting on one board. An *opportunity* is a duplicate

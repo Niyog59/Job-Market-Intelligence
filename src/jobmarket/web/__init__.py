@@ -14,7 +14,7 @@ import psycopg
 from flask import Flask, abort, g, redirect, render_template, request, url_for
 from werkzeug.datastructures import MultiDict
 
-from jobmarket import db, reports, search, workspace
+from jobmarket import db, profile_stats, reports, search, workspace
 from jobmarket.web import auth, insights, private_pages
 from jobmarket.web import format as fmt
 from jobmarket.web.config import WebConfig, load_web_config
@@ -109,6 +109,18 @@ def create_app(config: WebConfig | None = None) -> Flask:
             "levels": workspace.EDUCATION_LEVELS,
             "edu_status": workspace.EDUCATION_STATUS,
         }
+
+    @app.get("/api/profile-stats.json")
+    def profile_stats_file():
+        # The file the last successful publication wrote (jobmarket.profile_stats). It is
+        # served as written, never rebuilt here, so a failed publication cannot change it.
+        try:
+            body = profile_stats.stats_path().read_bytes()
+        except FileNotFoundError:
+            return ({"error": "not published yet"}, 404,
+                    {"Cache-Control": "no-store"})  # fmt: skip
+        return body, 200, {"Content-Type": "application/json; charset=utf-8",
+                           "Cache-Control": "public, max-age=300"}  # fmt: skip
 
     @app.get("/healthz")
     def health():

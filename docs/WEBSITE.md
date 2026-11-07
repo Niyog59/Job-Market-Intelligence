@@ -109,6 +109,9 @@ a result on the next page load (see [Scheduling](OPERATIONS.md#scheduling)).
 | `/jobs/<posting_id>` | one listing: overview, Requirements and Job description tabs, other postings of the same job, possible duplicates; `?from=<query string>` is the search to return to |
 | `/reports` | the reporting tables, read-only; `?population=kept` (default) or `all` |
 | `/insights` | Market insights: the Tableau Public dashboards; `?d=<dashboard>` picks one (see [Dashboard data](ANALYTICS.md#dashboard-data-tableau-public)) |
+| `/newest` | Newest jobs (see [Newest jobs](#newest-jobs)) |
+| `/employers` | every enabled board and its last complete check (see [Employers](#employers)) |
+| `/api/profile-stats.json` | the public numbers file the last successful publication wrote (see [Analytics](ANALYTICS.md#public-numbers-file)); 404 before the first one |
 | `/healthz` | `ok` when the app and its database login work (for container health checks) |
 
 Invalid or unknown job links give a 404 page; missing serving views or an unreachable

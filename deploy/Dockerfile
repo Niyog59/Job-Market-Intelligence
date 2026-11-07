@@ -48,8 +48,10 @@ COPY analytics ./analytics
 COPY config ./config
 COPY deploy/airflow/dags ./deploy/airflow/dags
 # The app user writes only raw responses and backups (data/), dbt's own output (analytics/),
-# and Airflow's logs and generated files (airflow/).
-RUN mkdir -p data/raw data/backups airflow && chown -R app:app data analytics airflow
+# Airflow's logs and generated files (airflow/), and the public numbers file (public/; a new
+# named volume takes this directory's owner).
+RUN mkdir -p data/raw data/backups airflow public \
+ && chown -R app:app data analytics airflow public
 
 USER app
 EXPOSE 8000
