@@ -403,7 +403,7 @@ docker compose run --rm jobs jobmarket backup create --upload
 
 | When | What |
 |---|---|
-| 12:00 and 21:00 | Collect from every enabled board, copy raw files to S3 and remove local ones S3 confirmed, then publish reports |
+| 8:00, 12:00, and 21:00 (`JOBMARKET_COLLECTION_HOURS`) | Collect from every enabled board, copy raw files to S3 and remove local ones S3 confirmed, then publish reports |
 | 21:00 run only, right after collection | Back up both schemas to S3 (confirmed), keep the newest 3 verified local backups, send the daily summary email, clean Airflow history older than 30 days |
 | Every 15 minutes | Retry the boards whose retry is due (up to 3 per failed board, about 1, 2, and 3 hours after the failure), then send any alert |
 | Every hour at :30 | One AI batch of at most 20 listings (free tier; pauses itself on a quota error). Skipped while the extraction worker runs (section W) |
@@ -432,7 +432,7 @@ docker compose ps
 
 - What: creates Airflow's tables in its own `airflow` database, then starts it. The three
   schedules are active at once: Airflow makes one catch-up collection for the most recent
-  12:00 or 21:00 slot, one retry check, and one AI batch at the next :30.
+  8:00, 12:00, or 21:00 slot, one retry check, and one AI batch at the next :30.
 - Check: `airflow-api` shows `healthy` within 2 minutes, and
   `curl -s http://127.0.0.1:8080/api/v2/monitor/health` (on the server) shows the
   scheduler as healthy. If your database volume was created before this version (no

@@ -147,7 +147,7 @@ jobs:
         run: pytest -v tests/test_spark_parity.py tests/test_spark_benchmark.py
 
   airflow:
-    # The Airflow DAGs (deploy/airflow): they import, keep noon and 9 PM local time across
+    # The Airflow DAGs (deploy/airflow): they import, keep 8 AM, noon, and 9 PM local time across
     # daylight saving, make one catch-up run after downtime, and run every step in order
     # (with a stub jobmarket command, so nothing touches data or the network).
     runs-on: ubuntu-latest

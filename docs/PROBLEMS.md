@@ -19,6 +19,8 @@ behind https://jobobservatory.dev). Back to the [README](../README.md#problems-i
 - **What changed:** a public Newest jobs page that lists every job found in the past 3
   days, newest first, before the AI reads it, with only the rule-based screening as filters
   and an Apply link on every row ([decision](DECISIONS.md#show-new-listings-before-extraction)).
+  Collection also runs at 8 AM now, which cuts the overnight wait from 15 hours to 11
+  ([decision](DECISIONS.md#three-collections-a-day)).
 - **How I checked it:** [`test_newest.py`](../tests/test_newest.py) collects a board with a
   scripted API: an unextracted listing appears with its application link, sorts by
   discovery, is not hidden by unknown requirements, keeps its place after a failed scan,

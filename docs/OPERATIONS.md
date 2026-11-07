@@ -134,7 +134,7 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
 
 | DAG | When (America/Chicago) | Tasks |
 |---|---|---|
-| `jobmarket_collection` | 12:00 and 21:00 | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, `tableau sync` (only after a successful publication; skipped until the Sheet is configured), (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
+| `jobmarket_collection` | 8:00, 12:00, and 21:00 (`JOBMARKET_COLLECTION_HOURS`) | `collect`, then (21:00 only) `backup create --upload` and `backup prune --keep 3`, then `sync-raw`, `cleanup-raw --require-s3`, `analytics publish`, `tableau sync` (only after a successful publication; skipped until the Sheet is configured), (21:00 only) `summary send`, then `notifications --send` and (21:00 only) Airflow history cleanup (30 days) |
 | `jobmarket_retries` | every 15 minutes | `retry-due`, then `notifications --send` |
 | `jobmarket_extraction` | every hour at :30 | `extract run --limit 20 --skip-if-worker` (skipped while the extraction worker runs) |
 

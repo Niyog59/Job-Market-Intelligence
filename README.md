@@ -4,7 +4,7 @@
 
 I wanted an easier way to find data and backend jobs I could actually apply to, without
 checking each company's career page. So I built Job Observatory: it collects listings from
-employers' job boards twice a day, keeps every version of every listing, and asks an AI model
+employers' job boards three times a day, keeps every version of every listing, and asks an AI model
 to pull out the requirements, such as skills, years of experience, and sponsorship. Then I can
 search all of it in one place.
 
@@ -125,7 +125,7 @@ flowchart TB
     af -. schedules .-> flow
 ```
 
-At noon and 9 PM (Chicago time), Python reads every employer's Greenhouse or Lever board
+At 8 AM, noon, and 9 PM (Chicago time), Python reads every employer's Greenhouse or Lever board
 through its public API and saves the raw pages. A listing's identity, each version of its
 text, and each time it was seen are stored separately, so I always know when a job changed
 and when it was last there. Seeing the same text again adds a sighting, not a new version, and

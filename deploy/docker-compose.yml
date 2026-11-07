@@ -43,6 +43,9 @@ x-airflow-env: &airflow-env
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@db:5432/airflow
   AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE: "2"
   AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW: "3"
+  # Read where the DAG file is parsed (the DAG processor), so it is set for every Airflow
+  # service; empty means the default in the DAG file (8,12,21).
+  JOBMARKET_COLLECTION_HOURS: ${JOBMARKET_COLLECTION_HOURS:-}
 
 x-airflow: &airflow
   <<: *app

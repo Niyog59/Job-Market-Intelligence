@@ -60,6 +60,7 @@ def calls(log):
 
 EVENING = pendulum.datetime(2026, 11, 2, 21, tz="America/Chicago")
 NOON = pendulum.datetime(2026, 11, 2, 12, tz="America/Chicago")
+MORNING = pendulum.datetime(2026, 11, 2, 8, tz="America/Chicago")
 
 
 def test_evening_run_does_every_step_in_order(stubs):
@@ -88,8 +89,9 @@ def test_the_logical_date_decides_when_the_run_starts_after_midnight(stubs):
     assert set(states.values()) == {"success"}
 
 
-def test_noon_run_skips_the_evening_only_steps(stubs):
-    states = run(load().collection, NOON)
+@pytest.mark.parametrize("slot", [MORNING, NOON], ids=["8am", "noon"])
+def test_daytime_runs_skip_the_evening_only_steps(stubs, slot):
+    states = run(load().collection, slot)
     skipped = {task for task, state in states.items() if state == "skipped"}
     assert skipped == {"backup", "backup_prune", "daily_summary", "airflow_history_cleanup"}
     assert calls(stubs) == ["collect --scheduled", "sync-raw", "cleanup-raw --require-s3",

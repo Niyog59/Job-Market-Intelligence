@@ -103,7 +103,7 @@ requests, of which the backlog lane may use 250.
 **Times to keep apart.** For a new listing:
 
 1. The employer posts or edits it (the provider's own timestamps, when it gives them).
-2. A collection sees it: noon or 9 PM Chicago time, or a retry of a failed board.
+2. A collection sees it: 8 AM, noon, or 9 PM Chicago time, or a retry of a failed board.
 3. Its extraction finishes: `extraction_results.created_at`. With the worker and quota
    left, a few seconds per listing ahead of it in the new lane (the target is within five
    minutes of queueing); without the worker, the next :30 batch of 20.
