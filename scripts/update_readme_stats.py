@@ -35,6 +35,7 @@ Expected JSON shape (produced by the publish step on the server):
   "last_published_at": "2026-11-05"
 }
 """
+
 import json
 import os
 import re
@@ -47,9 +48,16 @@ README = ROOT / "README.md"
 DEFAULT_URL = "https://jobobservatory.dev/api/profile-stats.json"
 
 REQUIRED = [
-    "boards_enabled", "open_jobs", "employers_with_open_jobs",
-    "kept_jobs_total", "extracted_jobs", "extracted_total",
-    "junior_pct", "senior_pct", "genai_pct", "last_published_at",
+    "boards_enabled",
+    "open_jobs",
+    "employers_with_open_jobs",
+    "kept_jobs_total",
+    "extracted_jobs",
+    "extracted_total",
+    "junior_pct",
+    "senior_pct",
+    "genai_pct",
+    "last_published_at",
 ]
 
 
@@ -82,15 +90,14 @@ def live_block(d: dict) -> str:
         f"{d['boards_enabled']} employer boards checked twice a day · "
         f"{d['open_jobs']} open jobs tracked right now · "
         f"{d['kept_jobs_total']} jobs kept in total · "
-        f"requirements extracted on {d['extracted_jobs']} of {d['extracted_total']} kept postings ({cov_pct}%) · "
+        f"requirements extracted on {d['extracted_jobs']} of {d['extracted_total']} "
+        f"kept postings ({cov_pct}%) · "
         f"updated {d['last_published_at']}"
     )
 
 
 def replace_block(text: str, name: str, new_body: str) -> str:
-    pattern = re.compile(
-        rf"(<!-- {name}:START -->).*?(<!-- {name}:END -->)", re.DOTALL
-    )
+    pattern = re.compile(rf"(<!-- {name}:START -->).*?(<!-- {name}:END -->)", re.DOTALL)
     if not pattern.search(text):
         print(f"note: no {name} markers in README yet, skipping that block")
         return text
