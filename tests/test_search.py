@@ -30,8 +30,16 @@ def shown(result, w):
     return [back[row.posting_id] for row in result.rows]
 
 
-def test_default_is_kept_active_early_career_with_unknowns_labeled(world):
+def test_default_is_kept_active_jobs_at_every_level(world):
     result = run(world)
+    # J1/J5 group, J2, J3 (pending), and J4 (not early career). J6 is not kept, J7 and J8
+    # are archived. No structured filter is on, so nothing is "unknown".
+    assert sorted(shown(result, world)) == [2, 3, 4, 5]
+    assert all(row.unknown_reasons == [] for row in result.rows)
+
+
+def test_early_career_keeps_unknowns_labeled(world):
+    result = run(world, level="early")
     rows = {r.posting_id: r for r in result.rows}
     # J1/J5 group (early career), J2 (unclear), J3 (pending). J4 is not early career, J6 is
     # not kept, J7 and J8 are archived.
@@ -44,7 +52,7 @@ def test_default_is_kept_active_early_career_with_unknowns_labeled(world):
 
 
 def test_unknowns_can_be_excluded(world):
-    assert shown(run(world, unknown="exclude"), world) == [5]
+    assert shown(run(world, level="early", unknown="exclude"), world) == [5]
 
 
 def test_a_confident_duplicate_group_is_one_result_shown_by_its_newest_copy(world):
