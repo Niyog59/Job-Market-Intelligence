@@ -60,6 +60,11 @@ the queue in two lanes that share the account's one daily allowance:
 | New | 1 new or edited kept listing, 3 new or edited other listing | always first; at least `JOBMARKET_AI_NEW_RESERVE` (200) of the requests are kept for it |
 | Backlog | 2 kept backlog, 4 other backlog (and reprocessing) | only requests the new lane does not need, at most the safety stop minus the reserve (250 with a 500 daily limit) |
 
+A board added later brings everything it already lists (its initial import). Those listings
+are not new postings: kept ones still get priority 1, so a new employer's relevant jobs are
+read within the day, and the rest get priority 4. Without this, the first batch of added
+boards (1,110 listings, 39 kept) would have used the new lane for about two and a half days.
+
 "Kept" means the screening rules kept the listing: its role is in a target family (data,
 analytics, BI, software, data science, ML) and it is in DFW or Houston or remote and open
 to Texas. It does not mean the listing matches the owner's profile, level, or sponsorship

@@ -229,3 +229,19 @@ def test_collection_queues_after_every_board_while_extraction_is_busy(env, monke
     assert report.status == "complete" and report.extraction_queued == 2
     assert len(calls) == 3  # after each of the two boards, and once at the end
     assert env.scalar("SELECT count(*) FROM extraction_attempts") == 0
+
+
+def test_a_new_boards_initial_import_keeps_only_kept_listings_in_the_new_lane(x):
+    x.track_from(T0 - HOUR)  # tracking started before the board was ever collected
+    x.collect(T0, [job(1), accountant(2)])  # the board's first complete scan
+    x.collect(T0 + HOUR, [job(1), accountant(2), job(3), accountant(4)])  # new postings
+    enqueue_new(x.conn, CONFIG, x.clock())
+    assert sorted(x.jobs(), key=lambda r: int(r[0])) == [
+        ("1", 1, "new_content", "pending"),  # kept import: read within the day
+        ("2", 4, "backlog", "pending"),  # other import: waits with the backlog
+        ("3", 1, "new_content", "pending"),
+        ("4", 3, "new_content", "pending"),  # posted after the import: a new posting
+    ]
+    model = ScriptedModel(reply())
+    x.run(model)
+    assert teams(model) == [1, 3, 4, 2]
