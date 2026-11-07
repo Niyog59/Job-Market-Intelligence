@@ -653,7 +653,9 @@ docker compose build web
    `docker compose run --rm jobs jobmarket analytics publish`.
 6. Restart on the new image: `docker compose up -d web caddy`, and if Airflow runs,
    `docker compose run --rm airflow-init` then
-   `docker compose up -d airflow-api airflow-dag-processor airflow-scheduler`.
+   `docker compose up -d airflow-api airflow-dag-processor airflow-scheduler`. If the
+   extraction worker runs (section W), also `docker compose up -d extract-worker`, so it runs
+   the new version too.
 7. Check: `docker compose ps` shows `web` healthy; repeat the F5 browser checks.
    `curl -s https://YOUR-DOMAIN/api/profile-stats.json` shows the ten public numbers once a
    publication has run on this version (step 5 runs one); before that it answers 404.
