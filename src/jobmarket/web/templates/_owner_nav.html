@@ -1,6 +1,7 @@
 <nav class="owner-nav" aria-label="Site">
   <a href="{{ url_for('newest') }}"{% if request.endpoint == 'newest' %} aria-current="page"{% endif %}>Newest jobs</a>
   <a href="{{ url_for('results') }}"{% if request.endpoint == 'results' %} aria-current="page"{% endif %}>Job search</a>
+  <a href="{{ url_for('employers') }}"{% if request.endpoint == 'employers' %} aria-current="page"{% endif %}>Employers</a>
   <a href="{{ url_for('insights_page') }}"{% if request.endpoint == 'insights_page' %} aria-current="page"{% endif %}>Market insights</a>
   <a href="{{ url_for('reports_page') }}"{% if request.endpoint == 'reports_page' %} aria-current="page"{% endif %}>Reports</a>
   {% if owner %}

@@ -160,3 +160,10 @@ def test_the_website_logs_in_as_the_read_only_login():
     )
     assert config.settings.db_user == "jobmarket_analytics"
     assert config.settings.db_password == "ro"
+
+
+def test_employers_page_shows_each_board_and_its_last_complete_check(world, db_settings):
+    response, html = get(world, db_settings, "/employers")
+    assert response.status_code == 200
+    assert html.count('<th scope="row">Acme</th>') == 2  # boards acme and acme2
+    assert "Last complete check" in html and "not a live feed" in html

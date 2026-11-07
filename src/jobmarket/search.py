@@ -928,3 +928,43 @@ def site_status(
         (list(ACTIVE_STATES),),
     ).fetchone()  # fmt: skip
     return SiteStatus(*boards, *listings)
+
+
+@dataclass(frozen=True)
+class BoardFreshness:
+    employer: str
+    source_system: str
+    last_complete_at: datetime | None  # the last time every page of the board was read
+    latest_scan_status: str | None
+    latest_scan_at: datetime | None
+    on_hold: bool
+    stale: bool
+    active_jobs: int
+    kept_jobs: int
+
+
+def board_freshness(
+    conn: psycopg.Connection, now: datetime, schema: str = SERVING_SCHEMA
+) -> list[BoardFreshness]:
+    """Every enabled board with its last complete check and its active jobs, by employer."""
+    _check_serving(conn, schema)
+    rows = conn.execute(
+        sql.SQL(
+            """
+            SELECT b.employer_name, b.source_system, b.last_complete_collected_at,
+                   b.latest_scan_status, b.latest_scan_started_at, b.on_hold,
+                   b.last_complete_collected_at IS NULL
+                       OR b.last_complete_collected_at < %(stale_before)s,
+                   count(p.posting_id), count(p.posting_id) FILTER (WHERE p.retained)
+            FROM {s}.srv_boards b
+            LEFT JOIN {s}.srv_postings p
+                ON p.board_id = b.board_id AND p.availability_state = ANY(%(active)s)
+            WHERE b.is_enabled
+            GROUP BY b.board_id, b.employer_name, b.source_system, b.last_complete_collected_at,
+                     b.latest_scan_status, b.latest_scan_started_at, b.on_hold
+            ORDER BY lower(b.employer_name), b.source_system
+            """
+        ).format(s=sql.Identifier(schema)),
+        {"stale_before": now - STALE_AFTER, "active": list(ACTIVE_STATES)},
+    ).fetchall()
+    return [BoardFreshness(*row) for row in rows]

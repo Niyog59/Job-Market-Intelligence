@@ -136,6 +136,12 @@ def create_app(config: WebConfig | None = None) -> Flask:
         status = search.site_status(conn(), g.now, config.serving_schema)
         return render_template("newest.html", result=result, status=status)
 
+    @app.get("/employers")
+    def employers():
+        boards = search.board_freshness(conn(), g.now, config.serving_schema)
+        status = search.site_status(conn(), g.now, config.serving_schema)
+        return render_template("employers.html", boards=boards, status=status)
+
     @app.get("/jobs/<int:posting_id>")
     def detail(posting_id: int):
         page = job_page(conn(), posting_id, config.serving_schema)
