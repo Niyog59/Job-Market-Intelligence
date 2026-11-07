@@ -142,6 +142,30 @@ what it costs, and what would make me revisit it. Back to the [README](../README
 - **Revisit when** the daily limit changes, new listings regularly exceed the reserve, or
   the server's memory measurement shows the worker does not fit.
 
+## Show new listings before extraction
+
+- **Problem.** On 2026-11-06 the default search on the live site showed 13 jobs. The data
+  was current (the serving views are live views), but the defaults hid most of it: kept
+  jobs only (147 of 5,297 active opportunities) and early career only (13 of those 147).
+  The early-career filter also hides a kept job as soon as the AI says it is not early
+  career. Collection ran twice a day, so a job could wait up to 15 hours to be found.
+- **Options.** Change the search defaults; a separate list with no AI filters; make that
+  list the home page.
+- **Choice (Niyog, 2026-11-06).** A separate public page, `/newest`, linked from the search
+  page and the header. It lists jobs first discovered in the past 3 days, kept jobs at every
+  level by default, newest first, with only the rule-based screening as filters. Initial
+  imports are hidden behind a checkbox. The search keeps its defaults.
+- **Also chosen.** Both lists hide jobs dated more than 30 days ago (source date, else
+  discovery date) unless asked. Nothing is deleted.
+- **Benefit.** A new job can be opened and applied to within seconds of its collection,
+  whatever the AI queue is doing.
+- **Cost.** The rule-based screening is the only relevance check on that page, and it has
+  known misses (it keeps some roles outside the target families and skips some inside). The
+  30-day rule hides most jobs on older boards: on the Mac copy, 134 of 156 kept active jobs
+  were dated more than 30 days before 2026-11-06.
+- **Revisit when** collection runs more often (the 3-day window could shrink) or the
+  screening rules change.
+
 ## One server
 
 - **Problem.** The site, the database, and the pipeline need a home, within a small budget.
@@ -195,6 +219,8 @@ Values that change product behavior, decided before they went into the code.
 | Task time limits | collection 45 min, retry check 30, AI batch 20, publication 20, backup 20, Sheet sync 10, summary and email 10 | DAG |
 | Sheet sync | after every successful publication | DAG |
 | Search page size | 25 results | [`search.py`](../src/jobmarket/search.py) |
+| Newest jobs window | first discovered in the past 3 days; kept jobs, every level, initial imports hidden by default | [`search.py`](../src/jobmarket/search.py) |
+| Older jobs in lists | hidden when dated more than 30 days ago (source date, else discovery), unless asked | [`search.py`](../src/jobmarket/search.py) |
 | "May be out of date" note | board without a complete collection for 36 hours | [`search.py`](../src/jobmarket/search.py) |
 | Experience filter bands | 0-1, 2-4, 5+ years, by the smallest required minimum | [`search.py`](../src/jobmarket/search.py) |
 | Sign-in | 8-character minimum, Argon2id; 3 wrong passwords pause sign-in for 15 minutes; sessions end after 2 hours idle or 7 days | [`owner.py`](../src/jobmarket/owner.py) |

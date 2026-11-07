@@ -4,6 +4,26 @@ What went wrong, where it happened, what I found, and what changed. Each entry s
 it happened in development (my Mac), in CI (GitHub Actions), or in production (the server
 behind https://jobobservatory.dev). Back to the [README](../README.md#problems-i-ran-into).
 
+## New jobs were hard to find on the website
+
+*Production, found 2026-11-06. Fixed in code; see the README for what is deployed.*
+
+- **What happened:** the default search on https://jobobservatory.dev showed 13 jobs, while
+  the site had 5,297 active job opportunities and its last collection had found new ones
+  that day.
+- **What I found:** nothing was waiting on the AI or on dbt. The serving views are live
+  views, so collected listings were stored and searchable at once. The defaults hid them:
+  kept jobs only (147 of 5,297) and early career only (13 of 147). A kept job that the AI
+  read and marked "not early career" dropped out of the default list. On top of that,
+  collection ran at noon and 9 PM only.
+- **What changed:** a public Newest jobs page that lists every job found in the past 3
+  days, newest first, before the AI reads it, with only the rule-based screening as filters
+  and an Apply link on every row ([decision](DECISIONS.md#show-new-listings-before-extraction)).
+- **How I checked it:** [`test_newest.py`](../tests/test_newest.py) collects a board with a
+  scripted API: an unextracted listing appears with its application link, sorts by
+  discovery, is not hidden by unknown requirements, keeps its place after a failed scan,
+  and gains its extracted details later as the same row.
+
 ## Google "high demand" errors used up a day of AI requests
 
 *Production, 2026-11-04 and 2026-11-05. Not fixed yet.*
