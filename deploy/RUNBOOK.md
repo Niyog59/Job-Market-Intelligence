@@ -655,6 +655,8 @@ docker compose build web
    `docker compose run --rm airflow-init` then
    `docker compose up -d airflow-api airflow-dag-processor airflow-scheduler`.
 7. Check: `docker compose ps` shows `web` healthy; repeat the F5 browser checks.
+   `curl -s https://YOUR-DOMAIN/api/profile-stats.json` shows the ten public numbers once a
+   publication has run on this version (step 5 runs one); before that it answers 404.
 
 The previous image stays on the server under its old tag.
 

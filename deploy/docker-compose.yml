@@ -112,9 +112,13 @@ services:
       JOBMARKET_TABLEAU_WORKBOOK: ${JOBMARKET_TABLEAU_WORKBOOK:-}
       JOBMARKET_TABLEAU_PROFILE: ${JOBMARKET_TABLEAU_PROFILE:-}
       GUNICORN_CMD_ARGS: ${GUNICORN_CMD_ARGS:---workers 1 --threads 4}
+      JOBMARKET_PUBLIC_DIR: /app/public
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      # Only the public numbers file (profile-stats.json) the publication writes; read-only.
+      - publicdata:/app/public:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
       interval: 30s
@@ -157,9 +161,11 @@ services:
       # Only for the daily `airflow db clean` task (Airflow blocks its own database inside
       # tasks; see the DAG file).
       JOBMARKET_AIRFLOW_DB_URL: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@db:5432/airflow
+      JOBMARKET_PUBLIC_DIR: /app/public
     volumes:
       - appdata:/app/data
       - airflowdata:/app/airflow
+      - publicdata:/app/public
       # The Google service account key for the dashboard Sheet (git-ignored; README inside).
       - ./secrets:/app/secrets:ro
 
@@ -219,13 +225,16 @@ services:
       DB_HOST: db
       DB_PORT: "5432"
       POSTGRES_PASSWORD: ""  # the superuser password is not needed here
+      JOBMARKET_PUBLIC_DIR: /app/public
     volumes:
       - appdata:/app/data
+      - publicdata:/app/public
       - ./secrets:/app/secrets:ro
 
 volumes:
   pgdata:
   appdata:
+  publicdata:
   airflowdata:
   caddy_data:
   caddy_config:

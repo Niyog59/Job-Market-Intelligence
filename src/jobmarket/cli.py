@@ -1443,10 +1443,14 @@ def _analytics_publish(settings: Settings, args) -> int:
     except analytics.AnalyticsUnavailable as exc:
         result = analytics.PublishResult(False, [str(exc)])
     finished = system_clock()
+    stats_note = None
+    if result.published:
+        stats_note = _write_profile_stats(builder)
     with db.connect(settings, autocommit=True) as conn:
         if result.published:
             operations.record_step(conn, "report_publish", started, finished, "succeeded",
-                                   {"built_at": result.built_at.isoformat()})  # fmt: skip
+                                   {"built_at": result.built_at.isoformat(),
+                                    "profile_stats": stats_note})  # fmt: skip
         else:
             operations.record_step(conn, "report_publish", started, finished, "failed",
                                    {"failures": result.failures[:20]},
@@ -1458,6 +1462,24 @@ def _analytics_publish(settings: Settings, args) -> int:
         return EXIT_FAILURE
     print(f"Published reports built {_when(result.built_at)}.")
     return EXIT_OK
+
+
+def _write_profile_stats(builder: Settings) -> str:
+    """Refresh profile-stats.json from the reports just published. Runs only after the swap
+    committed. A problem leaves the previous file in place and is reported, but does not undo
+    or fail the publication: the website already serves the new reports."""
+    from jobmarket import profile_stats
+
+    try:
+        with db.connect(builder, autocommit=True) as conn:
+            stats = profile_stats.refresh(conn)
+    except (profile_stats.ProfileStatsError, psycopg.Error, OSError) as exc:
+        print(f"Profile stats not written, the previous file stays: {exc}", file=sys.stderr)
+        return f"not written: {exc}"[:500]
+    path = profile_stats.stats_path()
+    print(f"Wrote {path} ({stats['boards_enabled']} boards, {stats['open_jobs']} open jobs, "
+          f"published {stats['last_published_at']}).")  # fmt: skip
+    return "written"
 
 
 def _analytics_login(settings: Settings) -> Settings:
