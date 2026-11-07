@@ -19,7 +19,7 @@ and pipeline health are on the live [Reports page](https://jobobservatory.dev/re
 
 | Metric | Value | Definition | Source | Environment |
 |---|---|---|---|---|
-| Enabled employer boards | 51 (21 Greenhouse, 30 Lever) | boards with `enabled = true` in the registry | `config/greenhouse_boards.toml`, `config/lever_boards.toml` | repository |
+| Enabled employer boards | 63 (31 Greenhouse, 32 Lever) since batch 1 on 2026-11-06; 51 before | boards with `enabled = true` in the registry | `config/greenhouse_boards.toml`, `config/lever_boards.toml` | repository; production after `sources sync` |
 | Kept postings, listed | 166 (165 observed, 1 possibly unavailable) | source records kept by the screening rules and still listed | `/reports`, "Current inventory", reports built 21:03 CST | production |
 | Kept opportunities, listed | 147 (146 observed, 1 possibly unavailable) | the same, with each duplicate group counted once | `/reports`, "Opportunities" column | production |
 | All collected postings, listed | 5,345 (5,271 observed, 74 possibly unavailable) | every listing collected from the 51 boards, kept or not | `/reports?population=all` | production |

@@ -238,8 +238,9 @@ The analytics login, the Gemini settings, and every other command:
 
 - Extraction accuracy is not measured. Coverage means a result exists, not that every quote
   was found or that it is right; the 30 evaluation labels are not reviewed yet.
-- <!--PROFILE:boards-->51<!--/PROFILE:boards--> boards are a sample of employers, not the market. I plan to grow toward 300 to 400 in
-  stages, only while collection stays reliable and the free AI tier keeps up.
+- <!--PROFILE:boards-->63<!--/PROFILE:boards--> boards are a sample of employers, not the market. I add verified boards in
+  batches of at most 25 and measure each batch before the next
+  ([how](docs/COLLECTION.md#adding-boards)).
 - The free AI tier allows 500 requests a day, so most of the roughly 5,300 collected listings
   outside the kept group still have no extracted details.
 - One server: a failure means rebuilding from the runbook and the last backup, with up to a

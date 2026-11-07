@@ -364,30 +364,31 @@ local_evidence = "Plano, TX"
 official_source = "https://www.dadavidson.com/Careers"
 evidence = "Mapping from the 2026-10-26 research pass. The automated recheck on 2026-10-26 was refused (HTTP 403 to this project's client) and was not worked around, so the mapping was not re-confirmed in this pass."
 
-# --- Pending boards (disabled until the missing evidence is found) -------------------
-
 [[boards]]
 employer = "Zimperium"
 employer_slug = "zimperium"
 token = "zimperium"
 region = "global"
-enabled = false
-verification = "pending"
+enabled = true
+verification = "verified"
 metros = ["dfw"]
 local_evidence = "Dallas, Texas"
 official_source = "https://zimperium.com/company/careers"
-evidence = "Official careers page embeds the Lever jobs widget with accountName 'Zimperium'. The API answers 'Document not found' for that exact spelling and serves postings only at 'zimperium', so the exact token is not confirmed."
+evidence = "Official careers page links to jobs.lever.co/zimperium postings (rendered page, 2026-11-06); the exact token is confirmed."
 [[boards]]
 employer = "Texas Stock Exchange"
 employer_slug = "texas-stock-exchange"
 token = "txse"
 region = "global"
-enabled = false
-verification = "pending"
+enabled = true
+verification = "verified"
 metros = ["dfw"]
 local_evidence = "Dallas, TX"
 official_source = "https://www.txse.com/careers"
-evidence = "Official careers page loads its jobs with scripts; no Lever reference was found in it on 2026-10-26."
+evidence = "Official careers page links to jobs.lever.co/txse postings (rendered page, 2026-11-06)."
+
+# --- Pending boards (disabled until the missing evidence is found) -------------------
+
 [[boards]]
 employer = "Zoox"
 employer_slug = "zoox"

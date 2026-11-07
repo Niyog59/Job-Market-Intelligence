@@ -292,18 +292,130 @@ local_evidence = "Frisco"
 official_source = "https://www.boingo.com/corporate/careers"
 evidence = "Official careers page loads greenhouse-custom-logic.js, which calls this exact board API."
 
-# --- Pending candidates (disabled until the official connection is verified) ---------
-
 [[boards]]
 employer = "Torq Consulting"
 employer_slug = "torq-consulting"
 token = "gotorq"
 region = "us"
-enabled = false
-verification = "pending"
+enabled = true
+verification = "verified"
 metros = ["dfw"]
 local_evidence = "Plano"
 official_source = "https://www.gotorq.com/join-our-team"
+evidence = "Official careers page links to job-boards.greenhouse.io/gotorq jobs (rendered page, 2026-11-06)."
+
+[[boards]]
+employer = "SmithRx"
+employer_slug = "smithrx"
+token = "smithrx"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano"
+official_source = "https://smithrx.com/careers"
+evidence = "Official careers page links to job-boards.greenhouse.io/smithrx jobs (rendered page, 2026-11-06)."
+checks = "Empty rendered careers page did not mean no jobs."
+
+[[boards]]
+employer = "Onapsis"
+employer_slug = "onapsis"
+token = "onapsis"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Dallas/Irving"
+official_source = "https://onapsis.com/company/careers/"
+evidence = "Official careers page embeds the Greenhouse board for=onapsis (2026-11-06)."
+
+[[boards]]
+employer = "Cloudflare"
+employer_slug = "cloudflare"
+token = "cloudflare"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas/Houston titles"
+official_source = "https://www.cloudflare.com/careers/jobs/"
+evidence = "Official jobs page links to boards.greenhouse.io/cloudflare jobs (rendered page, 2026-11-06)."
+checks = "Location may say Distributed."
+
+[[boards]]
+employer = "MongoDB"
+employer_slug = "mongodb"
+token = "mongodb"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw", "houston"]
+local_evidence = "Dallas/Houston hiring"
+official_source = "https://www.mongodb.com/careers/jobs/8304146"
+evidence = "Official careers job page references the Greenhouse board for=mongodb (2026-11-06)."
+
+[[boards]]
+employer = "Care Access"
+employer_slug = "care-access"
+token = "careaccess"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://careaccess.com/about-us/careers"
+evidence = "Official careers page embeds the Greenhouse board for=careaccess (2026-11-06)."
+checks = "Remote ML/data roles need an eligibility check."
+
+[[boards]]
+employer = "Octane"
+employer_slug = "octane"
+token = "octanelending"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Irving"
+official_source = "https://octane.co/o/who-we-are/careers/"
+evidence = "Official careers page embeds the Greenhouse board for=octanelending (2026-11-06)."
+
+[[boards]]
+employer = "Squarepoint Capital"
+employer_slug = "squarepoint-capital"
+token = "squarepointcapital"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston"
+official_source = "https://www.squarepoint-capital.com/open-opportunities"
+evidence = "Official open-opportunities page links jobs 8002291 and 8119232, both on this board's API (2026-11-06)."
+
+[[boards]]
+employer = "Fervo Energy"
+employer_slug = "fervo-energy"
+token = "fervoenergy"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["houston"]
+local_evidence = "Houston (headquarters); 58 of 68 listed jobs in Houston on 2026-11-06"
+official_source = "https://fervoenergy.com/careers/"
+evidence = "Official careers page links to the Greenhouse board fervoenergy (2026-11-06)."
+
+[[boards]]
+employer = "Toyota Connected"
+employer_slug = "toyota-connected"
+token = "toyotaconnected"
+region = "us"
+enabled = true
+verification = "verified"
+metros = ["dfw"]
+local_evidence = "Plano (headquarters); both listed jobs in DFW on 2026-11-06"
+official_source = "https://www.toyotaconnected.com/careers"
+evidence = "Official careers page links jobs 8891670002 and 8795019002 (gh_jid), both on this board's API (2026-11-06)."
+
+# --- Pending candidates (disabled until the official connection is verified) ---------
 
 [[boards]]
 employer = "Koddi"
@@ -317,29 +429,6 @@ local_evidence = "Fort Worth"
 official_source = "https://koddi.com/careers/"
 
 [[boards]]
-employer = "SmithRx"
-employer_slug = "smithrx"
-token = "smithrx"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["dfw"]
-local_evidence = "Plano"
-official_source = "https://smithrx.com/careers"
-checks = "Empty rendered careers page did not mean no jobs."
-
-[[boards]]
-employer = "Onapsis"
-employer_slug = "onapsis"
-token = "onapsis"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["dfw"]
-local_evidence = "Dallas/Irving"
-official_source = "https://onapsis.com/company/careers/"
-
-[[boards]]
 employer = "DRW"
 employer_slug = "drw"
 token = "drweng"
@@ -349,29 +438,6 @@ verification = "pending"
 metros = ["houston"]
 local_evidence = "Houston"
 official_source = "https://www.drw.com/work-at-drw/listings"
-
-[[boards]]
-employer = "Cloudflare"
-employer_slug = "cloudflare"
-token = "cloudflare"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["dfw", "houston"]
-local_evidence = "Dallas/Houston titles"
-official_source = "https://www.cloudflare.com/careers/"
-checks = "Location may say Distributed."
-
-[[boards]]
-employer = "MongoDB"
-employer_slug = "mongodb"
-token = "mongodb"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["dfw", "houston"]
-local_evidence = "Dallas/Houston hiring"
-official_source = "https://www.mongodb.com/careers/jobs/8304146"
 
 [[boards]]
 employer = "Bluestaq"
@@ -514,18 +580,6 @@ local_evidence = "Houston"
 official_source = ""
 
 [[boards]]
-employer = "Care Access"
-employer_slug = "care-access"
-token = "careaccess"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["houston"]
-local_evidence = "Houston"
-official_source = "https://careaccess.com/about-us/careers"
-checks = "Remote ML/data roles need an eligibility check."
-
-[[boards]]
 employer = "ASM"
 employer_slug = "asm"
 token = "asm"
@@ -536,17 +590,6 @@ metros = ["dfw"]
 local_evidence = "Richardson"
 official_source = ""
 checks = "Semiconductor field roles are not automatically relevant."
-
-[[boards]]
-employer = "Octane"
-employer_slug = "octane"
-token = "octanelending"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["dfw"]
-local_evidence = "Irving"
-official_source = "https://octane.co/o/who-we-are/careers/"
 
 [[boards]]
 employer = "Meriton"
@@ -592,17 +635,6 @@ verification = "pending"
 metros = ["dfw"]
 local_evidence = "Irving"
 official_source = ""
-
-[[boards]]
-employer = "Squarepoint Capital"
-employer_slug = "squarepoint-capital"
-token = "squarepointcapital"
-region = "us"
-enabled = false
-verification = "pending"
-metros = ["houston"]
-local_evidence = "Houston"
-official_source = "https://www.squarepoint-capital.com/open-opportunities"
 
 [[boards]]
 employer = "Art of Problem Solving"

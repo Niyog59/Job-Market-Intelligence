@@ -14,7 +14,7 @@ what it costs, and what would make me revisit it. Back to the [README](../README
 - **Benefit.** The data is structured, permitted, and complete per board, so "the job is not
   in a complete scan" means something. No login walls or bot workarounds.
 - **Cost.** Coverage is limited to employers on these two systems, and verifying each board
-  takes time (51 enabled boards so far, with the rejected candidates and their reasons kept
+  takes time (63 enabled boards so far, with the rejected candidates and their reasons kept
   in the registry).
 - **Revisit when** important employers turn out to use another system (Ashby, Workday) often
   enough to justify a third connector.
@@ -191,6 +191,28 @@ what it costs, and what would make me revisit it. Back to the [README](../README
   sooner; mass disappearances still put the board on hold.
 - **Revisit when** more boards make a collection take much longer, or new jobs posted in
   the evening matter more than the overnight gap.
+
+## Adding employers in measured batches
+
+- **Problem.** 51 boards are a small sample, and the request was to cover as many verified
+  employers in DFW, Houston, and remote-for-Texas as the system can reliably handle.
+- **Choice (Niyog, 2026-11-06).** Batches of at most 25 boards, each verified (see
+  [Adding boards](COLLECTION.md#adding-boards)) and measured before the next. A new
+  employer's existing listings are initial imports: kept ones go to the AI's new lane, the
+  rest to the backlog.
+- **Batch 1 (2026-11-06).** 12 boards: 10 of the registry's pending boards whose official
+  link could now be shown, and 2 new ones (Fervo Energy, Toyota Connected). On the Mac copy
+  their first collection took 17 seconds and 17.0 MB of raw responses for 1,110 listings,
+  39 of them kept. A full collection grows from about 88 MB to about 105 MB.
+- **Deferred, with reasons.** Cribl (remote jobs only, no DFW or Houston evidence), Field AI
+  (no Texas jobs), Kodiak and Later (official links verified, no DFW or Houston jobs now),
+  and DRW, Bluestaq, CoreWeave, Horace Mann, and Bounteous (no link from the careers page to
+  the board was found). Turing, Vailexa, Electronic Power Design, Innovative Signal
+  Analysis, Upwing Energy, and Gopuff were not rechecked in this batch.
+- **Cost.** Each batch adds raw storage, collection time, and AI backlog. The AI's free tier,
+  not collection, limits how much of the collected data gets structured details.
+- **Revisit when** a full collection takes more than about 10 minutes, the server's memory
+  or disk measurements tighten, or a batch shows failing boards.
 
 ## One server
 
