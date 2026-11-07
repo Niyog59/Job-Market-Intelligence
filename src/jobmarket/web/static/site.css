@@ -312,6 +312,21 @@ legend + * { clear: both; }
   .data-table thead th { white-space: normal; vertical-align: bottom; }
 }
 
+/* Newest jobs */
+.newest-prompt {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  max-width: 760px; margin-top: 14px; padding: 12px 16px;
+  border: 1px solid var(--blue); border-radius: var(--radius); background: #fff;
+}
+.newest-prompt-title { font-weight: 700; }
+.newest-prompt .button { white-space: nowrap; }
+.lede { max-width: 760px; margin: 4px 0 0; }
+.newest-filters { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 16px; margin: 12px 0 0; max-width: 1100px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; padding: 4px 0; }
+.filter-label { font-weight: 700; flex: 0 0 150px; }
+.filter-options { display: flex; flex-wrap: wrap; gap: 0 18px; flex: 1; min-width: 0; }
+.newest-page .results { margin-top: 16px; max-width: 1100px; }
+
 /* Market insights */
 .insights-prompt {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -340,6 +355,7 @@ legend + * { clear: both; }
 .dashboard-card:hover { border-color: var(--blue); }
 .dashboard-card span { color: var(--muted); font-size: 13px; }
 @media (max-width: 820px) {
-  .insights-prompt { flex-direction: column; align-items: flex-start; }
+  .insights-prompt, .newest-prompt { flex-direction: column; align-items: flex-start; }
+  .filter-label { flex-basis: 100%; }
   .viz-frame iframe { height: 640px; }
 }

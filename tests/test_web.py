@@ -83,7 +83,8 @@ def test_descriptions_are_sanitized_and_links_are_safe(world, db_settings):
 
 def test_pending_extraction_is_not_shown_as_not_stated(world, db_settings):
     _, html = get(world, db_settings, job(world, 3))
-    assert "Structured details pending" in html
+    assert "Requirements processing: the AI has not read this version" in html
+    assert "Not stated" not in html
     assert "req-table" not in html
     assert "Build things with the team." in html  # the description is still readable
 

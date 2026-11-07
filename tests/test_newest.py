@@ -186,3 +186,30 @@ def test_failed_scan_keeps_jobs_listed_and_extraction_enriches_the_same_row(worl
     assert {r.extraction_status for r in after.rows} == {"extracted"}
     assert after.total == 2
 
+
+def test_newest_page_is_public_and_links_to_apply_and_back(world, db_settings):
+    pytest.importorskip("flask", reason="the website needs Flask (pip install -e '.[web]')")
+    from jobmarket.web import create_app
+    from jobmarket.web.config import WebConfig
+
+    config = WebConfig(db_settings, serving_schema=world.schema, source_schema=world.source,
+                       clock=lambda: NOW)  # fmt: skip
+    app = create_app(config)
+    app.testing = True
+    client = app.test_client()
+
+    response = client.get("/newest?role=backend")
+    html = " ".join(response.get_data(as_text=True).split())
+    assert response.status_code == 200
+    assert "Backend Engineer" in html and "Analytics Engineer" not in html
+    assert 'href="https://job-boards.greenhouse.io/acme/jobs/3" target="_blank"' in html
+    assert "Board checked" in html
+    assert "1 initial import from newly added boards hidden" not in html  # B1 is not backend
+
+    detail = f"/jobs/{world.ids[N1_]}?list=newest&from=role%3Dbackend"
+    page = " ".join(client.get(detail).get_data(as_text=True).split())
+    assert 'href="/newest?role=backend" data-back>Back to newest jobs' in page
+    assert "Apply on company site" in page
+
+    home = " ".join(client.get("/").get_data(as_text=True).split())
+    assert 'href="/newest"' in home

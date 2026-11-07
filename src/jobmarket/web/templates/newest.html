@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set p = result.params %}
+{% set window_days = (S.NEWEST_WINDOW.total_seconds() // 86400)|int %}
+{% set old_days = (S.OLD_AFTER.total_seconds() // 86400)|int %}
+{% block title %}Newest jobs{% endblock %}
+{% block body_class %}results-page newest-page{% endblock %}
+
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-text">
+    <p class="eyebrow">Job Market Intelligence</p>
+    <h1>Newest jobs</h1>
+  </div>
+  {% include "_owner_nav.html" %}
+</header>
+
+<form id="newest" class="page" method="get" action="{{ url_for('newest') }}">
+  <p class="lede">Jobs first found in the past {{ window_days }} days, newest first. Each one is listed as
+    soon as its employer's board is collected, before the AI reads it, with the employer's
+    full description and application link.</p>
+  <p class="freshness">
+    Last complete collection: {{ fmt.when(status.last_complete_collection) }}
+    ({{ fmt.age(status.last_complete_collection, now) }}) · {{ status.boards }} boards.
+    Each row says when its employer's board was last checked completely.
+  </p>
+  {% if status.stale_boards %}
+  <p class="banner warn" role="status">
+    {{ status.stale_boards }} board{{ "s" if status.stale_boards != 1 }} had no complete
+    collection in the last 36 hours, so new jobs there may be missing.
+  </p>
+  {% endif %}
+  {% for problem in result.problems %}
+  <p class="banner warn" role="status">{{ problem }}</p>
+  {% endfor %}
+
+  <fieldset class="newest-filters">
+    <legend class="visually-hidden">Filters</legend>
+    <div class="filter-row">
+      <span class="filter-label">Jobs</span>
+      <div class="filter-options">
+      {% for key, label in {"kept": "Kept jobs", "all": "All collected listings"}.items() %}
+      <label class="check"><input type="radio" name="population" value="{{ key }}" {{ "checked" if key == p.population }}><span>{{ label }}</span></label>
+      {% endfor %}
+      </div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Role, by title</span>
+      <div class="filter-options">
+      {% for key, label in S.FAMILY_CHOICES.items() %}
+      <label class="check"><input type="checkbox" name="role" value="{{ key }}" {{ "checked" if key in p.families }}><span>{{ label }}</span></label>
+      {% endfor %}
+      </div>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Location, as listed</span>
+      <div class="filter-options">
+      {% for key, value in S.AREA_CHOICES.items() %}
+      <label class="check"><input type="checkbox" name="area" value="{{ key }}" {{ "checked" if key in p.areas }}><span>{{ value[0] }}</span></label>
+      {% endfor %}
+      </div>
+    </div>
+    <div class="filter-row">
+      <label class="check"><input type="checkbox" name="imports" value="include" {{ "checked" if p.imports }}><span>Include initial imports from newly added boards</span></label>
+      <label class="check"><input type="checkbox" name="old" value="include" {{ "checked" if p.include_old }}><span>Include jobs posted more than {{ old_days }} days ago</span></label>
+    </div>
+    <div class="filter-actions">
+      <button class="button" type="submit">Apply</button>
+      {% if p.query_string() %}<a class="link" href="{{ url_for('newest') }}">Reset</a>{% endif %}
+      {% if p.narrowed %}<a class="link" href="{{ url_for('newest', population='all') }}">Show every new listing</a>{% endif %}
+    </div>
+    <p class="hint">Kept jobs passed the screening rules: a data or software role by its title and duties, in DFW or Houston, or remote and open to Texas. These rules read only what the employer posted, so they work before the AI does. For experience, skills, or sponsorship, use <a href="{{ url_for('results', level='any') }}">Job search</a>.</p>
+  </fieldset>
+
+  <main id="main" class="results" aria-live="polite">
+    <div class="result-bar">
+      <p class="count">
+        {% if result.total %}
+        <strong>{{ "{:,}".format(result.total) }}</strong> new {{ "job" if result.total == 1 else "jobs" }}
+        · showing {{ result.first }}&ndash;{{ result.last }}
+        {% else %}
+        <strong>No new jobs</strong> in the past {{ window_days }} days match
+        {% endif %}
+      </p>
+    </div>
+    {% if result.hidden_imports or result.hidden_old %}
+    <p class="banner muted">
+      {% if result.hidden_imports %}{{ result.hidden_imports }} initial import{{ "s" if result.hidden_imports != 1 }} from newly added boards hidden (<a href="?{{ p.query_string(imports=true, page=1) }}">show</a>). They were already posted when the board was added, so they are not new postings.{% endif %}
+      {% if result.hidden_old %}{{ result.hidden_old }} job{{ "s" if result.hidden_old != 1 }} posted more than {{ old_days }} days ago hidden (<a href="?{{ p.query_string(include_old=true, page=1) }}">show</a>).{% endif %}
+    </p>
+    {% endif %}
+
+    {% if not result.rows %}
+    <div class="empty">
+      <p>Nothing new matches these filters yet.</p>
+      <ul>
+        {% if p.narrowed %}<li><a href="{{ url_for('newest', population='all') }}">Show every new listing</a></li>{% endif %}
+        <li><a href="{{ url_for('results', level='any') }}">Search all active jobs</a></li>
+      </ul>
+    </div>
+    {% else %}
+    <ol class="rows">
+      {% for row in result.rows %}
+      {% set qs = p.query_string() %}
+      {% set href = url_for('detail', posting_id=row.posting_id, list='newest', **({'from': qs} if qs else {})) %}
+      {% set label = fmt.extraction_label(row.extraction_status) %}
+      <li class="row">
+        <div class="row-main">
+          <h2 class="row-title"><a href="{{ href }}">{{ row.title }}</a></h2>
+          <p class="row-sub">
+            {{ row.employer }}
+            · {{ row.locations[0] if row.locations else (row.location_text or "Location not listed") }}{% if row.locations|length > 1 %} + {{ row.locations|length - 1 }} more{% endif %}
+            {% set pay = fmt.salary(row.salary_range) %}{% if pay %} · {{ pay }}{% endif %}
+          </p>
+          <p class="row-meta">
+            Found {{ fmt.when(row.discovered_at) }} ({{ fmt.age(row.discovered_at, now) }}){% if row.cohort == "initial_import" %} <span class="tag" title="Found in the first complete collection of this board, so it may have been posted earlier">initial import</span>{% endif %}
+            {% if row.source_date %} · {{ fmt.DATE_KIND_LABELS[row.source_date_kind] }} {{ fmt.day(row.source_date) }} ({{ fmt.SOURCE_LABELS[row.source_system] }}){% else %} · No posting date from the source{% endif %}
+            · {% if row.board_last_complete_at %}Board checked {{ fmt.age(row.board_last_complete_at, now) }}{% else %}Board not checked completely yet{% endif %}
+            {% if row.records > 1 %} · <span class="tag">{{ row.records }} postings of one job</span>{% endif %}
+          </p>
+          <p class="row-meta">
+            {% if label %}<span class="tag">{{ label }}</span>{% elif row.early_career == "yes" %}<span class="tag">early career</span>{% elif row.early_career == "internship" %}<span class="tag">internship</span>{% else %}<span class="tag">details extracted</span>{% endif %}
+          </p>
+        </div>
+        <div class="row-status">
+          {% if row.apply_url %}
+          <a class="button small{{ ' secondary' if row.group_state != 'observed' }}" href="{{ row.apply_url }}" target="_blank" rel="noopener noreferrer">{{ "Apply" if row.group_state == "observed" else "Check listing" }} &#8599;</a>
+          {% endif %}
+          {% if row.group_state == "possibly_unavailable" %}<span class="status warn">Possibly unavailable</span>{% endif %}
+          {% if row.stale %}<span class="status warn" title="No complete collection of this board in 36 hours">May be out of date</span>{% endif %}
+          {% if row.board_on_hold %}<span class="status warn">Board on hold</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+
+    {% if result.pages > 1 %}
+    <nav class="pager" aria-label="Pages">
+      {% if result.page > 1 %}<a href="?{{ p.query_string(page=result.page - 1) }}" rel="prev">Previous</a>{% endif %}
+      {% for n in range(1, result.pages + 1) %}
+        {% if n == 1 or n == result.pages or (n - result.page)|abs <= 2 %}
+          {% if n == result.page %}<span aria-current="page">{{ n }}</span>{% else %}<a href="?{{ p.query_string(page=n) }}">{{ n }}</a>{% endif %}
+        {% elif (n - result.page)|abs == 3 %}<span class="gap">&hellip;</span>{% endif %}
+      {% endfor %}
+      {% if result.page < result.pages %}<a href="?{{ p.query_string(page=result.page + 1) }}" rel="next">Next</a>{% endif %}
+    </nav>
+    {% endif %}
+  </main>
+</form>
+{% endblock %}
