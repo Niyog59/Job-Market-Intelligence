@@ -86,6 +86,8 @@ def register(app, config, conn, private_conn):
     def back_to_job(posting_id: int, code: str):
         origin = request.form.get("from", "")
         extra = {"from": origin} if origin else {}
+        if request.form.get("list") == "newest":
+            extra["list"] = "newest"
         return redirect(url_for("detail", posting_id=posting_id, n=code, **extra))
 
     # ---------------------------------------------------------------- profile

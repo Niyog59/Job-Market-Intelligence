@@ -144,7 +144,7 @@ extraction without a rebuild; a build is needed only after the model definitions
 
 | Model | Grain |
 |---|---|
-| `srv_postings` | listing with stored content: current version, links, availability state (as stored by the availability rules), cohort, duplicate group, the current version's extraction (role categories, early career, place, arrangement, sponsorship, employment type, smallest required overall minimum years, skills asked for as required or preferred), Lever's structured salary range, and board freshness |
+| `srv_postings` | listing with stored content: current version, links, availability state (as stored by the availability rules), the rule-based screening (kept, role families, Texas eligibility), cohort, duplicate group, the current version's extraction (role categories, early career, place, arrangement, sponsorship, employment type, smallest required overall minimum years, skills asked for as required or preferred), Lever's structured salary range, and board freshness |
 | `srv_boards` | board: last complete collection, last scan counted by the availability rules, active hold |
 
 Text search uses `posting_search_vector(title, description_text)`, an indexed function in

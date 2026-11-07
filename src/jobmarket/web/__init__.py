@@ -129,18 +129,36 @@ def create_app(config: WebConfig | None = None) -> Flask:
                                popular=popular, marks=marks, visit=g.get("visit"),
                                headline=headline)  # fmt: skip
 
+    @app.get("/newest")
+    def newest():
+        params, problems = search.parse_newest(request.args)
+        result = search.newest(conn(), params, g.now, problems, config.serving_schema)
+        status = search.site_status(conn(), g.now, config.serving_schema)
+        return render_template("newest.html", result=result, status=status)
+
     @app.get("/jobs/<int:posting_id>")
     def detail(posting_id: int):
         page = job_page(conn(), posting_id, config.serving_schema)
         if page is None:
             abort(404)
-        # The search the reader came from (only a query string; the path is always "/").
+        # The list the reader came from: its query string (from), and list=newest for
+        # Newest jobs; otherwise the search, whose path is always "/".
         back = MultiDict(parse_qsl(request.args.get("from", ""), keep_blank_values=False))
-        browse, _ = results_for(back)
+        if request.args.get("list") == "newest":
+            params, _ = search.parse_newest(back)
+            browse = search.newest(conn(), params, g.now, [], config.serving_schema)
+            back_qs = params.query_string()
+            back_href = url_for("newest") + ("?" + back_qs if back_qs else "")
+            link_args = {"list": "newest", **({"from": back_qs} if back_qs else {})}
+        else:
+            browse, _ = results_for(back)
+            back_qs = browse.params.query_string()
+            back_href = url_for("results") + ("?" + back_qs if back_qs else "")
+            link_args = {"from": back_qs} if back_qs else {}
         mine = (private_pages.private_job_context(config, conn, private_conn, posting_id, page)
                 if g.get("owner") else None)  # fmt: skip
-        return render_template("detail.html", page=page, browse=browse, back=browse.params,
-                               mine=mine)  # fmt: skip
+        return render_template("detail.html", page=page, browse=browse, back_href=back_href,
+                               link_args=link_args, mine=mine)  # fmt: skip
 
     @app.get("/reports")
     def reports_page():

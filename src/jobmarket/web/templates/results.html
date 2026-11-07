@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% set p = result.params %}
+{% set old_days = (S.OLD_AFTER.total_seconds() // 86400)|int %}
 {% block title %}{{ "Archived jobs" if p.view == "archived" else "Job search" }}{% endblock %}
 {% block body_class %}results-page{% endblock %}
 
@@ -37,6 +38,14 @@
            placeholder="Search title, company, or description">
     <button class="button" type="submit">Search</button>
   </div>
+
+  <aside class="newest-prompt" aria-labelledby="newest-prompt-title">
+    <div>
+      <p class="newest-prompt-title" id="newest-prompt-title">Applying today?</p>
+      <p>Newest jobs lists every job found in the past {{ (S.NEWEST_WINDOW.total_seconds() // 86400)|int }} days the moment it is collected, before the AI reads it.</p>
+    </div>
+    <a class="button" href="{{ url_for('newest') }}">See newest jobs</a>
+  </aside>
 
   <aside class="insights-prompt" aria-labelledby="insights-prompt-title">
     <div>
@@ -188,6 +197,15 @@
         <p class="hint">Jobs whose details are pending or not stated are shown with the reason. Jobs that state something different are never shown.</p>
       </fieldset>
 
+      <fieldset>
+        <legend>Older jobs</legend>
+        <label class="check">
+          <input type="checkbox" name="old" value="include" {{ "checked" if p.include_old }}>
+          <span>Include jobs posted more than {{ old_days }} days ago</span>
+        </label>
+        <p class="hint">A job's date is the employer's posting date, or the day it was first found when the source gives none. Older jobs are kept for reports, just not listed.</p>
+      </fieldset>
+
       <p class="hint">Choices within one group: any of them. Different groups: all must match.</p>
       <div class="filter-actions">
         <button class="button" type="submit">Apply filters</button>
@@ -225,6 +243,9 @@
         <span class="loading" data-loading hidden>Searching&hellip;</span>
       </div>
 
+      {% if result.hidden_old %}
+      <p class="banner muted">{{ "{:,}".format(result.hidden_old) }} matching job{{ "s" if result.hidden_old != 1 }} posted more than {{ old_days }} days ago {{ "are" if result.hidden_old != 1 else "is" }} hidden (<a href="?{{ p.query_string(include_old=true, page=1) }}">show</a>).</p>
+      {% endif %}
       {% if p.view == "archived" %}
       <p class="banner muted">Archived jobs are assumed inactive (missing from three qualifying scans) or closed on official evidence. They stay readable here.</p>
       {% endif %}
@@ -234,6 +255,7 @@
         <p>No {{ "archived" if p.view == "archived" else "active" }} jobs match.</p>
         <ul>
           {% if p.level != "any" %}<li><a href="?{{ p.query_string(level='any', page=1) }}">Show every career level</a></li>{% endif %}
+          {% if result.hidden_old %}<li><a href="?{{ p.query_string(include_old=true, page=1) }}">Include jobs posted more than {{ old_days }} days ago</a></li>{% endif %}
           {% if not p.include_unknown %}<li><a href="?{{ p.query_string(include_unknown=true, page=1) }}">Include jobs with unknown information</a></li>{% endif %}
           {% if p.population == "kept" %}<li><a href="?{{ p.query_string(population='all', page=1) }}">Search all collected listings</a></li>{% endif %}
           {% if result.other_view_total %}<li><a href="?{{ p.query_string(view='archived' if p.view == 'active' else 'active', page=1) }}">See {{ result.other_view_total }} {{ "archived" if p.view == "active" else "active" }} match{{ "es" if result.other_view_total != 1 }}</a></li>{% endif %}

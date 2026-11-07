@@ -24,8 +24,10 @@ now half the project.
 *A job page on [jobobservatory.dev](https://jobobservatory.dev). Each extracted requirement
 links back to the sentence it came from, so I can check the AI's answer against the listing.*
 
-The live site has three parts:
+The live site has four parts:
 
+- **[Newest jobs](https://jobobservatory.dev/newest):** every job found in the past 3 days,
+  newest first, listed as soon as it is collected, before the AI reads it.
 - **Job search** with filters for role, location, level, experience, skills, and sponsorship.
 - **[Reports](https://jobobservatory.dev/reports):** inventory, daily activity, skills,
   experience, seniority, and sponsorship tables, rebuilt after each collection.
@@ -151,6 +153,10 @@ PySpark and Databricks Free Edition are not part of it. I used them only for the
 ## Problems I ran into
 
 The full write-ups, with what I checked, are in [PROBLEMS.md](docs/PROBLEMS.md).
+
+- **New jobs were hard to find** (production, found 2026-11-06). The data was live, but the
+  default search showed 13 of 5,297 active jobs: kept jobs only, early career only. I added
+  a Newest jobs page that lists every job found in the past 3 days before the AI reads it.
 
 - **Google errors used up a day of AI requests** (production, 2026-11-04 and 11-05, not fixed
   yet). Google's model kept answering "high demand" (HTTP 503), and every retry counted toward

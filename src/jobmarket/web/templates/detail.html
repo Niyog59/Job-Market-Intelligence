@@ -2,7 +2,8 @@
 {% set l = page.listing %}
 {% set s = page.serving %}
 {% set ex = l.extraction %}
-{% set back_qs = back.query_string() %}
+{% set back_qs = link_args.get("from", "") %}
+{% set from_newest = link_args.list == "newest" %}
 {% block title %}{{ l.title }} at {{ l.employer }}{% endblock %}
 {% block body_class %}detail-page{% endblock %}
 
@@ -20,7 +21,7 @@
   </div>
   <div class="toolbar-actions">
     {% include "_owner_nav.html" %}
-    <a class="button" href="{{ url_for('results') }}{{ '?' ~ back_qs if back_qs }}" data-back>Back to results</a>
+    <a class="button" href="{{ back_href }}" data-back>{{ "Back to newest jobs" if from_newest else "Back to results" }}</a>
   </div>
 </header>
 
@@ -34,7 +35,7 @@
         {% if ex.normalized %}
           {% set wa = ex.normalized.work_arrangement %}
           {{ fmt.ARRANGEMENT_LABELS.get(wa.value, fmt.words(wa.value)) }}{% if wa.onsite_days_per_week is not none %} · {{ "%g"|format(wa.onsite_days_per_week) }} days on site{% endif %}
-        {% else %}<span class="muted">Structured details pending</span>{% endif %}
+        {% else %}<span class="muted">{{ fmt.extraction_label(ex.status) }}</span>{% endif %}
       </dd></div>
       <div><dt>Salary</dt><dd>
         {% set pay = fmt.salary(s.salary_range) %}
@@ -43,7 +44,7 @@
       </dd></div>
       <div><dt>Employment</dt><dd>
         {% if ex.normalized %}{{ fmt.EMPLOYMENT_LABELS.get(ex.normalized.employment_type.value, fmt.words(ex.normalized.employment_type.value)) }}
-        {% else %}<span class="muted">Structured details pending</span>{% endif %}
+        {% else %}<span class="muted">{{ fmt.extraction_label(ex.status) }}</span>{% endif %}
       </dd></div>
     </dl>
 
@@ -140,12 +141,12 @@
         {% endfor %}
       </div>
       <p class="hint">Extracted by AI from the current description; every quote was checked against that text. The structure can still be wrong, so the description is the reference.</p>
-      {% elif ex.status in ("failed", "gave_up") %}
-      <p class="notice">Structured details unavailable: extraction failed for this version of the listing. The full description is in the Job description tab.</p>
+      {% elif ex.status == "gave_up" %}
+      <p class="notice">Details temporarily unavailable: the AI could not read this version of the listing after several tries. The full description is in the Job description tab.</p>
       {% elif ex.status == "skipped" %}
       <p class="notice">Structured details unavailable: {{ "the description is too long to send" if ex.skip_reason == "too_long" else "the listing has no description" }}. Read the listing on the company site.</p>
       {% else %}
-      <p class="notice">Structured details pending: the AI has not read this version of the listing yet. Extraction runs only when <code>jobmarket extract run</code> is started. The full description is in the Job description tab.</p>
+      <p class="notice">Requirements processing: the AI has not read this version of the listing yet{% if ex.status == "failed" %} (its last try failed and it will be retried){% endif %}. Everything the employer posted is in the Job description tab.</p>
       {% endif %}
 
       {% if page.members|length > 1 %}
@@ -155,7 +156,7 @@
         {% for m in page.members %}
         <li>
           {% if m.posting_id == l.posting_id %}<strong>{{ m.title }}</strong> <span class="tag">shown</span>
-          {% else %}<a href="{{ url_for('detail', posting_id=m.posting_id) }}{{ '?from=' ~ (back_qs|urlencode) if back_qs }}">{{ m.title }}</a>{% endif %}
+          {% else %}<a href="{{ url_for('detail', posting_id=m.posting_id, **link_args) }}">{{ m.title }}</a>{% endif %}
           <span class="muted">· {{ m.location_text or "Location not listed" }} · {{ fmt.STATE_LABELS[m.availability_state] }} · last seen {{ fmt.relative_day(m.last_observed_at, now) }} · {{ fmt.SOURCE_LABELS[m.source_system] }}</span>
         </li>
         {% endfor %}
@@ -190,16 +191,18 @@
   </main>
 
   <aside class="browse" aria-labelledby="browse-title">
-    <h2 id="browse-title">Browse jobs</h2>
+    <h2 id="browse-title">{{ "Newest jobs" if from_newest else "Browse jobs" }}</h2>
+    {% if not from_newest %}
     <form method="get" action="{{ url_for('results') }}" role="search">
-      {% for key, value in back.query_pairs(q='', page=1) %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+      {% for key, value in browse.params.query_pairs(q='', page=1) %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
       <label class="visually-hidden" for="browse-q">Search jobs</label>
-      <input id="browse-q" class="search-input" name="q" type="search" placeholder="Search jobs..." value="{{ back.q }}">
+      <input id="browse-q" class="search-input" name="q" type="search" placeholder="Search jobs..." value="{{ browse.params.q }}">
     </form>
+    {% endif %}
     <ul class="browse-list">
       {% for row in browse.rows %}
       <li{% if row.posting_id == l.posting_id or row.opportunity_key == s.opportunity_key %} class="current" aria-current="page"{% endif %}>
-        <a href="{{ url_for('detail', posting_id=row.posting_id) }}{{ '?from=' ~ (back_qs|urlencode) if back_qs }}">
+        <a href="{{ url_for('detail', posting_id=row.posting_id, **link_args) }}">
           <strong>{{ row.title }}</strong><span>{{ row.employer }}</span>
         </a>
       </li>

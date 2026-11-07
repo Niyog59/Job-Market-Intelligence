@@ -47,6 +47,22 @@ _INTERVALS = {
 }
 
 
+# What a list or job page says when the AI has not produced structured details. Failed jobs
+# are retried by the queue, so they are still "processing"; gave_up needs a reprocess.
+_PROCESSING = ("pending", "running", "not_queued", "failed", "succeeded", "superseded")
+
+
+def extraction_label(status: str | None) -> str | None:
+    """'Requirements processing', 'Details temporarily unavailable', or None if extracted."""
+    if status == "extracted":
+        return None
+    if status in _PROCESSING or status is None:
+        return "Requirements processing"
+    if status == "skipped":
+        return "Details unavailable"
+    return "Details temporarily unavailable"
+
+
 def local(value: datetime | None) -> datetime | None:
     return value.astimezone(ZONE) if value else None
 
