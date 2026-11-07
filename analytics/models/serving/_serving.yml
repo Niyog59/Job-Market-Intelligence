@@ -24,3 +24,10 @@ models:
               arguments:
                 values: ['extracted', 'pending', 'running', 'succeeded', 'failed', 'gave_up',
                          'skipped', 'superseded', 'not_queued']
+      - name: rule_texas_eligibility
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['local_dfw', 'local_houston', 'local_both', 'remote_texas',
+                         'remote_ambiguous', 'not_texas', 'unknown']

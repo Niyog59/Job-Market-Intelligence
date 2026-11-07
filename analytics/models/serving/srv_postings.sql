@@ -8,6 +8,8 @@
 -- preferred, alone or as one of a set of alternatives; passing mentions are excluded.
 -- cohort: initial_import (first seen at or before its board's first complete collection) or
 -- discovered.
+-- rule_families and rule_texas_eligibility are the rule-based screening, decided in the
+-- collection transaction itself, so they exist before any AI extraction.
 with current_results as (
     select distinct on (r.posting_id) r.*
     from {{ ref('stg_extraction_results') }} r
@@ -69,6 +71,8 @@ select
     p.current_qualifying_absences as qualifying_absences,
     s.retained,
     s.needs_review,
+    s.rule_families,
+    s.rule_texas_eligibility,
     c.cohort,
     g.group_id as duplicate_group_id,
     coalesce('group:' || g.group_id, 'posting:' || p.posting_id) as opportunity_key,
