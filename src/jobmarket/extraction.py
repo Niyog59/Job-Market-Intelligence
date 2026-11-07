@@ -11,6 +11,12 @@ Two lanes share the account's one daily allowance:
   backlog lane  priority 2 retained backlog, then 4 other backlog (and reprocessing)
   (backlog = content recorded before extraction tracking started)
 
+A board added later brings everything it already lists (its initial import: first seen at or
+before the board's first complete scan). Those listings are not new postings: kept ones still
+go to priority 1, so a new employer's relevant jobs are read within the day, and the others
+go to priority 4, so a large board cannot use the new lane's requests for days
+(decision 2026-11-06).
+
 The new lane always goes first. The backlog lane only uses requests the new lane does not
 need, and never more than the safety stop minus a daily reserve kept for new listings
 (JOBMARKET_AI_NEW_RESERVE, 200 by default: decision 2026-11-05).
@@ -196,8 +202,9 @@ def enqueue_new(conn: psycopg.Connection, config: ExtractionConfig, now: datetim
                                      status, skip_reason, created_at, updated_at)
         SELECT v.version_id, p.posting_id, %(key)s,
                CASE WHEN ps.retained THEN (CASE WHEN n.is_new THEN 1 ELSE 2 END)
-                    ELSE (CASE WHEN n.is_new THEN 3 ELSE 4 END) END,
-               CASE WHEN n.is_new THEN 'new_content' ELSE 'backlog' END,
+                    ELSE (CASE WHEN n.is_new AND NOT n.initial_import THEN 3 ELSE 4 END) END,
+               CASE WHEN n.is_new AND (ps.retained OR NOT n.initial_import)
+                    THEN 'new_content' ELSE 'backlog' END,
                CASE WHEN s.skip IS NULL THEN 'pending' ELSE 'skipped' END,
                s.skip, %(now)s, %(now)s
         FROM source_postings p
@@ -206,7 +213,14 @@ def enqueue_new(conn: psycopg.Connection, config: ExtractionConfig, now: datetim
         CROSS JOIN extraction_settings es
         CROSS JOIN LATERAL (SELECT
             p.first_discovered_at >= es.tracking_started_at
-            OR (v.version_no > 1 AND v.first_seen_at >= es.tracking_started_at) AS is_new) n
+            OR (v.version_no > 1 AND v.first_seen_at >= es.tracking_started_at) AS is_new,
+            -- First version, first seen with no earlier complete scan of its board. A scan's
+            -- time is its first page's fetch time, the time its observations are recorded at.
+            v.version_no = 1 AND NOT EXISTS (
+                SELECT 1 FROM board_scans bs
+                JOIN raw_responses rr ON rr.board_scan_id = bs.board_scan_id
+                WHERE bs.board_id = p.board_id AND bs.status = 'complete'
+                  AND rr.fetched_at < p.first_discovered_at) AS initial_import) n
         CROSS JOIN LATERAL (SELECT CASE
             WHEN v.description_omitted IS NOT NULL OR v.description_length > %(max)s
                 THEN 'too_long'

@@ -17,9 +17,9 @@ REPO_REGISTRY = Path(__file__).parents[1] / DEFAULT_REGISTRY_PATH
 
 def test_project_registry_matches_research():
     reg = load_registry(REPO_REGISTRY)
-    assert len(reg.boards) == 57
-    assert len(reg.enabled) == 21
-    assert len({b.employer_slug for b in reg.boards}) == 56  # BGE has two boards
+    assert len(reg.boards) == 59
+    assert len(reg.enabled) == 31
+    assert len({b.employer_slug for b in reg.boards}) == 58  # BGE has two boards
     assert all(b.verification == "verified" for b in reg.enabled)
     assert {b.token for b in reg.boards if b.employer_slug == "bge"} == {"bgeinc", "bgeinccampus"}
     cognite = next(b for b in reg.boards if b.token == "cognite")
@@ -100,9 +100,9 @@ def test_project_registry_syncs(schema_conn):
     apply_migrations(schema_conn)
     result = sync_registry(schema_conn, load_registry(REPO_REGISTRY), T0)
     assert (result.employers_upserted, result.boards_upserted, result.boards_enabled) == (
-        56,
-        57,
-        21,
+        58,
+        59,
+        31,
     )
     region, url = schema_conn.execute(
         "SELECT hosting_region, board_url FROM source_boards WHERE board_key = 'indiciumai'"
@@ -116,7 +116,7 @@ LEVER_REGISTRY = Path(__file__).parents[1] / "config/lever_boards.toml"
 def test_project_lever_registry_matches_the_recheck():
     reg = load_registry(LEVER_REGISTRY)
     assert {b.source_system for b in reg.boards} == {"lever"}
-    assert len(reg.boards) == 43 and len(reg.enabled) == 30
+    assert len(reg.boards) == 43 and len(reg.enabled) == 32
     assert len(reg.leads) == 1 and reg.leads[0].status == "hold"
     assert reg.leads[0].tokens == ("usasurveyjob",)  # Toward Jobs stays held
     assert all(b.region == "global" for b in reg.boards)
@@ -127,8 +127,10 @@ def test_project_lever_registry_matches_the_recheck():
         "https://jobs.lever.co/cgsfederal"
     )
     # Unresolved or conflicting mappings stay disabled.
-    for token in ("zimperium", "worldwidemissioncritical", "dmautoleasing", "field-ai", "tsmg"):
+    for token in ("worldwidemissioncritical", "dmautoleasing", "field-ai", "tsmg"):
         assert not next(b for b in reg.boards if b.token == token).enabled
+    # Zimperium's careers page now links jobs.lever.co/zimperium (recheck 2026-11-06).
+    assert next(b for b in reg.boards if b.token == "zimperium").enabled
 
 
 LEVER_BASE = """
@@ -178,14 +180,14 @@ def test_both_project_registries_sync(schema_conn):
     apply_migrations(schema_conn)
     reg = load_registries((REPO_REGISTRY, LEVER_REGISTRY))
     result = sync_registry(schema_conn, reg, T0)
-    assert (result.boards_upserted, result.boards_enabled) == (100, 51)
+    assert (result.boards_upserted, result.boards_enabled) == (102, 63)
     counts = dict(
         schema_conn.execute(
             "SELECT source_system, count(*) FILTER (WHERE is_active) FROM source_boards "
             "GROUP BY source_system"
         ).fetchall()
     )
-    assert counts == {"greenhouse": 21, "lever": 30}
+    assert counts == {"greenhouse": 31, "lever": 32}
     region, brands = schema_conn.execute(
         "SELECT hosting_region, hiring_brands FROM source_boards WHERE board_key = 'boxlunch'"
     ).fetchone()
@@ -196,5 +198,5 @@ def test_both_project_registries_sync(schema_conn):
         schema_conn.execute(
             "SELECT count(*) FROM source_boards WHERE source_system = 'lever' AND is_active"
         ).fetchone()[0]
-        == 30
+        == 32
     )

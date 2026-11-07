@@ -64,6 +64,29 @@ applications, which this project never does).
 - Sponsorship is `not_stated` unless the posting says whether it is available; a
   question asking applicants about sponsorship is recorded as `asked_only`.
 
+### Adding boards
+
+Boards are added in measured batches of at most 25 (decision 2026-11-06), only after:
+
+1. **Identity and link.** The employer's own careers page links to that exact board: a job
+   link (`job-boards.greenhouse.io/<token>/jobs/...`, `jobs.lever.co/<token>/...`), an embed
+   naming it (`for=<token>`), or job ids on the employer's site that the board's API also
+   lists. Pages that load their jobs with scripts are checked in a browser. A token found by
+   guessing or a matching company name is never enough.
+2. **API.** A scan through the project's own connector is complete.
+3. **Local evidence.** At least one office or listed job in DFW or Houston (the registry
+   requires a metro for every enabled board). Boards with only remote jobs wait.
+4. **No duplicate.** The token and the employer are not already in the registry.
+
+Then the batch is enabled in the registry, synced (`jobmarket sources sync`), and collected
+once, measuring time, raw size, listings, and kept listings before the next batch. The first
+scan of a new board is its baseline: its listings are initial imports, shown as such and
+never counted as new postings, and only the kept ones go to the AI's new lane.
+
+| Batch | Date | Boards | Collection (Mac copy) | Raw size | Listings | Kept |
+|---|---|---|---|---|---|---|
+| 1 | 2026-11-06 | 12 (10 Greenhouse, 2 Lever) | 17 s, 98 MB peak memory | 17.0 MB | 1,110 | 39 |
+
 ### Evidence
 
 Three kinds of evidence are kept apart, because none of them proves the others:

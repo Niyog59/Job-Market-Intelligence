@@ -646,8 +646,10 @@ sed -i "s/^APP_VERSION=.*/APP_VERSION=$(git rev-parse --short HEAD)/" .env
 docker compose build web
 ```
 
-5. Apply new migrations and publish analytics:
+5. Apply new migrations, load the board registry, and publish analytics:
    `docker compose run --rm jobs jobmarket migrate`, then
+   `docker compose run --rm jobs jobmarket sources sync` (new or changed boards; the next
+   collection reads them), then
    `docker compose run --rm jobs jobmarket analytics publish`.
 6. Restart on the new image: `docker compose up -d web caddy`, and if Airflow runs,
    `docker compose run --rm airflow-init` then
