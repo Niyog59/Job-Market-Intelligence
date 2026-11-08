@@ -14,7 +14,8 @@ stored it; it never changes or re-derives it.
   result pages can be shared and restored. Values are checked against the allowed choices
   (unknown values are dropped and reported) and reach SQL only as bound parameters.
 - **Defaults.** Retained jobs (`population=all` adds every collected listing), active
-  listings, early career only (`level=any` shows every level), unknown information
+  listings, every career level (`level=early` or `level=internship` narrows it; the default
+  was early career until 2026-11-07), unknown information
   included, newest discovery first, 25 results per page.
 - **Text** matches the title and description (stemmed full-text search) or the employer
   name.

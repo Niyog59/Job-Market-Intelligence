@@ -99,7 +99,7 @@ EMPLOYMENT_CHOICES = {
     "internship": "Internship",
     "apprenticeship": "Apprenticeship",
 }
-LEVEL_CHOICES = {"early": "Early career", "internship": "Internships", "any": "All levels"}
+LEVEL_CHOICES = {"any": "All levels", "early": "Early career", "internship": "Internships"}
 SPONSORSHIP_CHOICES = {
     "": "Any",
     "offers": "Offers visa sponsorship",
@@ -126,7 +126,7 @@ class SearchParams:
     q: str = ""
     view: str = "active"
     population: str = "kept"
-    level: str = "early"
+    level: str = "any"  # all career levels (Niyog, 2026-11-07); "early" is a filter
     roles: tuple[str, ...] = ()
     employers: tuple[int, ...] = ()
     places: tuple[str, ...] = ()
@@ -148,7 +148,7 @@ class SearchParams:
         pairs: list[tuple[str, str]] = []
         if p.q:
             pairs.append(("q", p.q))
-        for name, default in (("view", "active"), ("population", "kept"), ("level", "early"),
+        for name, default in (("view", "active"), ("population", "kept"), ("level", "any"),
                               ("skill_mode", "any"), ("sponsorship", ""),
                               ("sort", "discovered")):  # fmt: skip
             value = getattr(p, name)
@@ -248,7 +248,7 @@ def parse_params(args: Mapping[str, Any], choices: Choices) -> tuple[SearchParam
         q=" ".join((_many(args, "q") or [""])[0].split()),
         view=_one(args, "view", VIEWS, "active", problems),
         population=_one(args, "population", POPULATIONS, "kept", problems),
-        level=_one(args, "level", LEVELS, "early", problems),
+        level=_one(args, "level", LEVELS, "any", problems),
         roles=several("role", ROLE_CHOICES),
         employers=_unique(employers),
         places=several("place", PLACE_CHOICES),

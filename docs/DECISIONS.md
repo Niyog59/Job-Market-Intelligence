@@ -154,7 +154,10 @@ what it costs, and what would make me revisit it. Back to the [README](../README
 - **Choice (Niyog, 2026-11-06).** A separate public page, `/newest`, linked from the search
   page and the header. It lists jobs first discovered in the past 3 days, kept jobs at every
   level by default, newest first, with only the rule-based screening as filters. Initial
-  imports are hidden behind a checkbox. The search keeps its defaults.
+  imports are hidden behind a checkbox. The search kept its defaults until 2026-11-07, when
+  Niyog changed its career level to all levels: the early-career default had left 12 of 146
+  kept jobs on the homepage, because the AI had read all of them and marked 134 mid-level or
+  senior.
 - **Also chosen.** Both lists hide jobs dated more than 30 days ago (source date, else
   discovery date) unless asked. Nothing is deleted.
 - **Benefit.** A new job can be opened and applied to within seconds of its collection,
@@ -267,6 +270,7 @@ Values that change product behavior, decided before they went into the code.
 | Task time limits | collection 45 min, retry check 30, AI batch 20, publication 20, backup 20, Sheet sync 10, summary and email 10 | DAG |
 | Sheet sync | after every successful publication | DAG |
 | Search page size | 25 results | [`search.py`](../src/jobmarket/search.py) |
+| Search default career level | all levels (early career until 2026-11-07) | [`search.py`](../src/jobmarket/search.py) |
 | Newest jobs window | first discovered in the past 3 days; kept jobs, every level, initial imports hidden by default | [`search.py`](../src/jobmarket/search.py) |
 | Older jobs in lists | hidden when dated more than 30 days ago (source date, else discovery), unless asked | [`search.py`](../src/jobmarket/search.py) |
 | "May be out of date" note | board without a complete collection for 36 hours | [`search.py`](../src/jobmarket/search.py) |

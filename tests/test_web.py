@@ -35,13 +35,21 @@ def job(world, n):
     return f"/jobs/{world.ids[n]}"
 
 
-def test_results_default_view_and_unknown_labels(world, db_settings):
+def test_results_default_view_shows_every_level(world, db_settings):
     response, html = get(world, db_settings, "/")
+    assert response.status_code == 200
+    assert "<strong>4</strong> jobs" in html
+    assert "Senior Data Engineer" in html  # not early career, but every level is shown
+    assert "Included with unknown information" not in html  # no structured filter is on
+
+
+def test_early_career_results_and_unknown_labels(world, db_settings):
+    response, html = get(world, db_settings, "/?level=early")
     assert response.status_code == 200
     assert "<strong>3</strong> jobs" in html
     assert "Included with unknown information: Early career: early-career status unclear" in html
     assert "Early career: structured details pending" in html
-    assert "Senior Data Engineer" not in html  # contradicts the early-career default
+    assert "Senior Data Engineer" not in html  # contradicts the early-career filter
     assert "2 postings of one job" in html  # J1 and J5 shown once
 
 
@@ -124,14 +132,14 @@ def test_stale_boards_are_flagged(world, db_settings):
 
 
 def test_back_to_results_restores_the_search_and_cannot_leave_the_site(world, db_settings):
-    _, results = get(world, db_settings, "/?level=any&sort=published&skill=Python")
+    _, results = get(world, db_settings, "/?level=early&sort=published&skill=Python")
     link = re.search(r'href="(/jobs/\d+\?from=[^"]+)"', results).group(1)
     origin = parse_qs(urlsplit(link.replace("&amp;", "&")).query)["from"][0]
     _, detail = get(world, db_settings, link.replace("&amp;", "&"))
     back = re.search(r'href="([^"]*)" data-back', detail).group(1).replace("&amp;", "&")
     assert back == "/?" + origin
     assert parse_qs(urlsplit(back).query) == {
-        "level": ["any"], "skill": ["Python"], "sort": ["published"]}  # fmt: skip
+        "level": ["early"], "skill": ["Python"], "sort": ["published"]}  # fmt: skip
     _, hostile = get(world, db_settings, job(world, 2) + "?from=%2F%2Fevil.example%2F")
     back = re.search(r'href="([^"]*)" data-back', hostile).group(1)
     assert back == "/"  # unknown parameters are dropped; the path is always the results page
