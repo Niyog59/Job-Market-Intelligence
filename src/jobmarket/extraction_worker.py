@@ -9,8 +9,8 @@ with the same lanes, limits, retries, and result checks; only the loop around th
   is still missing a job and checks again after IDLE_SECONDS (15 s, decision 2026-11-05).
   Waiting is a sleep on an event, never a busy loop.
 - Pauses. After a daily-quota error or at the safety stop it sleeps until the provider's
-  reset (midnight Pacific). After a rejected request (such as a bad key) it waits
-  REJECTED_PAUSE, the same hour a failed round waits, and tries again.
+  reset (midnight Pacific), and through an outage pause (15 minutes). After a rejected
+  request (such as a bad key) it waits REJECTED_PAUSE and tries again.
 - One worker at a time: it holds the advisory lock WORKER_LOCK_KEY for its whole life. The
   hourly batch (`extract run --skip-if-worker`) skips while that lock is held, and runs
   again by itself as soon as the worker stops, which is the rollback path.
@@ -27,13 +27,12 @@ import signal
 import socket
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg
 
 from jobmarket.clock import Clock
 from jobmarket.extraction import (
-    FAILED_ROUND_GAP,
     ExtractionBusy,
     ExtractionConfig,
     Generator,
@@ -45,7 +44,7 @@ from jobmarket.extraction import (
 
 WORKER_LOCK_KEY = 4_815_162_346
 IDLE_SECONDS = 15.0  # how often an idle worker checks for new work (decision 2026-11-05)
-REJECTED_PAUSE = FAILED_ROUND_GAP  # wait after a rejected request before trying again
+REJECTED_PAUSE = timedelta(hours=1)  # wait after a rejected request before trying again
 
 
 class Stopper:
@@ -202,7 +201,7 @@ def _sleep_until(conn, worker, clock, stopper, until: datetime, reason: str) -> 
 
 def _what_happened(before: tuple, after: tuple) -> str:
     names = ("extracted", "reused an identical earlier answer", "superseded by newer content",
-             "failed this round", "bad answer, retry scheduled")  # fmt: skip
+             "gave up", "failed a try, retry scheduled")  # fmt: skip
     changed = [name for name, a, b in zip(names, before, after, strict=True) if b > a]
     return ", ".join(changed) or "released"
 

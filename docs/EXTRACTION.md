@@ -74,15 +74,17 @@ tracking started.
 Requests are sent one at a time, spaced to `JOBMARKET_AI_RPM` (and `JOBMARKET_AI_TPM` if
 set), and stop at 90% of `JOBMARKET_AI_DAILY_LIMIT`. Every request is recorded before it
 is sent, under one lock, so these limits hold across the worker, the hourly batch, manual
-runs, and evaluations together. A round is up to four requests for one job. Provider
-failures (rate limits, server and network errors) are retried in place after 10, 30, and 90
-seconds, or longer if Google says so, because every other job would meet them too. A bad
-answer for one listing (invalid output or a blocked reply) is retried after the same waits
-while other jobs go ahead. A job whose round fails waits one hour before the next round,
-five rounds at most, then waits for `extract reprocess`. A round that fails on provider
-errors alone also pauses extraction for 15 minutes, for every process, so an outage does
-not spend the day's requests one listing after another. A rejected request (another 4xx,
-such as a bad key) stops the run. A daily-quota error pauses extraction until midnight
+runs, and evaluations together. A job gets three tries. A try is used by a problem with
+that listing: an invalid or blocked answer, or a rejected request (another 4xx, such as a
+bad key, which also stops the run). The job's next try comes after 10, 30, then 90 seconds,
+while other jobs go ahead. When two tries fail for the same reason, the job records the
+error (`repeated_error`, listed by `extract status` and counted in the daily summary) and
+gets a fourth try, never more; after its last try it waits for `extract reprocess`.
+Provider failures (rate limits, server and network errors) never use a try, because every
+other job would meet them too: they are retried in place after the same waits, or longer if
+Google says so, and after four in a row the job goes back in line and extraction pauses for
+15 minutes, for every process, so an outage does not spend the day's requests one listing
+after another. A daily-quota error pauses extraction until midnight
 Pacific time. A job is claimed with a lock that PostgreSQL releases if its process dies, so
 a crash leaves nothing stuck: the job is picked up again and its unanswered request is
 marked `interrupted` (it still counts toward the day). Collection is unaffected by any of

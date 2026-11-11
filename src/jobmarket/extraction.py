@@ -34,16 +34,17 @@ the process dies, so a job left "running" by a crash is simply claimed again. Ev
 is recorded before it is sent, under one pacing lock, so the per-minute spacing, the
 tokens-per-minute window, and the daily count hold across all processes together.
 
-Limits and failures (decisions 2026-10-27 and 2026-11-05). A round is up to four requests
-for one job, waiting 10, 30, then 90 seconds between them, or longer if Google says so.
-Failures of the provider (rate limits, server and network errors) are retried in place,
-because every other job would meet them too. Problems with one listing's answer (invalid
-output, a blocked reply) are retried later instead: the job waits for its retry time and
-other jobs go ahead. A job whose round fails waits an hour before the next round, at most
-five rounds, and then gives up until `jobmarket extract reprocess`. A round that fails on
-provider errors alone means an outage, so it also pauses extraction for OUTAGE_PAUSE instead
-of spending the day's requests on the next job (decision 2026-11-11). A rejected request
-(another 4xx, such as a bad key) stops the run. A daily-quota error pauses extraction until
+Limits and failures (decisions 2026-10-27, 2026-11-05, and 2026-11-11). A job gets three
+tries. A try fails on a problem with this listing's answer (invalid output, a blocked reply)
+or a rejected request (another 4xx, such as a bad key, which also stops the run). The job
+waits 10, 30, then 90 seconds before its next try while other jobs go ahead. When two tries
+fail for the same reason the job records it (repeated_error, shown in `extract status` and
+the daily summary) and gets a fourth try, never more. After its last try it gives up until
+`jobmarket extract reprocess`. Failures of the provider (rate limits, server and network
+errors) never use a try, because every other job would meet them too: they are retried in
+place after the same waits, or longer if Google says so, and after four in a row the job
+goes back in line and extraction pauses for OUTAGE_PAUSE instead of spending the day's
+requests on the next job. A daily-quota error pauses extraction until
 midnight Pacific time (the provider's reset). Requests stop before 90% of the configured
 daily request limit, to leave room for manual tests. None of this touches collection.
 
@@ -103,11 +104,11 @@ NEW_LANE = (1, 3)
 BACKLOG_LANE = (2, 4)
 LANE_ORDER = [*NEW_LANE, *BACKLOG_LANE]
 
-RETRY_WAITS = (10.0, 30.0, 90.0)  # seconds before retries 1, 2, 3 of a round
-MAX_FAILED_RUNS = 5  # failed rounds before a job gives up
-FAILED_ROUND_GAP = timedelta(hours=1)  # wait after a failed round (decision 2026-11-05)
-OUTAGE_PAUSE = timedelta(minutes=15)  # pause after a round of provider errors (2026-11-11)
-JOB_SPECIFIC_KINDS = frozenset({"blocked"})  # with invalid output: retried later, not in place
+RETRY_WAITS = (10.0, 30.0, 90.0)  # seconds before the 2nd, 3rd, and 4th try
+TRIES = 3  # failed tries before a job gives up (decision 2026-11-11)
+TRIES_AFTER_REPEAT = 4  # once two tries have failed for the same reason
+OUTAGE_PAUSE = timedelta(minutes=15)  # pause after four provider errors in a row (2026-11-11)
+JOB_SPECIFIC_KINDS = frozenset({"blocked"})  # with invalid output: use a try, retried later
 SAFETY_SHARE = 0.9  # stop at 90% of the daily request limit
 MAX_INPUT_DESCRIPTION_CHARS = MAX_STORED_DESCRIPTION_CHARS  # longer: link only, not sent
 
@@ -269,7 +270,7 @@ def reprocess(
         cap = "LIMIT %(limit)s" if limit else ""
         result.reset = conn.execute(
             f"""
-            UPDATE extraction_jobs j SET status = 'pending', runs_failed = 0, round_attempts = 0,
+            UPDATE extraction_jobs j SET status = 'pending', failure_kinds = '{{}}',
                    next_attempt_at = NULL, note = %(reason)s,
                    updated_at = %(now)s
             FROM source_postings p JOIN posting_screenings ps USING (posting_id)
@@ -348,6 +349,7 @@ class RunReport:
     superseded: int = 0
     warnings: int = 0
     retries_scheduled: int = 0
+    repeated: int = 0  # jobs whose tries failed twice for the same reason, this run
     recovered: int = 0  # jobs left running by a process that ended, claimed again
     stop_reason: str = "queue empty"
     errors: list[str] = field(default_factory=list)
@@ -410,11 +412,11 @@ def estimated_tokens(document: str) -> int:
     return (len(INSTRUCTIONS) + len(document)) // 4 + 2000
 
 
-# A job another process may take: waiting, or failed with rounds left, and due. A "running"
-# job qualifies only if its claim lock is free, which means its process has ended.
+# A job another process may take: waiting and due. A "running" job qualifies only if its
+# claim lock is free, which means its process has ended.
 _CLAIMABLE = """
     j.config_key = %(key)s
-    AND (j.status IN ('pending', 'running') OR (j.status = 'failed' AND j.runs_failed < %(max)s))
+    AND j.status IN ('pending', 'running')
     AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= %(now)s)
 """
 
@@ -426,7 +428,7 @@ class _Claim:
     posting_id: int
     priority: int
     current: bool  # the job's version is still the posting's current content
-    round_attempts: int
+    failure_kinds: tuple[str, ...]  # reasons of its failed tries so far
     lane: str | None
 
 
@@ -443,7 +445,7 @@ def _try_lock(conn, job_id: int) -> bool:
 def _claim(conn, config, now, priorities, only, claimant) -> tuple[_Claim, bool] | None:
     """Claim the first ready job in lane order; returns it and whether it was recovered from
     a process that ended while working on it."""
-    params = {"key": config.key, "max": MAX_FAILED_RUNS, "now": now, "order": LANE_ORDER}
+    params = {"key": config.key, "now": now, "order": LANE_ORDER}
     if only is not None:
         params["only"] = only
         which = "AND j.job_id = ANY(%(only)s)"
@@ -461,7 +463,7 @@ def _claim(conn, config, now, priorities, only, claimant) -> tuple[_Claim, bool]
             continue  # another process is working on it
         # Read again under the lock: another process may have finished it meanwhile.
         row = conn.execute(
-            f"SELECT j.version_id, j.posting_id, j.priority, j.status, j.round_attempts, "
+            f"SELECT j.version_id, j.posting_id, j.priority, j.status, j.failure_kinds, "
             f"p.current_version_id = j.version_id FROM extraction_jobs j "
             f"JOIN source_postings p ON p.posting_id = j.posting_id "
             f"WHERE j.job_id = %(job)s AND {_CLAIMABLE}",
@@ -470,7 +472,7 @@ def _claim(conn, config, now, priorities, only, claimant) -> tuple[_Claim, bool]
         if row is None:
             _unlock(conn, job_id)
             continue
-        version_id, posting_id, priority, status, round_attempts, current = row
+        version_id, posting_id, priority, status, failure_kinds, current = row
         recovered = status == "running"
         with conn.transaction():
             if recovered:
@@ -486,7 +488,8 @@ def _claim(conn, config, now, priorities, only, claimant) -> tuple[_Claim, bool]
                 (claimant, now, now, job_id),
             )
         lane = None if only is not None else ("new" if priority in NEW_LANE else "backlog")
-        claim = _Claim(job_id, version_id, posting_id, priority, current, round_attempts, lane)
+        claim = _Claim(job_id, version_id, posting_id, priority, current,
+                       tuple(failure_kinds), lane)  # fmt: skip
         return claim, recovered
     return None
 
@@ -566,7 +569,7 @@ def _store_result(
     )
     conn.execute(
         "UPDATE extraction_jobs SET status = 'succeeded', result_id = %s, last_error = NULL, "
-        "round_attempts = 0, next_attempt_at = NULL, updated_at = %s WHERE job_id = %s",
+        "next_attempt_at = NULL, updated_at = %s WHERE job_id = %s",
         (result_id, now, job_id),
     )
     return result_id
@@ -592,34 +595,38 @@ def _reuse(conn, job_id, version_id, posting_id, input_hash, config, now) -> boo
     return True
 
 
-def _fail_round(conn, job_id, message: str, now: datetime) -> bool:
-    """Count a failed round for the job and make it wait FAILED_ROUND_GAP; True when it has
-    now given up."""
-    row = conn.execute(
-        "UPDATE extraction_jobs SET runs_failed = runs_failed + 1, last_error = %s, "
-        "round_attempts = 0, next_attempt_at = %s, "
-        "status = CASE WHEN runs_failed + 1 >= %s THEN 'gave_up' ELSE 'failed' END, "
-        "updated_at = %s WHERE job_id = %s RETURNING status",
-        (message[:1000], now + FAILED_ROUND_GAP, MAX_FAILED_RUNS, now, job_id),
-    ).fetchone()
-    return row[0] == "gave_up"
+@dataclass(frozen=True)
+class _TryOutcome:
+    gave_up: bool
+    repeated_now: bool  # this try failed for the same reason as an earlier one, first time
 
 
-def _retry_later(conn, job_id, round_attempts: int, wait: float, message: str, now) -> None:
-    """Put the job back, due after wait seconds, keeping its place in the round."""
+def _fail_try(conn, job: "_Claim", kind: str, message: str, now: datetime) -> _TryOutcome:
+    """Record a failed try: the job is due again after the next RETRY_WAITS step, or gives
+    up once it has used TRIES (TRIES_AFTER_REPEAT after a repeated reason)."""
+    kinds = [*job.failure_kinds, kind]
+    repeated = len(set(kinds)) < len(kinds)
+    repeated_now = repeated and len(set(job.failure_kinds)) == len(job.failure_kinds)
+    gave_up = len(kinds) >= (TRIES_AFTER_REPEAT if repeated else TRIES)
+    due = None if gave_up else now + timedelta(seconds=RETRY_WAITS[len(kinds) - 1])
     conn.execute(
-        "UPDATE extraction_jobs SET status = 'pending', round_attempts = %s, "
-        "next_attempt_at = %s, last_error = %s, updated_at = %s WHERE job_id = %s",
-        (round_attempts, now + timedelta(seconds=wait), message[:1000], now, job_id),
-    )
-
-
-def _release(conn, job_id, message: str | None, now: datetime, round_attempts: int) -> None:
-    """Put a job back as pending without counting a failure (the cause was not the job)."""
-    conn.execute(
-        "UPDATE extraction_jobs SET status = 'pending', last_error = %s, round_attempts = %s, "
+        "UPDATE extraction_jobs SET status = %s, failure_kinds = %s, last_error = %s, "
+        "next_attempt_at = %s, "
+        "repeated_error = CASE WHEN %s THEN %s ELSE repeated_error END, "
+        "repeated_error_at = CASE WHEN %s THEN %s ELSE repeated_error_at END, "
         "updated_at = %s WHERE job_id = %s",
-        (message, round_attempts, now, job_id),
+        ("gave_up" if gave_up else "pending", kinds, message[:1000], due,
+         repeated_now, message[:1000], repeated_now, now, now, job.job_id),
+    )  # fmt: skip
+    return _TryOutcome(gave_up, repeated_now)
+
+
+def _release(conn, job_id, message: str | None, now: datetime) -> None:
+    """Put a job back as pending without using a try (the cause was not the job)."""
+    conn.execute(
+        "UPDATE extraction_jobs SET status = 'pending', last_error = %s, updated_at = %s "
+        "WHERE job_id = %s",
+        (message, now, job_id),
     )
 
 
@@ -705,17 +712,16 @@ class Session:
         return self.conn.execute(
             f"SELECT EXISTS (SELECT 1 FROM extraction_jobs j WHERE {_CLAIMABLE} "
             "AND j.priority = ANY(%(prio)s))",
-            {"key": self.config.key, "max": MAX_FAILED_RUNS, "now": self.clock(),
-             "prio": list(BACKLOG_LANE)},
+            {"key": self.config.key, "now": self.clock(), "prio": list(BACKLOG_LANE)},
         ).fetchone()[0]  # fmt: skip
 
     def next_retry_in(self) -> float | None:
-        """Seconds until the earliest retry within a round falls due, if one is due within
+        """Seconds until the earliest retry of a failed try falls due, if one is due within
         the longest retry wait; None otherwise."""
         priorities = list(NEW_LANE + (BACKLOG_LANE if self.backlog_open else ()))
         due = self.conn.execute(
             "SELECT min(next_attempt_at) FROM extraction_jobs WHERE config_key = %s "
-            "AND status = 'pending' AND round_attempts > 0 AND next_attempt_at > %s "
+            "AND status = 'pending' AND cardinality(failure_kinds) > 0 AND next_attempt_at > %s "
             + ("AND job_id = ANY(%s)" if self.only is not None else "AND priority = ANY(%s)"),
             (self.config.key, self.clock(), self.only if self.only is not None else priorities),
         ).fetchone()[0]
@@ -815,14 +821,14 @@ class Session:
     def _process(self, job: _Claim, input_hash: str, document: str) -> None:
         conn, config, report = self.conn, self.config, self.report
         text = request_text(document)
-        n = job.round_attempts
-        last_problem = job_problem = None
+        outages = 0  # provider errors in a row on this claim; they never use a try
+        last_problem = None
         while True:
-            n += 1
+            attempt_no = len(job.failure_kinds) + outages + 1
             try:
-                attempt_id = self._start_request(job, n, estimated_tokens(document))
+                attempt_id = self._start_request(job, attempt_no, estimated_tokens(document))
             except (StopRun, _LaneFull):
-                _release(conn, job.job_id, last_problem, self.clock(), n - 1)
+                _release(conn, job.job_id, last_problem, self.clock())
                 raise
             try:
                 reply = self.generate(INSTRUCTIONS, text, RESPONSE_SCHEMA)
@@ -835,24 +841,26 @@ class Session:
                     until = next_pacific_midnight(finished)
                     _pause(conn, config.model, until, f"daily quota exhausted ({error.quota_id})",
                            finished)  # fmt: skip
-                    _release(conn, job.job_id, last_problem, finished, n - 1)
+                    _release(conn, job.job_id, last_problem, finished)
                     reason = (
                         f"daily quota exhausted; paused until {until.isoformat(timespec='minutes')}"
                     )
                     raise StopRun(reason, until) from None
                 if error.kind == "client_error":
-                    self._failed(job, last_problem, finished)
+                    self._failed_try(job, error.kind, last_problem, finished)
                     raise StopRun(
                         f"request rejected ({error.http_status}): {error.detail[:200]}"
                     ) from None
                 if error.kind in JOB_SPECIFIC_KINDS:
-                    job_problem = last_problem
-                    break
-                if n <= len(RETRY_WAITS):  # the provider's problem: every job would wait
-                    self.sleep(max(RETRY_WAITS[n - 1], error.retry_after or 0))
+                    self._failed_try(job, error.kind, last_problem, finished)
+                    return
+                outages += 1
+                if outages <= len(RETRY_WAITS):  # the provider's problem: every job would wait
+                    self.sleep(max(RETRY_WAITS[outages - 1], error.retry_after or 0))
                     continue
-                self._failed(job, last_problem, finished)
-                # The next job would meet the same outage, so every process stops for a while.
+                # The next job would meet the same outage, so every process stops for a while
+                # and this job goes back in line with its tries intact.
+                _release(conn, job.job_id, last_problem, finished)
                 until = finished + OUTAGE_PAUSE
                 _pause(conn, config.model, until, f"provider errors ({error.kind})", finished)
                 raise StopRun(
@@ -871,8 +879,8 @@ class Session:
             if problem is not None:
                 _finish_attempt(conn, attempt_id, finished, "invalid_output", reply=reply,
                                 raw=reply.text[:200_000], detail=problem)  # fmt: skip
-                job_problem = last_problem = f"invalid_output: {problem}"
-                break
+                self._failed_try(job, "invalid_output", f"invalid_output: {problem}", finished)
+                return
             with conn.transaction():
                 _finish_attempt(conn, attempt_id, finished, "success", reply=reply)
                 _store_result(conn, job.job_id, job.version_id, job.posting_id, input_hash,
@@ -881,18 +889,18 @@ class Session:
             report.succeeded += 1
             report.warnings += bool(checked.warnings)
             return
-        # A problem with this listing's answer: retry it later and let other jobs go first.
-        now = self.clock()
-        if n <= len(RETRY_WAITS):
-            _retry_later(conn, job.job_id, n, RETRY_WAITS[n - 1], job_problem, now)
-            report.retries_scheduled += 1
-        else:
-            self._failed(job, job_problem, now)
 
-    def _failed(self, job: _Claim, problem: str, now) -> None:
-        self.report.failed += 1
-        self.report.gave_up += _fail_round(self.conn, job.job_id, problem, now)
-        self.report.errors.append(f"job {job.job_id}: {problem}")
+    def _failed_try(self, job: _Claim, kind: str, problem: str, now) -> None:
+        """A try failed because of this listing: the job waits for its next try while other
+        jobs go ahead, or gives up."""
+        outcome = _fail_try(self.conn, job, kind, problem, now)
+        self.report.repeated += outcome.repeated_now
+        if outcome.gave_up:
+            self.report.failed += 1
+            self.report.gave_up += 1
+            self.report.errors.append(f"job {job.job_id}: {problem}")
+        else:
+            self.report.retries_scheduled += 1
 
 
 def run_extraction(
@@ -925,7 +933,7 @@ def run_extraction(
                 if only_jobs is None and not session.backlog_open and session.backlog_waiting():
                     report.stop_reason = session.backlog_message()
                 break
-            sleep(wait)  # only a retry within a round is left: wait for it, as before
+            sleep(wait)  # only a job's next try is left: wait for it
     except StopRun as stop:
         report.stop_reason = stop.reason
     else:
@@ -960,6 +968,26 @@ def paid_equivalent_usd(model: str, prompt_tokens: int, output_tokens: int) -> f
     if rates is None:
         return None
     return (prompt_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
+
+
+def repeated_errors(conn, config: ExtractionConfig, since: datetime | None = None) -> dict:
+    """Jobs under the active configuration whose tries failed twice for the same reason
+    (all of them, or those recorded since `since`): how many, how many gave up, and the
+    latest five as (job_id, posting_id, status, error)."""
+    where = "config_key = %(key)s AND repeated_error_at IS NOT NULL" + (
+        " AND repeated_error_at >= %(since)s" if since else "")  # fmt: skip
+    params = {"key": config.key, "since": since}
+    jobs, gave_up = conn.execute(
+        f"SELECT count(*), count(*) FILTER (WHERE status = 'gave_up') FROM extraction_jobs "
+        f"WHERE {where}",
+        params,
+    ).fetchone()
+    latest = conn.execute(
+        f"SELECT job_id, posting_id, status, repeated_error FROM extraction_jobs WHERE {where} "
+        "ORDER BY repeated_error_at DESC, job_id DESC LIMIT 5",
+        params,
+    ).fetchall()
+    return {"jobs": jobs, "gave_up": gave_up, "latest": latest}
 
 
 def status(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) -> dict[str, Any]:
@@ -998,6 +1026,7 @@ def status(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) ->
         "usage_today": usage,
         "paid_equivalent_today": paid_equivalent_usd(config.model, usage[2], usage[3] + usage[4]),
         "pause": _active_pause(conn, config.model, now),
+        "repeated_errors": repeated_errors(conn, config),
         "safety_stop_at": safety_stop_at(config) if config.daily_limit else None,
         "backlog_today": requests_today(conn, config.model, now, lane="backlog"),
         "backlog_allowance": backlog_allowance(config) if config.daily_limit else None,
@@ -1020,7 +1049,7 @@ class LaneTiming:
 def queue_metrics(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) -> dict:
     """Queue depth and age by priority, throughput and latency by lane over the last 24
     hours, and request outcomes today (Pacific)."""
-    params = {"key": config.key, "max": MAX_FAILED_RUNS, "now": now}
+    params = {"key": config.key, "now": now}
     depth = conn.execute(
         """
         SELECT priority,
@@ -1029,7 +1058,7 @@ def queue_metrics(conn: psycopg.Connection, config: ExtractionConfig, now: datet
                min(created_at)
         FROM extraction_jobs
         WHERE config_key = %(key)s
-          AND (status IN ('pending', 'running') OR (status = 'failed' AND runs_failed < %(max)s))
+          AND status IN ('pending', 'running')
         GROUP BY priority ORDER BY priority
         """,
         params,

@@ -203,6 +203,11 @@ def compose(conn: psycopg.Connection, now: datetime) -> Summary:
             until, reason = info["pause"]
             lines.append(f"- Paused until {_when(until)} ({reason}); this resumes on its "
                          "own.")  # fmt: skip
+        repeated = extraction.repeated_errors(conn, config, since)
+        if repeated["jobs"]:
+            lines.append(f"- {repeated['jobs']} listing(s) failed twice for the same reason "
+                         f"({repeated['gave_up']} gave up after their fourth try); "
+                         "`extract status` lists them.")  # fmt: skip
         new = next((t for t in extraction.queue_metrics(conn, config, now)["timing"]
                     if t.lane == "new"), None)  # fmt: skip
         if new and new.queue_p50 is not None:

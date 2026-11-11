@@ -47,8 +47,9 @@ behind https://jobobservatory.dev). Back to the [README](../README.md#problems-i
 - **Fix (2026-11-11):** when a listing fails a whole round on provider errors, all
   extraction pauses for 15 minutes, so the worker and the hourly batch wait for Google to
   recover instead of moving straight to the next listing. An outage now costs about 4
-  requests per 15 minutes instead of up to 15 a minute. The listing still counts the failed
-  round. See [`extraction.py`](../src/jobmarket/extraction.py) (`Session._process`).
+  requests per 15 minutes instead of up to 15 a minute. Outage errors no longer use any of
+  a listing's tries, so an outage cannot make a good listing give up. See
+  [`extraction.py`](../src/jobmarket/extraction.py) (`Session._process`).
 
 ## AI extraction was falling behind
 

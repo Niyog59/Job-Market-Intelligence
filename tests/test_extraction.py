@@ -126,25 +126,37 @@ def test_identical_input_reuses_the_earlier_answer(x):
                     "IS NOT NULL") == 1  # fmt: skip
 
 
-def test_invalid_answers_are_retried_then_the_job_fails_and_gives_up_after_five_runs(x):
+def test_the_same_failure_twice_is_recorded_and_earns_a_fourth_and_last_try(x):
     x.collect(T0, [gh_job(1)])
     broken = ScriptedModel(reply(text='{"role_categories": "oops"}'))
     report = x.run(broken)
-    assert (report.requests, report.failed, report.succeeded) == (4, 1, 0)
+    assert (report.requests, report.failed, report.repeated, report.succeeded) == (4, 1, 1, 0)
     assert [round(s) for s in x.slept[-3:]] == [10, 30, 90]  # the job waits, the run waits
-    assert x.scalar("SELECT status FROM extraction_jobs") == "failed"
+    status, repeated = x.conn.execute(
+        "SELECT status, repeated_error FROM extraction_jobs").fetchone()  # fmt: skip
+    assert status == "gave_up" and repeated.startswith("invalid_output: ")
     assert x.scalar("SELECT count(*) FROM extraction_results") == 0  # nothing stored
     raw = x.scalar("SELECT raw_reply FROM extraction_attempts LIMIT 1")
     assert raw == '{"role_categories": "oops"}'  # kept for diagnosis
-    assert x.run(broken).requests == 0  # a failed round waits an hour
-    for _ in range(4):
-        x.clock.advance(extraction.FAILED_ROUND_GAP)
-        x.run(broken)
-    assert x.scalar("SELECT status, runs_failed FROM extraction_jobs") == "gave_up"
+    x.clock.advance(timedelta(days=1))
     assert x.run(broken).requests == 0  # gave up: not retried automatically
-    result = reprocess(x.conn, CONFIG, x.clock(), "prompt fixed")
-    assert result.reset == 1
+    info = extraction.status(x.conn, CONFIG, x.clock())["repeated_errors"]
+    assert (info["jobs"], info["gave_up"]) == (1, 1)
+    assert reprocess(x.conn, CONFIG, x.clock(), "prompt fixed").reset == 1  # three fresh tries
+    assert x.scalar("SELECT failure_kinds FROM extraction_jobs") == []
     assert x.run(ScriptedModel(reply())).succeeded == 1
+
+
+def test_three_different_failures_use_up_the_three_tries(x):
+    x.collect(T0, [gh_job(1)])
+    model = ScriptedModel(ModelError("blocked", "SAFETY"), reply(text='{"role_categories": 1}'),
+                          ModelError("client_error", "bad request", 400))  # fmt: skip
+    report = x.run(model)
+    assert report.stop_reason.startswith("request rejected (400)")
+    status, kinds, repeated = x.conn.execute(
+        "SELECT status, failure_kinds, repeated_error FROM extraction_jobs").fetchone()  # fmt: skip
+    assert status == "gave_up" and repeated is None
+    assert kinds == ["blocked", "invalid_output", "client_error"]
 
 
 def test_not_json_is_an_invalid_answer(x):
@@ -186,14 +198,17 @@ def test_a_round_of_provider_errors_pauses_extraction_for_15_minutes(x):
     x.collect(T0, [job(1), job(2)])
     outage = ModelError("server_error", "503 high demand", 503)
     report = x.run(ScriptedModel(*[outage] * 4, reply()))
-    assert (report.requests, report.failed) == (4, 1)  # the second listing was not tried
+    assert (report.requests, report.failed) == (4, 0)  # the second listing was not tried
     assert report.stop_reason.startswith("provider errors; paused until")
     until, reason = x.conn.execute("SELECT paused_until, reason FROM extraction_pauses").fetchone()
     assert reason == "provider errors (server_error)"
     assert timedelta(minutes=14) < until - x.clock() <= extraction.OUTAGE_PAUSE
     assert x.run(ScriptedModel(reply())).requests == 0  # every process waits
+    status, kinds = x.conn.execute(
+        "SELECT status, failure_kinds FROM extraction_jobs ORDER BY job_id").fetchone()  # fmt: skip
+    assert (status, kinds) == ("pending", [])  # the outage used none of job 1's tries
     x.clock.now = until + timedelta(seconds=1)
-    assert x.run(ScriptedModel(reply())).succeeded == 1  # job 2; job 1 waits out its hour
+    assert x.run(ScriptedModel(reply())).succeeded == 2
 
 
 def test_an_outage_pause_never_shortens_a_quota_pause(x):
