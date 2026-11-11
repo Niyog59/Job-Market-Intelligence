@@ -79,7 +79,9 @@ failures (rate limits, server and network errors) are retried in place after 10,
 seconds, or longer if Google says so, because every other job would meet them too. A bad
 answer for one listing (invalid output or a blocked reply) is retried after the same waits
 while other jobs go ahead. A job whose round fails waits one hour before the next round,
-five rounds at most, then waits for `extract reprocess`. A rejected request (another 4xx,
+five rounds at most, then waits for `extract reprocess`. A round that fails on provider
+errors alone also pauses extraction for 15 minutes, for every process, so an outage does
+not spend the day's requests one listing after another. A rejected request (another 4xx,
 such as a bad key) stops the run. A daily-quota error pauses extraction until midnight
 Pacific time. A job is claimed with a lock that PostgreSQL releases if its process dies, so
 a crash leaves nothing stuck: the job is picked up again and its unanswered request is
@@ -91,8 +93,8 @@ this.
 `jobmarket extract worker` (the Compose service `extract-worker`, profile `worker`) runs the
 queue continuously instead of once an hour. It claims the next ready job as soon as it is
 free; when nothing is ready it queues anything still missing a job and checks again every
-15 seconds, sleeping in between. It sleeps through a quota pause or the safety stop until
-the Pacific reset, waits an hour after a rejected request, and keeps a heartbeat row in
+15 seconds, sleeping in between. It sleeps through an outage pause (15 minutes), and
+through a quota pause or the safety stop until the Pacific reset, waits an hour after a rejected request, and keeps a heartbeat row in
 `extraction_workers` with its state and the reason for a pause. Only one worker runs at a
 time. While it runs, the hourly batch (`extract run --skip-if-worker`) skips itself; when it
 stops, the hourly batch takes over again, which is also the rollback (RUNBOOK section W).

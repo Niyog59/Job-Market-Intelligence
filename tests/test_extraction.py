@@ -182,6 +182,28 @@ def test_server_errors_are_retried_with_waits(x):
     assert x.slept[-2:] == [10.0, 30.0]
 
 
+def test_a_round_of_provider_errors_pauses_extraction_for_15_minutes(x):
+    x.collect(T0, [job(1), job(2)])
+    outage = ModelError("server_error", "503 high demand", 503)
+    report = x.run(ScriptedModel(*[outage] * 4, reply()))
+    assert (report.requests, report.failed) == (4, 1)  # the second listing was not tried
+    assert report.stop_reason.startswith("provider errors; paused until")
+    until, reason = x.conn.execute("SELECT paused_until, reason FROM extraction_pauses").fetchone()
+    assert reason == "provider errors (server_error)"
+    assert timedelta(minutes=14) < until - x.clock() <= extraction.OUTAGE_PAUSE
+    assert x.run(ScriptedModel(reply())).requests == 0  # every process waits
+    x.clock.now = until + timedelta(seconds=1)
+    assert x.run(ScriptedModel(reply())).succeeded == 1  # job 2; job 1 waits out its hour
+
+
+def test_an_outage_pause_never_shortens_a_quota_pause(x):
+    x.collect(T0, [job(1)])
+    x.run(ScriptedModel(quota_error(per_day=True)))
+    until = x.scalar("SELECT paused_until FROM extraction_pauses")
+    extraction._pause(x.conn, CONFIG.model, x.clock() + extraction.OUTAGE_PAUSE, "test", x.clock())
+    assert x.scalar("SELECT paused_until FROM extraction_pauses") == until
+
+
 def test_a_rejected_request_stops_the_run(x):
     x.collect(T0, [gh_job(1), gh_job(2)])
     report = x.run(ScriptedModel(ModelError("client_error", "API key not valid", 400)))

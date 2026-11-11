@@ -155,7 +155,7 @@ Every task runs an existing `jobmarket` command, so each step can also be run by
 - **AI work is separate from Airflow when the worker runs:** the extraction worker (Compose
   service `extract-worker`, profile `worker`) extracts new listings as collection queues
   them, and the hourly batch skips itself. Without the worker, the hourly batch handles at
-  most 20 listings. Either way the free limits apply, a quota pause shows in the summary,
+  most 20 listings. Either way the free limits apply, a quota or outage pause shows in the summary,
   not as an alert, and without a Gemini key nothing is sent.
 - **Time limits:** collection 45 minutes, retry check 30, AI batch 20, report publication
   20, backup and raw uploads 20, Sheet sync 10, summary and email 10.

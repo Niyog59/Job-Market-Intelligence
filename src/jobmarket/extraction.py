@@ -40,7 +40,9 @@ Failures of the provider (rate limits, server and network errors) are retried in
 because every other job would meet them too. Problems with one listing's answer (invalid
 output, a blocked reply) are retried later instead: the job waits for its retry time and
 other jobs go ahead. A job whose round fails waits an hour before the next round, at most
-five rounds, and then gives up until `jobmarket extract reprocess`. A rejected request
+five rounds, and then gives up until `jobmarket extract reprocess`. A round that fails on
+provider errors alone means an outage, so it also pauses extraction for OUTAGE_PAUSE instead
+of spending the day's requests on the next job (decision 2026-11-11). A rejected request
 (another 4xx, such as a bad key) stops the run. A daily-quota error pauses extraction until
 midnight Pacific time (the provider's reset). Requests stop before 90% of the configured
 daily request limit, to leave room for manual tests. None of this touches collection.
@@ -104,6 +106,7 @@ LANE_ORDER = [*NEW_LANE, *BACKLOG_LANE]
 RETRY_WAITS = (10.0, 30.0, 90.0)  # seconds before retries 1, 2, 3 of a round
 MAX_FAILED_RUNS = 5  # failed rounds before a job gives up
 FAILED_ROUND_GAP = timedelta(hours=1)  # wait after a failed round (decision 2026-11-05)
+OUTAGE_PAUSE = timedelta(minutes=15)  # pause after a round of provider errors (2026-11-11)
 JOB_SPECIFIC_KINDS = frozenset({"blocked"})  # with invalid output: retried later, not in place
 SAFETY_SHARE = 0.9  # stop at 90% of the daily request limit
 MAX_INPUT_DESCRIPTION_CHARS = MAX_STORED_DESCRIPTION_CHARS  # longer: link only, not sent
@@ -381,12 +384,24 @@ def backlog_allowance(config: ExtractionConfig) -> int:
     return max(0, safety_stop_at(config) - config.new_reserve)
 
 
-def _paused_until(conn, model: str, now: datetime) -> datetime | None:
-    row = conn.execute(
-        "SELECT paused_until FROM extraction_pauses WHERE model = %s AND paused_until > %s",
+def _active_pause(conn, model: str, now: datetime) -> tuple[datetime, str] | None:
+    """(paused_until, reason) while extraction for the model is paused."""
+    return conn.execute(
+        "SELECT paused_until, reason FROM extraction_pauses WHERE model = %s AND paused_until > %s",
         (model, now),
     ).fetchone()
-    return row[0] if row else None
+
+
+def _pause(conn, model: str, until: datetime, reason: str, now: datetime) -> None:
+    """Pause every process's extraction for the model until `until`. A longer pause already
+    set (the daily quota) is never shortened."""
+    conn.execute(
+        "INSERT INTO extraction_pauses (model, paused_until, reason, set_at) "
+        "VALUES (%s, %s, %s, %s) ON CONFLICT (model) DO UPDATE SET "
+        "paused_until = EXCLUDED.paused_until, reason = EXCLUDED.reason, "
+        "set_at = EXCLUDED.set_at WHERE extraction_pauses.paused_until < EXCLUDED.paused_until",
+        (model, until, reason, now),
+    )
 
 
 def estimated_tokens(document: str) -> int:
@@ -662,11 +677,10 @@ class Session:
         """Raise StopRun while paused or at the safety stop; close the backlog lane once it
         has used its share."""
         now = self.clock()
-        until = _paused_until(self.conn, self.config.model, now)
-        if until is not None:
-            raise StopRun(
-                f"paused until {until.isoformat(timespec='minutes')} (daily quota)", until
-            )
+        pause = _active_pause(self.conn, self.config.model, now)
+        if pause is not None:
+            until, reason = pause
+            raise StopRun(f"paused until {until.isoformat(timespec='minutes')} ({reason})", until)
         if requests_today(self.conn, self.config.model, now) >= safety_stop_at(self.config):
             raise StopRun(self.safety_message(), next_pacific_midnight(now))
         self.backlog_open = self.backlog_has_room(now)
@@ -819,14 +833,8 @@ class Session:
                 last_problem = f"{error.kind}: {error.detail}"
                 if error.kind == "quota_exhausted":
                     until = next_pacific_midnight(finished)
-                    conn.execute(
-                        "INSERT INTO extraction_pauses (model, paused_until, reason, set_at) "
-                        "VALUES (%s, %s, %s, %s) ON CONFLICT (model) DO UPDATE SET "
-                        "paused_until = EXCLUDED.paused_until, reason = EXCLUDED.reason, "
-                        "set_at = EXCLUDED.set_at",
-                        (config.model, until, f"daily quota exhausted ({error.quota_id})",
-                         finished),
-                    )  # fmt: skip
+                    _pause(conn, config.model, until, f"daily quota exhausted ({error.quota_id})",
+                           finished)  # fmt: skip
                     _release(conn, job.job_id, last_problem, finished, n - 1)
                     reason = (
                         f"daily quota exhausted; paused until {until.isoformat(timespec='minutes')}"
@@ -844,7 +852,12 @@ class Session:
                     self.sleep(max(RETRY_WAITS[n - 1], error.retry_after or 0))
                     continue
                 self._failed(job, last_problem, finished)
-                return
+                # The next job would meet the same outage, so every process stops for a while.
+                until = finished + OUTAGE_PAUSE
+                _pause(conn, config.model, until, f"provider errors ({error.kind})", finished)
+                raise StopRun(
+                    f"provider errors; paused until {until.isoformat(timespec='minutes')}", until
+                ) from None
             finished = self.clock()
             report.requests += 1
             try:
@@ -984,7 +997,7 @@ def status(conn: psycopg.Connection, config: ExtractionConfig, now: datetime) ->
         "pacific_day": day,
         "usage_today": usage,
         "paid_equivalent_today": paid_equivalent_usd(config.model, usage[2], usage[3] + usage[4]),
-        "paused_until": _paused_until(conn, config.model, now),
+        "pause": _active_pause(conn, config.model, now),
         "safety_stop_at": safety_stop_at(config) if config.daily_limit else None,
         "backlog_today": requests_today(conn, config.model, now, lane="backlog"),
         "backlog_allowance": backlog_allowance(config) if config.daily_limit else None,

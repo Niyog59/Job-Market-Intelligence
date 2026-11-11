@@ -199,9 +199,10 @@ def compose(conn: psycopg.Connection, now: datetime) -> Summary:
         if info["safety_stop_at"]:
             lines.append(f"- Backlog lane: {info['backlog_today']} of its "
                          f"{info['backlog_allowance']} requests today")  # fmt: skip
-        if info["paused_until"]:
-            lines.append(f"- Paused by the daily free quota until {_when(info['paused_until'])}; "
-                         "this is expected and resumes on its own.")  # fmt: skip
+        if info["pause"]:
+            until, reason = info["pause"]
+            lines.append(f"- Paused until {_when(until)} ({reason}); this resumes on its "
+                         "own.")  # fmt: skip
         new = next((t for t in extraction.queue_metrics(conn, config, now)["timing"]
                     if t.lane == "new"), None)  # fmt: skip
         if new and new.queue_p50 is not None:

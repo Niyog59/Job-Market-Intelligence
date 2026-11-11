@@ -28,7 +28,7 @@ behind https://jobobservatory.dev). Back to the [README](../README.md#problems-i
 
 ## Google "high demand" errors used up a day of AI requests
 
-*Production, 2026-11-04 and 2026-11-05. Not fixed yet.*
+*Production, 2026-11-04 and 2026-11-05. Fixed 2026-11-11; not yet seen during an outage on the server.*
 
 - **What happened:** by 9 PM on 2026-11-04 the Reports page showed 124 AI requests, 34 of
   them failed. The next day, 352 of the day's 450 requests failed, and extraction stopped at the
@@ -44,10 +44,11 @@ behind https://jobobservatory.dev). Back to the [README](../README.md#problems-i
   failing, each listing uses four tries and then the next listing does the same, so an outage
   spends the day's requests on errors. On 2026-11-05 all of those requests came from the
   hourly batch; the extraction worker started after the limit was already reached.
-- **What is next:** a pause after a listing fails a whole round on provider errors, so the
-  worker waits for Google to recover instead of moving straight to the next listing. Not
-  built yet. Retry handling today: [`extraction.py`](../src/jobmarket/extraction.py)
-  (`Session._process`).
+- **Fix (2026-11-11):** when a listing fails a whole round on provider errors, all
+  extraction pauses for 15 minutes, so the worker and the hourly batch wait for Google to
+  recover instead of moving straight to the next listing. An outage now costs about 4
+  requests per 15 minutes instead of up to 15 a minute. The listing still counts the failed
+  round. See [`extraction.py`](../src/jobmarket/extraction.py) (`Session._process`).
 
 ## AI extraction was falling behind
 

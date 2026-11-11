@@ -938,8 +938,9 @@ def _extract_status(info: dict) -> None:
             f"{info['backlog_today']} of {info['backlog_allowance']} used; "
             f"{info['new_reserve']} kept for new listings."
         )
-    if info["paused_until"]:
-        print(f"  Paused until {_when(info['paused_until'])} (daily quota).")
+    if info["pause"]:
+        until, reason = info["pause"]
+        print(f"  Paused until {_when(until)} ({reason}).")
     results = info["current_results"]
     print(
         f"Current results: {results.get('valid', 0)} valid, "
