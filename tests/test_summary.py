@@ -95,8 +95,7 @@ def test_quota_pause_is_information_not_an_alert(env, monkeypatch):
         (model, env.clock.now + timedelta(hours=5), env.clock.now),
     )
     result = summary.compose(env.conn, env.clock.now)
-    assert "Paused by the daily free quota" in result.body
-    assert "expected and resumes on its own" in result.body
+    assert "(daily quota exhausted (test)); this resumes on its own" in result.body
     assert env.scalar("SELECT count(*) FROM notifications WHERE kind = 'alert'") == 0
 
 

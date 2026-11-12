@@ -187,11 +187,10 @@ def test_one_listing_with_bad_answers_does_not_hold_up_the_others(x):
     assert teams(model)[:3] == [1, 2, 3]  # 2 and 3 went ahead while 1 waited for its retry
     assert teams(model) == [1, 2, 3, 1, 1, 1]
     assert (report.succeeded, report.failed, report.retries_scheduled) == (2, 1, 3)
-    status, runs_failed, due = x.conn.execute(
-        "SELECT status, runs_failed, next_attempt_at FROM extraction_jobs ORDER BY job_id"
+    status, kinds = x.conn.execute(
+        "SELECT status, failure_kinds FROM extraction_jobs ORDER BY job_id"
     ).fetchone()
-    assert (status, runs_failed) == ("failed", 1)
-    assert timedelta(minutes=59) < due - x.clock() <= extraction.FAILED_ROUND_GAP  # waits an hour
+    assert (status, kinds) == ("gave_up", ["invalid_output"] * 4)  # repeated: a fourth try
 
 
 def test_a_listing_edited_while_waiting_for_its_retry_is_superseded(x):

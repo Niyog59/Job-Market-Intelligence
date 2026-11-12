@@ -829,6 +829,9 @@ def _extract_run(settings: Settings, config, args) -> int:
     )
     if report.retries_scheduled:
         print(f"{report.retries_scheduled} listing(s) will be retried shortly (invalid answer).")
+    if report.repeated:
+        print(f"{report.repeated} listing(s) failed twice for the same reason and get a fourth "
+              "try; see `extract status`.")  # fmt: skip
     if report.recovered:
         print(f"Recovered {report.recovered} listing(s) left running by a process that ended.")
     if report.queued_now:
@@ -938,8 +941,15 @@ def _extract_status(info: dict) -> None:
             f"{info['backlog_today']} of {info['backlog_allowance']} used; "
             f"{info['new_reserve']} kept for new listings."
         )
-    if info["paused_until"]:
-        print(f"  Paused until {_when(info['paused_until'])} (daily quota).")
+    if info["pause"]:
+        until, reason = info["pause"]
+        print(f"  Paused until {_when(until)} ({reason}).")
+    repeated = info["repeated_errors"]
+    if repeated["jobs"]:
+        print(f"Repeated errors (two tries failed for the same reason): {repeated['jobs']} "
+              f"job(s), {repeated['gave_up']} of them gave up. Latest:")  # fmt: skip
+        for job_id, posting_id, state, error in repeated["latest"]:
+            print(f"  job {job_id} (posting {posting_id}, {state}): {error[:150]}")
     results = info["current_results"]
     print(
         f"Current results: {results.get('valid', 0)} valid, "

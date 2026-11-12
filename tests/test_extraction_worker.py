@@ -131,9 +131,9 @@ def test_stopping_during_a_retry_wait_puts_the_job_back(x):
     model = ScriptedModel(ModelError("server_error", "503", 503), reply())
     report, _ = work(x, model, stopper)
     assert report.requests == 1 and stopper.waits == [10.0]
-    status, rounds = x.conn.execute(
-        "SELECT status, round_attempts FROM extraction_jobs").fetchone()  # fmt: skip
-    assert (status, rounds) == ("pending", 1)  # back in the queue, its attempt still counted
+    status, kinds = x.conn.execute(
+        "SELECT status, failure_kinds FROM extraction_jobs").fetchone()  # fmt: skip
+    assert (status, kinds) == ("pending", [])  # back in the queue; an outage uses no try
     assert states(x) == ("stopped", "stopped")
     assert not worker_running(x.conn)
 
