@@ -51,8 +51,8 @@ from jobmarket.classify import FAMILIES
 
 PAGE_SIZE = 25
 STALE_AFTER = timedelta(hours=36)  # longer without a complete collection: "may be out of date"
-# Both chosen by Niyog on 2026-11-06 (docs/DECISIONS.md).
-OLD_AFTER = timedelta(days=30)  # lists hide jobs dated earlier than this, unless asked
+# Both chosen by Niyog (docs/DECISIONS.md): the window on 2026-11-06, the age on 2026-11-11.
+OLD_AFTER = timedelta(days=60)  # lists hide jobs dated earlier than this, unless asked
 NEWEST_WINDOW = timedelta(days=3)  # Newest jobs: first discovered within this window
 ARCHIVED_STATES = ("assumed_inactive", "closed")
 SERVING_SCHEMA = "analytics_serving"

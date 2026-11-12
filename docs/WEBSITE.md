@@ -44,7 +44,7 @@ stored it; it never changes or re-derives it.
   newest-discovered order.
 - **Freshness.** A listing whose board has had no complete collection for more than 36
   hours is flagged as possibly out of date.
-- **Older jobs.** Jobs dated more than 30 days ago are hidden unless `old=include`, and the
+- **Older jobs.** Jobs dated more than 60 days ago are hidden unless `old=include`, and the
   page says how many were hidden. A job's date is the source's own date (Greenhouse
   publication, Lever creation), or its first discovery when the source gives none; a
   duplicate group uses its newest member's date. Nothing is deleted: job pages, reports,
@@ -71,7 +71,7 @@ search. It shows active jobs first discovered in the past 3 days, newest discove
 - **Initial imports** (listings already on a board when it was first collected completely)
   are hidden unless `imports=include`, so adding a board does not fill the list with jobs
   that were posted long before. The page says how many are hidden.
-- **Older jobs** follow the same 30-day rule as the search (`old=include`).
+- **Older jobs** follow the same 60-day rule as the search (`old=include`).
 - A job page opened from this list links back to it (`list=newest`).
 
 ## Employers

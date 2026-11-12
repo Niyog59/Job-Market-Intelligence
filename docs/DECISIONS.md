@@ -158,14 +158,16 @@ what it costs, and what would make me revisit it. Back to the [README](../README
   Niyog changed its career level to all levels: the early-career default had left 12 of 146
   kept jobs on the homepage, because the AI had read all of them and marked 134 mid-level or
   senior.
-- **Also chosen.** Both lists hide jobs dated more than 30 days ago (source date, else
-  discovery date) unless asked. Nothing is deleted.
+- **Also chosen.** Both lists hide old jobs (source date, else discovery date) unless asked.
+  Nothing is deleted. The cutoff was 30 days until 2026-11-11, when Niyog raised it to 60:
+  the live homepage showed 20 of 146 kept jobs, and a job posted 40 days ago is often still
+  open.
 - **Benefit.** A new job can be opened and applied to within seconds of its collection,
   whatever the AI queue is doing.
 - **Cost.** The rule-based screening is the only relevance check on that page, and it has
   known misses (it keeps some roles outside the target families and skips some inside). The
-  30-day rule hides most jobs on older boards: on the Mac copy, 134 of 156 kept active jobs
-  were dated more than 30 days before 2026-11-06.
+  age rule still hides some jobs that are open; at 30 days it hid most jobs on older boards
+  (on the Mac copy, 134 of 156 kept active jobs on 2026-11-06).
 - **Revisit when** collection runs more often (the 3-day window could shrink) or the
   screening rules change.
 
@@ -272,7 +274,7 @@ Values that change product behavior, decided before they went into the code.
 | Search page size | 25 results | [`search.py`](../src/jobmarket/search.py) |
 | Search default career level | all levels (early career until 2026-11-07) | [`search.py`](../src/jobmarket/search.py) |
 | Newest jobs window | first discovered in the past 3 days; kept jobs, every level, initial imports hidden by default | [`search.py`](../src/jobmarket/search.py) |
-| Older jobs in lists | hidden when dated more than 30 days ago (source date, else discovery), unless asked | [`search.py`](../src/jobmarket/search.py) |
+| Older jobs in lists | hidden when dated more than 60 days ago (30 until 2026-11-11; source date, else discovery), unless asked | [`search.py`](../src/jobmarket/search.py) |
 | "May be out of date" note | board without a complete collection for 36 hours | [`search.py`](../src/jobmarket/search.py) |
 | Experience filter bands | 0-1, 2-4, 5+ years, by the smallest required minimum | [`search.py`](../src/jobmarket/search.py) |
 | Sign-in | 8-character minimum, Argon2id; 3 wrong passwords pause sign-in for 15 minutes; sessions end after 2 hours idle or 7 days | [`owner.py`](../src/jobmarket/owner.py) |

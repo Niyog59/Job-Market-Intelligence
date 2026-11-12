@@ -1,9 +1,9 @@
-"""Newest jobs (jobmarket.search.newest and the /newest page), and the 30-day age rule shared
+"""Newest jobs (jobmarket.search.newest and the /newest page), and the age rule shared
 with job search, on a small history of one Greenhouse board:
 
   2026-11-01 12:00  first complete scan (initial imports):
                       B1 Data Engineer, Dallas    published Oct 30
-                      B2 Data Analyst, Houston    published Sep 1 (older than 30 days)
+                      B2 Data Analyst, Houston    published Sep 1 (older than OLD_AFTER)
   2026-11-03 12:00  N1 Backend Engineer, Dallas   published Nov 3
                     N2 Sales Manager, Dallas      not kept by the screening rules
                     N3 Data Engineer II, Dallas   published Aug 1: new to us, but old
@@ -146,7 +146,7 @@ def test_source_based_filters_narrow_and_all_listings_broadens(world):
     assert params.families == () and params.areas == () and len(problems) == 2
 
 
-def test_search_hides_jobs_older_than_30_days_unless_asked(world):
+def test_search_hides_old_jobs_unless_asked(world):
     def run(**args):
         params, problems = parse_params({"level": "any", **args}, choices=_choices(world))
         return search(world.conn, params, NOW, problems, schema=world.schema)
