@@ -13,7 +13,7 @@ open to someone early in their career? Which skills come up again and again? Tho
 now half the project.
 
 <!-- LIVE_STATS:START -->
-63 employer boards checked three times a day · 186 open jobs tracked right now · 226 jobs kept in total · requirements extracted on 206 of 207 kept postings (100%) · updated 2026-11-25
+63 employer boards checked three times a day · 184 open jobs tracked right now · 226 jobs kept in total · requirements extracted on 205 of 205 kept postings (100%) · updated 2026-11-26
 <!-- LIVE_STATS:END -->
 
 [Start here](docs/START_HERE.md) · [Live site](https://jobobservatory.dev) · [Reports](https://jobobservatory.dev/reports) ·
